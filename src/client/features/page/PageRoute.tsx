@@ -14,6 +14,7 @@ import { TopBar } from '../shell/TopBar.tsx';
 import { PageHeader } from './PageHeader.tsx';
 import { uploadFile } from '../../api/files.ts';
 import { useAutosave } from './useAutosave.ts';
+import { useTableBleed } from './useTableBleed.ts';
 import { HistoryDrawer } from './HistoryDrawer.tsx';
 import { DatabaseView } from '../database/DatabaseView.tsx';
 import { RowPropertiesPanel } from '../database/RowPropertiesPanel.tsx';
@@ -46,6 +47,9 @@ function PageView({ initial }: { initial: PageResponse }) {
   const [smallText, setSmallText] = useState(() => { try { return localStorage.getItem('notes:small-text') === '1'; } catch { return false; } });
   const toggleSmallText = () => setSmallText(value => { try { localStorage.setItem('notes:small-text', value ? '0' : '1'); } catch { /* ignore */ } return !value; });
   const composingRef = useRef<() => boolean>(() => false);
+  const pageRef = useRef<HTMLDivElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  useTableBleed(pageRef, bodyRef);
   const [meta, setMeta] = useState({ title: initial.page.title, icon: initial.page.icon, fullWidth: initial.page.fullWidth, coverUrl: initial.page.coverUrl, coverPosition: initial.page.coverPosition });
   useEffect(() => { rememberPage(pageId); expandMany(initial.breadcrumbs.slice(0, -1).map(b => b.id)); }, [pageId, rememberPage, expandMany, initial.breadcrumbs]);
 
@@ -103,7 +107,7 @@ function PageView({ initial }: { initial: PageResponse }) {
   const toggleFullWidth = () => { const fullWidth = !meta.fullWidth; setMeta(m => ({ ...m, fullWidth })); patch.mutate({ id: pageId, fullWidth }); };
 
   return <ContextMenu label="頁面右鍵選單" items={<PageMenuItems page={currentPage} onToggleFullWidth={toggleFullWidth} smallText={smallText} onToggleSmallText={toggleSmallText} onOpenHistory={() => setHistoryOpen(true)} />}>
-    {handlers => <div className="page" {...handlers}>
+    {handlers => <div className="page" ref={pageRef} {...handlers}>
     <TopBar page={currentPage} breadcrumbs={initial.breadcrumbs}
       saveStatus={autosave.state.status} saveError={autosave.state.error} onRetry={() => { void autosave.saveNow(); }}
       onToggleFullWidth={toggleFullWidth}
@@ -118,7 +122,7 @@ function PageView({ initial }: { initial: PageResponse }) {
       </Group>
     </Alert>}
     {refreshError && <Alert color="red" title="無法載入最新內容">{refreshError}</Alert>}
-    <div className={`page-body${meta.fullWidth ? ' page-body--full' : ''}${smallText ? ' page-body--small' : ''}`}>
+    <div ref={bodyRef} className={`page-body${meta.fullWidth ? ' page-body--full' : ''}${smallText ? ' page-body--small' : ''}`}>
       <PageHeader title={meta.title} icon={meta.icon} coverUrl={meta.coverUrl} coverPosition={meta.coverPosition}
         onTitle={saveTitle} onIcon={saveIcon} onCover={saveCover} onCoverPosition={saveCoverPosition} onEnter={focusEditor} />
       {initial.page.kind === 'database'

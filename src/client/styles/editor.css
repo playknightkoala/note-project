@@ -81,6 +81,11 @@
 .block-editor [data-content-type="heading"][data-level="2"] { margin-top: 1em; }
 .block-editor [data-content-type="heading"][data-level="3"] { margin-top: 0.8em; }
 .block-editor[data-composing="true"] .bn-side-menu, .block-editor[data-composing="true"] .bn-suggestion-menu { opacity: 0.35; pointer-events: none; }
+/* Desktop: text keeps its reading width, tables may extend to the right edge of the page area (--table-bleed is set by
+   useTableBleed). Wider tables still scroll inside their wrapper. Phones keep the column width and scroll. */
+@media (min-width: 768px) {
+  .block-editor .bn-block-content[data-content-type="table"] { width: calc(100% + var(--table-bleed, 0px)); max-width: none; }
+}
 .page-link-chip { display: inline-flex; align-items: center; gap: 3px; padding: 0 3px; border-radius: 4px; cursor: pointer; font-weight: 500; color: var(--app-fg);
   text-decoration: underline; text-decoration-color: var(--app-border); text-underline-offset: 3px; }
 .page-link-chip:hover { background: var(--app-hover); }
