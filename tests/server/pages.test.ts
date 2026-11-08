@@ -88,6 +88,20 @@ describe('pages', () => {
     expect((await c.request('PUT', `/api/pages/${page.id}/content`, { json: { content: [{ type: 'bad' }] }, headers: { 'if-match': '"1"' } })).status).toBe(400);
   });
 
+  it('snapshots an explicitly overwritten version even within the autosave interval and still rejects stale writes', async () => {
+    const page = await createPage(c);
+    const save = (version: number, text: string, overwrite = false) => c.request('PUT', `/api/pages/${page.id}/content`, {
+      json: { content: [paragraph(text)], overwrite }, headers: { 'if-match': `"${version}"` },
+    });
+    expect((await save(1, '遠端版本')).status).toBe(200);
+    expect((await save(1, '過期覆蓋', true)).status).toBe(409);
+    expect((await save(2, '明確覆蓋', true)).status).toBe(200);
+    const versions = (await (await c.request('GET', `/api/pages/${page.id}/versions`)).json() as { versions: { id: string; version: number; reason: string }[] }).versions;
+    expect(versions).toEqual([expect.objectContaining({ version: 2, reason: 'overwrite' }), expect.objectContaining({ version: 1 })]);
+    const snapshot = await (await c.request('GET', `/api/pages/${page.id}/versions/${versions[0]!.id}`)).json();
+    expect(snapshot).toMatchObject({ content: [expect.objectContaining({ content: [expect.objectContaining({ text: '遠端版本' })] })] });
+  });
+
   it('patches title and icon without touching the content version, and toggles favorites', async () => {
     const page = await createPage(c, {});
     const patched = await (await c.request('PATCH', `/api/pages/${page.id}`, { json: { title: '標題', icon: '📘', fullWidth: true } })).json() as PageResponse;

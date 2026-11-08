@@ -58,7 +58,7 @@ export function useAutosave({ pageId, initialVersion, getContent, onRemoteUpdate
     r.inFlight = true; r.dirty = false; clearTimers();
     dispatch({ type: 'saving' });
     try {
-      const head = await saveContent(pageId, options.overrideVersion ?? r.version, content, { ...(options.keepalive ? { keepalive: true } : {}) });
+      const head = await saveContent(pageId, options.overrideVersion ?? r.version, content, { ...(options.keepalive ? { keepalive: true } : {}), overwrite: options.overrideVersion !== undefined });
       r.inFlight = false;
       // The ref is the source of truth for the next If-Match: a follow-up save may start before React re-renders.
       r.version = head.version;
@@ -99,8 +99,9 @@ export function useAutosave({ pageId, initialVersion, getContent, onRemoteUpdate
       r.status = 'dirty'; r.dirty = true; r.version = head.version;
       await save({ overrideVersion: head.version });
     } else {
-      dispatch({ type: 'reset', version: head?.version ?? r.version });
-      r.version = head?.version ?? r.version; r.dirty = false; r.status = 'clean';
+      // Keep the old If-Match until the new content has actually been applied.
+      dispatch({ type: 'reset', version: r.version });
+      r.dirty = false; r.status = 'clean';
       remoteRef.current();
     }
   }, [save, state.conflictHead]);
@@ -128,7 +129,7 @@ export function useAutosave({ pageId, initialVersion, getContent, onRemoteUpdate
         const head = await fetchHead(pageId);
         if (head.version > ref.current.version) {
           if (ref.current.dirty) dispatch({ type: 'conflict', head });
-          else { ref.current.version = head.version; dispatch({ type: 'reset', version: head.version }); remoteRef.current(); }
+          else { remoteRef.current(); }
         }
       } catch { /* transient; the next poll retries */ }
     }, HEAD_POLL_MS);

@@ -3,7 +3,7 @@ import type { DefaultReactSuggestionItem } from '@blocknote/react';
 import { useTree } from '../../../api/pages.ts';
 import type { AppEditor } from '../schema.ts';
 
-/** `@` menu: pages from the tree filtered by title (the search index joins in M4). */
+/** `@` menu: the user's active pages filtered by title. Full-text lookup is in the command palette. */
 export function usePageMentionItems(editor: AppEditor, currentPageId: string) {
   const tree = useTree();
   return useCallback(async (query: string): Promise<DefaultReactSuggestionItem[]> => {

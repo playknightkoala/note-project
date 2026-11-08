@@ -95,8 +95,8 @@ export function useDuplicatePage() {
   });
 }
 
-export const saveContent = (id: string, version: number, content: unknown[], options: { keepalive?: boolean; signal?: AbortSignal } = {}) =>
-  api<PageHeadDto>('PUT', `/api/pages/${id}/content`, { json: { content }, headers: { 'if-match': `"${version}"` }, ...options });
+export const saveContent = (id: string, version: number, content: unknown[], { overwrite = false, ...options }: { keepalive?: boolean; signal?: AbortSignal; overwrite?: boolean } = {}) =>
+  api<PageHeadDto>('PUT', `/api/pages/${id}/content`, { json: { content, overwrite }, headers: { 'if-match': `"${version}"` }, ...options });
 
 export const fetchHead = (id: string) => api<PageHeadDto>('GET', `/api/pages/${id}/head`);
 

@@ -102,7 +102,21 @@ export const patchPageSchema = z.object({
 });
 export const movePageSchema = z.object({ parentId: pageIdSchema.nullable(), index: z.number().int().min(0).max(100_000) });
 export const favoriteSchema = z.object({ favorite: z.boolean() });
-export const contentSchema = z.object({ content: z.array(z.unknown()).max(20_000) });
+export const contentSchema = z.object({ content: z.array(z.unknown()).max(20_000), overwrite: z.boolean().default(false) });
 
 export interface TrashItemDto { id: string; title: string; icon: string | null; kind: PageKind; trashedAt: number; descendantCount: number }
 export interface VersionDto { id: string; version: number; title: string; reason: string; createdAt: number; size: number }
+
+// ---- Search ----
+export const searchQuerySchema = z.object({
+  q: z.string().trim().max(200).default(''),
+  limit: z.coerce.number().int().min(1).max(50).default(20),
+  offset: z.coerce.number().int().min(0).max(10_000).default(0),
+});
+export interface SearchResult {
+  id: string; title: string; icon: string | null; kind: PageKind; updatedAt: number;
+  breadcrumbs: Breadcrumb[];
+  /** Plain text only. The client renders highlighted pieces as React text nodes. */
+  snippet: string;
+}
+export interface SearchResponse { results: SearchResult[]; total: number; limit: number; offset: number }

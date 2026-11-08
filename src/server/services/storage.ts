@@ -16,7 +16,7 @@ const ALLOWED: Record<string, string> = {
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
   'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'pptx',
 };
-const INLINE = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'application/pdf', 'audio/mpeg', 'audio/mp4', 'audio/ogg', 'audio/wav', 'video/mp4', 'video/webm']);
+const INLINE = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
 
 /** Magic-byte sniffing for the types browsers render inline; the declared type is only trusted when allow-listed. */
 export function sniffMime(bytes: Uint8Array, declared: string | undefined): string {

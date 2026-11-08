@@ -2,7 +2,7 @@
 
 Notion 式的筆記網站：自有帳號（邀請碼註冊，第一位註冊者為管理者）、BlockNote 區塊編輯器、頁面樹、資料庫表格視圖、全文搜尋、Joplin 匯入。單一 Docker 容器 + SQLite，資料與附件放在同一個 volume。
 
-> 開發中：M0、M1 已驗證，M2 程式完成，M3 部分完成。接手請先讀 [docs/HANDOFF.md](docs/HANDOFF.md)；里程碑見 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
+> 開發中：M0–M4 已完成主要驗證，下一步是 M5 資料庫表格視圖。接手請先讀 [docs/HANDOFF.md](docs/HANDOFF.md)；里程碑與驗證限制見 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) 與 [docs/VALIDATION.md](docs/VALIDATION.md)。
 
 ## Docker 啟動
 
@@ -39,6 +39,12 @@ npm run check
 ```
 
 依序執行 typecheck、lint、test、build。
+
+## 已可使用
+
+帳號與邀請碼、頁面樹、BlockNote 編輯與自動保存、雙分頁衝突處理、圖示／封面、圖片與附件、頁面提及、最愛與垃圾桶。按 `Ctrl+K`（macOS 為 `⌘K`）或側邊欄「搜尋」，可查標題與內文；支援中英文、單字／兩字查詢、麵包屑與高亮。搜尋面板也有最近開啟與新增頁面／設定／垃圾桶動作。
+
+資料庫表格視圖與 Joplin 匯入尚未完成；頁面歷史 UI、完整手機與 HTTPS 驗收留在 M7。
 
 ## 結構
 

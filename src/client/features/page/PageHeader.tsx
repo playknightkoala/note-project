@@ -1,9 +1,21 @@
 import { useRef, useState } from 'react';
-import { Button, Group, Popover } from '@mantine/core';
+import { Alert, Button, Group, Popover } from '@mantine/core';
 import { EmojiPicker } from 'frimousse';
+import type { EmojiDataResolver } from 'frimousse';
 import { Image as ImageIcon, Smile, Trash2 } from 'lucide-react';
 import { uploadFile } from '../../api/files.ts';
 import { PageTitle } from './PageTitle.tsx';
+import { errorText } from '../../api/client.ts';
+
+// Bundle the pinned BlockNote data: the default resolver fetches a public CDN,
+// which is unavailable offline and forbidden by our same-origin CSP.
+const resolveEmojiData: EmojiDataResolver = async (locale, { signal, emojiVersion } = {}) => {
+  const { loadFrimousseData } = await import('@blocknote/core/emoji-data');
+  signal?.throwIfAborted();
+  const data = await loadFrimousseData(locale);
+  signal?.throwIfAborted();
+  return emojiVersion === undefined ? data : { ...data, emojis: data.emojis.filter(emoji => emoji.version <= emojiVersion) };
+};
 
 interface Props {
   title: string; icon: string | null; coverUrl: string | null; coverPosition: number;
@@ -21,19 +33,23 @@ export function PageHeader({ title, icon, coverUrl, coverPosition, onTitle, onIc
   const fileInput = useRef<HTMLInputElement>(null);
   const dragStart = useRef<{ y: number; position: number } | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const pickCover = async (file: File | undefined) => {
     if (!file) return;
     setUploading(true);
-    try { const uploaded = await uploadFile(file); onCover(uploaded.id); } finally { setUploading(false); }
+    setUploadError(null);
+    try { const uploaded = await uploadFile(file); onCover(uploaded.id); }
+    catch (error) { setUploadError(errorText(error)); }
+    finally { setUploading(false); }
   };
   const gradientIndex = coverUrl?.startsWith('gradient:') ? Number(coverUrl.slice(9)) : -1;
-  const coverStyle = coverUrl && gradientIndex < 0 ? { backgroundImage: `url("${coverUrl}")`, backgroundPositionY: `${repositioning ?? coverPosition}%` } : undefined;
+  const coverStyle = coverUrl && gradientIndex < 0 ? { backgroundImage: `url("${coverUrl}")`, backgroundPositionY: `${repositioning ?? coverPosition}%`, ...(repositioning !== null ? { touchAction: 'none' } : {}) } : undefined;
   return <div className={`page-header${coverUrl ? ' page-header--cover' : ''}`}>
     {coverUrl && <div className="page-cover" style={coverStyle ?? { background: GRADIENTS[gradientIndex] ?? GRADIENTS[0] }}
       onPointerDown={repositioning === null ? undefined : event => { dragStart.current = { y: event.clientY, position: repositioning }; (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId); }}
       onPointerMove={event => { if (repositioning === null || !dragStart.current) return; const delta = (event.clientY - dragStart.current.y) / event.currentTarget.clientHeight * -100; setRepositioning(Math.max(0, Math.min(100, Math.round(dragStart.current.position + delta)))); }}
-      onPointerUp={() => { dragStart.current = null; }}>
-      <Group gap={4} className="page-cover__actions">
+      onPointerUp={() => { dragStart.current = null; }} onPointerCancel={() => { dragStart.current = null; }}>
+      <Group gap={4} className="page-cover__actions" onPointerDown={event => event.stopPropagation()}>
         {repositioning === null ? <>
           <Button size="compact-xs" variant="default" onClick={() => fileInput.current?.click()} loading={uploading}>變更封面</Button>
           {gradientIndex < 0 && <Button size="compact-xs" variant="default" onClick={() => setRepositioning(coverPosition)}>調整位置</Button>}
@@ -58,6 +74,7 @@ export function PageHeader({ title, icon, coverUrl, coverPosition, onTitle, onIc
         {!coverUrl && <Button size="compact-xs" variant="subtle" color="gray" leftSection={<ImageIcon size={14} />} onClick={() => onCover(`gradient:${Math.floor(Math.random() * GRADIENTS.length)}`)}>新增封面</Button>}
       </Group>
       <PageTitle value={title} onChange={onTitle} onEnter={onEnter} />
+      {uploadError && <Alert color="red" role="alert" mt="sm" withCloseButton onClose={() => setUploadError(null)}>{uploadError}</Alert>}
     </div>
     <input ref={fileInput} type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden onChange={event => { void pickCover(event.currentTarget.files?.[0]); event.currentTarget.value = ''; }} />
   </div>;
@@ -65,7 +82,7 @@ export function PageHeader({ title, icon, coverUrl, coverPosition, onTitle, onIc
 
 function IconPicker({ onPick, onRemove }: { onPick: (emoji: string) => void; onRemove?: () => void }) {
   return <div className="icon-picker">
-    <EmojiPicker.Root onEmojiSelect={({ emoji }) => onPick(emoji)} locale="zh" columns={9} className="icon-picker__root">
+    <EmojiPicker.Root onEmojiSelect={({ emoji }) => onPick(emoji)} locale="zh-hant" resolveEmojiData={resolveEmojiData} columns={9} className="icon-picker__root">
       <EmojiPicker.Search className="icon-picker__search" placeholder="搜尋表情符號…" autoFocus />
       <EmojiPicker.Viewport className="icon-picker__viewport">
         <EmojiPicker.Loading className="icon-picker__status">載入中…</EmojiPicker.Loading>

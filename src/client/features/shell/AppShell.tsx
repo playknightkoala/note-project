@@ -1,4 +1,4 @@
-import { createContext, useContext, useMemo } from 'react';
+import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { AppShell as MantineAppShell, Avatar, Group, Menu, ScrollArea, Text, UnstyledButton, useComputedColorScheme, useMantineColorScheme } from '@mantine/core';
 import { useDisclosure, useMediaQuery } from '@mantine/hooks';
 import { ChevronsUpDown, LogOut, Moon, Plus, Search, Settings, Sun, Trash2 } from 'lucide-react';
@@ -9,6 +9,7 @@ import { PageTree } from './PageTree.tsx';
 import { PageTreeItem } from './PageTreeItem.tsx';
 import { buildTreeIndex } from './treeIndex.ts';
 import type { FlatRow } from './treeDrag.ts';
+import { CommandPalette } from '../search/CommandPalette.tsx';
 
 export const SIDEBAR_BREAKPOINT = 768;
 interface ShellContext { sidebarOpen: boolean; toggleSidebar: () => void; closeSidebar: () => void }
@@ -25,6 +26,17 @@ export function AppShell() {
   const { pageId } = useParams();
   const isMobile = useMediaQuery(`(max-width: ${SIDEBAR_BREAKPOINT - 1}px)`) ?? false;
   const [opened, { toggle, close }] = useDisclosure(false);
+  const [searchOpened, setSearchOpened] = useState(false);
+  useEffect(() => {
+    const keydown = (event: KeyboardEvent) => {
+      if (event.isComposing || event.keyCode === 229 || event.repeat) return;
+      if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === 'k') {
+        event.preventDefault(); setSearchOpened(value => !value);
+      }
+    };
+    window.addEventListener('keydown', keydown);
+    return () => window.removeEventListener('keydown', keydown);
+  }, []);
   const { setColorScheme } = useMantineColorScheme();
   const scheme = useComputedColorScheme('light');
   const index = useMemo(() => buildTreeIndex(tree.data ?? []), [tree.data]);
@@ -55,7 +67,7 @@ export function AppShell() {
           </Menu.Dropdown>
         </Menu>
         <div className="sidebar-actions">
-          <button type="button" className="sidebar-button" disabled title="搜尋將在之後的里程碑加入"><Search size={15} /><span>搜尋</span></button>
+          <button type="button" className="sidebar-button" title="搜尋（Ctrl / ⌘ K）" onClick={() => { close(); setSearchOpened(true); }}><Search size={15} /><span>搜尋</span></button>
           <button type="button" className="sidebar-button" onClick={newPage}><Plus size={15} /><span>新增頁面</span></button>
         </div>
         <ScrollArea className="sidebar-scroll" type="auto">
@@ -73,5 +85,6 @@ export function AppShell() {
       </MantineAppShell.Navbar>
       <MantineAppShell.Main className="app-main"><Outlet /></MantineAppShell.Main>
     </MantineAppShell>
+    {user && <CommandPalette key={user.id} userId={user.id} opened={searchOpened} onClose={() => setSearchOpened(false)} />}
   </ShellCtx.Provider>;
 }

@@ -44,7 +44,7 @@ export function pageRoutes(): Hono<AppEnv> {
     const { db, userId, now } = ctx(c);
     const version = expectedVersion(c);
     const input = await parseBody(c, contentSchema);
-    return c.json(pages.updateContent(db, userId, c.req.param('id'), input.content, version, now));
+    return c.json(pages.updateContent(db, userId, c.req.param('id'), input.content, version, now, input.overwrite ? 'overwrite' : 'autosave'));
   });
 
   app.patch('/:id', async c => {

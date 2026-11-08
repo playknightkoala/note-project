@@ -14,3 +14,13 @@ body { background: var(--app-bg); color: var(--app-fg); -webkit-font-smoothing: 
 
 .app-main { background: var(--app-bg); min-height: 100vh; }
 .topbar { position: sticky; top: 0; z-index: 10; display: flex; align-items: center; gap: 8px; height: 44px; padding: 0 12px; padding-top: env(safe-area-inset-top); background: var(--app-bg); border-bottom: 1px solid var(--app-border); }
+
+.search-results { max-height: min(50vh, 440px); overflow-y: auto; }
+.search-result { display: flex; gap: 12px; width: 100%; border: 0; border-radius: var(--app-radius); padding: 10px; background: transparent; color: var(--app-fg); text-align: left; cursor: pointer; font: inherit; }
+.search-result[aria-selected="true"] { background: var(--app-hover); }
+.search-result__icon { flex: 0 0 22px; padding-top: 2px; }
+.search-result__body { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.search-result__title { font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
+.search-result__path, .search-result__snippet { font-size: 12px; color: var(--app-fg-muted); overflow-wrap: anywhere; }
+.search-result__snippet { white-space: pre-wrap; }
+.search-result mark { background: var(--app-selection); color: inherit; border-radius: 2px; }

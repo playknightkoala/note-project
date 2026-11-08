@@ -55,6 +55,21 @@ describe('files', () => {
     expect(cached.status).toBe(304);
   });
 
+  it.each([
+    ['document.pdf', '%PDF-1.4', 'application/pdf'],
+    ['sound.wav', 'RIFF0000WAVE', 'audio/wav'],
+    ['movie.mp4', '0000ftypisom', 'video/mp4'],
+  ])('serves non-image %s as a sandboxed attachment', async (name, content, mime) => {
+    const uploaded = await upload(c, new TextEncoder().encode(content), name, mime);
+    expect(uploaded.status).toBe(201);
+    const { url } = await uploaded.json() as { url: string };
+    const served = await c.request('GET', url);
+    expect(served.headers.get('content-type')).toBe(mime);
+    expect(served.headers.get('content-disposition')).toMatch(/^attachment/);
+    expect(served.headers.get('content-security-policy')).toBe('sandbox');
+    expect(await served.text()).toBe(content);
+  });
+
   it('serves non-media as sandboxed attachments and refuses empty, oversized or foreign files', async () => {
     const text = await upload(c, new TextEncoder().encode('# 筆記\n'), 'notes.md', 'text/markdown');
     const dto = await text.json() as { id: string; url: string; mime: string };

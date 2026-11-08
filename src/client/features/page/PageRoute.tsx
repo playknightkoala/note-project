@@ -5,7 +5,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useParams } from 'react-router';
 import type { PageResponse } from '@shared/api';
 import { pageKeys, usePage, usePatchPage } from '../../api/pages.ts';
-import { isApiError } from '../../api/client.ts';
+import { api, errorText, isApiError } from '../../api/client.ts';
 import { useUiState } from '../../app/uiState.tsx';
 import { BlockEditor } from '../editor/BlockEditor.tsx';
 import type { AppEditor } from '../editor/schema.ts';
@@ -33,6 +33,10 @@ function PageView({ initial }: { initial: PageResponse }) {
   const patch = usePatchPage();
   const { rememberPage, expandMany } = useUiState();
   const editorRef = useRef<AppEditor | null>(null);
+  const replacingRef = useRef(false);
+  const remoteContentRef = useRef<string | null>(null);
+  const localRevisionRef = useRef(0);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
   const composingRef = useRef<() => boolean>(() => false);
   const [meta, setMeta] = useState({ title: initial.page.title, icon: initial.page.icon, fullWidth: initial.page.fullWidth, coverUrl: initial.page.coverUrl, coverPosition: initial.page.coverPosition });
   useEffect(() => { rememberPage(pageId); expandMany(initial.breadcrumbs.slice(0, -1).map(b => b.id)); }, [pageId, rememberPage, expandMany, initial.breadcrumbs]);
@@ -40,21 +44,38 @@ function PageView({ initial }: { initial: PageResponse }) {
   const replaceContent = useCallback((content: unknown[]) => {
     const editor = editorRef.current; if (!editor) return;
     const stop = editor.onBeforeChange(({ tr }) => { tr.setMeta('addToHistory', false); });
-    try { editor.replaceBlocks(editor.document, content as Blocks); } finally { stop(); }
+    replacingRef.current = true;
+    try {
+      editor.replaceBlocks(editor.document, content as Blocks);
+      remoteContentRef.current = JSON.stringify(editor.document);
+    } finally { replacingRef.current = false; stop(); }
   }, []);
 
   const autosave = useAutosave({
     pageId, initialVersion: initial.page.version,
     getContent: () => (composingRef.current() || !editorRef.current) ? null : editorRef.current.document as unknown[],
     onRemoteUpdate: () => {
-      void queryClient.fetchQuery({ queryKey: pageKeys.page(pageId), queryFn: () => import('../../api/client.ts').then(m => m.api<PageResponse>('GET', `/api/pages/${pageId}`)) })
-        .then(fresh => { replaceContent(fresh.page.content); setMeta({ title: fresh.page.title, icon: fresh.page.icon, fullWidth: fresh.page.fullWidth, coverUrl: fresh.page.coverUrl, coverPosition: fresh.page.coverPosition }); autosave.setVersion(fresh.page.version); });
+      const revision = localRevisionRef.current;
+      setRefreshError(null);
+      void queryClient.fetchQuery({ queryKey: pageKeys.page(pageId), staleTime: 0, queryFn: () => api<PageResponse>('GET', `/api/pages/${pageId}`) })
+        .then(fresh => {
+          // Typing while this GET was pending must keep the local draft and its old If-Match.
+          if (localRevisionRef.current !== revision) return;
+          replaceContent(fresh.page.content);
+          setMeta({ title: fresh.page.title, icon: fresh.page.icon, fullWidth: fresh.page.fullWidth, coverUrl: fresh.page.coverUrl, coverPosition: fresh.page.coverPosition });
+          autosave.setVersion(fresh.page.version);
+        }).catch(error => setRefreshError(errorText(error)));
     },
   });
 
   const onReady = useCallback((editor: AppEditor, isComposing: () => boolean) => { editorRef.current = editor; composingRef.current = isComposing; }, []);
-  const onChange = useCallback(() => autosave.markDirty(), [autosave]);
-  const onCompositionSettled = useCallback(() => autosave.markDirty(), [autosave]);
+  const onChange = useCallback(() => {
+    if (replacingRef.current || (remoteContentRef.current !== null && JSON.stringify(editorRef.current?.document) === remoteContentRef.current)) return;
+    remoteContentRef.current = null;
+    localRevisionRef.current++;
+    autosave.markDirty();
+  }, [autosave]);
+  const onCompositionSettled = useCallback(() => { localRevisionRef.current++; autosave.markDirty(); }, [autosave]);
   const saveTitle = useCallback((title: string) => { setMeta(m => ({ ...m, title })); patch.mutate({ id: pageId, title }); }, [patch, pageId]);
   const saveIcon = useCallback((icon: string | null) => { setMeta(m => ({ ...m, icon })); patch.mutate({ id: pageId, icon }); }, [patch, pageId]);
   const saveCover = useCallback((cover: string | null) => {
@@ -82,6 +103,7 @@ function PageView({ initial }: { initial: PageResponse }) {
         <Button size="xs" variant="default" onClick={() => { void autosave.resolveConflict('overwrite'); }}>以我的內容覆蓋</Button>
       </Group>
     </Alert>}
+    {refreshError && <Alert color="red" title="無法載入最新內容">{refreshError}</Alert>}
     <div className={`page-body${meta.fullWidth ? ' page-body--full' : ''}`}>
       <PageHeader title={meta.title} icon={meta.icon} coverUrl={meta.coverUrl} coverPosition={meta.coverPosition}
         onTitle={saveTitle} onIcon={saveIcon} onCover={saveCover} onCoverPosition={saveCoverPosition} onEnter={focusEditor} />
