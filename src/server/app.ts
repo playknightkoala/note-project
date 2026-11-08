@@ -11,6 +11,8 @@ import type { AuthContext } from './auth/session.ts';
 import { adminRoutes } from './routes/admin.ts';
 import { authRoutes } from './routes/auth.ts';
 import { healthRoutes } from './routes/health.ts';
+import { fileRoutes } from './routes/files.ts';
+import { pageRoutes, trashRoutes } from './routes/pages.ts';
 import { staticRoutes } from './static.ts';
 
 export interface AppDeps {
@@ -33,7 +35,8 @@ export function createApp(input: Omit<AppDeps, 'now' | 'rateLimiter'> & Partial<
   const deps: AppDeps = { now: () => Date.now(), rateLimiter: new RateLimiter(), ...input };
   const app = new Hono<AppEnv>();
   app.use('*', async (c, next) => { c.set('deps', deps); await next(); });
-  app.use('*', secureHeaders({
+  // File downloads set their own headers (inline media must not inherit the page CSP; attachments get `sandbox`).
+  const secure = secureHeaders({
     contentSecurityPolicy: {
       defaultSrc: ["'self'"],
       scriptSrc: ["'self'"],
@@ -51,13 +54,17 @@ export function createApp(input: Omit<AppDeps, 'now' | 'rateLimiter'> & Partial<
     crossOriginOpenerPolicy: 'same-origin',
     crossOriginResourcePolicy: 'same-origin',
     xFrameOptions: 'DENY',
-  }));
+  });
+  app.use('*', async (c, next) => c.req.path.startsWith('/api/files/') && c.req.method !== 'POST' ? next() : secure(c, next));
   app.use('/api/*', async (c, next) => { c.header('Cache-Control', 'no-store'); await next(); });
 
   app.route('/', healthRoutes());
   app.get('/api/version', c => c.json({ version: deps.config.version }));
   app.route('/api/auth', authRoutes());
   app.route('/api/admin', adminRoutes());
+  app.route('/api/pages', pageRoutes());
+  app.route('/api/trash', trashRoutes());
+  app.route('/api/files', fileRoutes());
 
   app.notFound(c => c.req.path.startsWith('/api/')
     ? c.json(errorBody(new AppError('not_found')), 404)

@@ -2,6 +2,7 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "exactOptionalPropertyTypes": false,
     "types": ["vite/client", "react", "react-dom", "vitest/globals"]
   },
   "include": ["src/client", "src/shared", "tests/client", "vite.config.ts", "vitest.config.ts"]

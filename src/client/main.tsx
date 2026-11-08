@@ -1,5 +1,13 @@
+import '@mantine/core/styles.css';
+import '@mantine/dates/styles.css';
+import '@blocknote/mantine/blocknoteStyles.css';
+import './styles/tokens.css';
+import './styles/app.css';
+import './styles/editor.css';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { App } from './App.tsx';
+import { RouterProvider } from 'react-router';
+import { AppProviders } from './app/providers.tsx';
+import { router } from './app/router.tsx';
 
-createRoot(document.getElementById('root')!).render(<StrictMode><App /></StrictMode>);
+createRoot(document.getElementById('root')!).render(<StrictMode><AppProviders><RouterProvider router={router} /></AppProviders></StrictMode>);

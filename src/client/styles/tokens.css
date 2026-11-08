@@ -1,0 +1,24 @@
+:root {
+  --app-bg: #ffffff;
+  --app-fg: #37352f;
+  --app-fg-muted: #787774;
+  --app-sidebar-bg: #f7f7f5;
+  --app-hover: rgba(55, 53, 47, 0.08);
+  --app-border: rgba(55, 53, 47, 0.12);
+  --app-accent: #2383e2;
+  --app-selection: rgba(35, 131, 226, 0.22);
+  --app-radius: 6px;
+  color-scheme: light;
+}
+
+[data-mantine-color-scheme="dark"] {
+  --app-bg: #191919;
+  --app-fg: #d4d4d4;
+  --app-fg-muted: #9b9b9b;
+  --app-sidebar-bg: #202020;
+  --app-hover: rgba(255, 255, 255, 0.08);
+  --app-border: rgba(255, 255, 255, 0.13);
+  --app-accent: #529cca;
+  --app-selection: rgba(82, 156, 202, 0.3);
+  color-scheme: dark;
+}

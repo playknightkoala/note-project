@@ -65,3 +65,43 @@ export interface InviteDto {
 }
 
 export interface AuthStatusDto { setupRequired: boolean }
+
+// ---- Pages ----
+export const pageIdSchema = z.string().uuid();
+export type PageKind = 'page' | 'database' | 'row';
+
+export interface PageNode {
+  id: string; parentId: string | null; kind: PageKind; title: string; icon: string | null; position: number;
+  isFavorite: boolean; favoritePosition: number | null; hasChildren: boolean; updatedAt: number;
+}
+export interface TreeDto { pages: PageNode[] }
+
+export interface PageDto {
+  id: string; parentId: string | null; kind: PageKind; databaseId: string | null; title: string; icon: string | null;
+  coverUrl: string | null; coverPosition: number; fullWidth: boolean; content: unknown[]; version: number;
+  isFavorite: boolean; trashedAt: number | null; createdAt: number; updatedAt: number;
+}
+export interface Breadcrumb { id: string; title: string; icon: string | null; kind: PageKind }
+export interface PageResponse { page: PageDto; breadcrumbs: Breadcrumb[] }
+export interface PageHeadDto { version: number; updatedAt: number; title: string }
+
+export const createPageSchema = z.object({
+  parentId: pageIdSchema.nullable().optional(),
+  kind: z.enum(['page', 'database']).default('page'),
+  title: z.string().max(500).default(''),
+  afterId: pageIdSchema.nullable().optional(),
+  icon: z.string().max(16).nullable().optional(),
+});
+export const patchPageSchema = z.object({
+  title: z.string().max(500).optional(),
+  icon: z.string().max(16).nullable().optional(),
+  coverFileId: z.string().uuid().nullable().optional(),
+  coverPosition: z.number().int().min(0).max(100).optional(),
+  fullWidth: z.boolean().optional(),
+});
+export const movePageSchema = z.object({ parentId: pageIdSchema.nullable(), index: z.number().int().min(0).max(100_000) });
+export const favoriteSchema = z.object({ favorite: z.boolean() });
+export const contentSchema = z.object({ content: z.array(z.unknown()).max(20_000) });
+
+export interface TrashItemDto { id: string; title: string; icon: string | null; kind: PageKind; trashedAt: number; descendantCount: number }
+export interface VersionDto { id: string; version: number; title: string; reason: string; createdAt: number; size: number }
