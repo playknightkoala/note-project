@@ -144,3 +144,20 @@ describe('pages', () => {
     expect(await tree(other)).toEqual([]);
   });
 });
+
+describe('covers', () => {
+  let t: TestApp; let c: TestClient;
+  beforeEach(async () => { t = createTestApp(); c = t.client(); await c.register(admin); });
+  afterEach(() => t.close());
+  it('accepts a preset cover, swaps it for an uploaded file, and clears both', async () => {
+    const page = await createPage(c, {});
+    expect(((await (await c.request('PATCH', `/api/pages/${page.id}`, { json: { coverPreset: 'gradient:2' } })).json()) as PageResponse).page.coverUrl).toBe('gradient:2');
+    expect((await c.request('PATCH', `/api/pages/${page.id}`, { json: { coverPreset: 'javascript:1' } })).status).toBe(400);
+    const form = new FormData(); form.append('file', new Blob([new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 0])], { type: 'image/png' }), 'c.png');
+    const file = await (await c.request('POST', '/api/files', { body: form })).json() as { id: string };
+    const withFile = (await (await c.request('PATCH', `/api/pages/${page.id}`, { json: { coverFileId: file.id, coverPosition: 30 } })).json()) as PageResponse;
+    expect(withFile.page).toMatchObject({ coverUrl: `/api/files/${file.id}`, coverPosition: 30 });
+    const cleared = (await (await c.request('PATCH', `/api/pages/${page.id}`, { json: { coverFileId: null, coverPreset: null } })).json()) as PageResponse;
+    expect(cleared.page.coverUrl).toBeNull();
+  });
+});

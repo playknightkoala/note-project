@@ -1,8 +1,9 @@
 import type { Db } from './driver.ts';
 import { migration as init } from './migrations/0001_init.ts';
+import { migration as coverPreset } from './migrations/0002_cover_preset.ts';
 
 export interface Migration { id: string; up: string }
-export const migrations: Migration[] = [init];
+export const migrations: Migration[] = [init, coverPreset];
 
 /** Applies every migration whose id is not yet recorded, each in its own immediate transaction. Idempotent. */
 export function migrate(db: Db, list: Migration[] = migrations): string[] {

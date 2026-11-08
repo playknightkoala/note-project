@@ -46,7 +46,7 @@ export function useAutosave({ pageId, initialVersion, getContent, onRemoteUpdate
   const ref = useRef({ dirty: false, inFlight: false, firstDirtyAt: 0, timer: null as ReturnType<typeof setTimeout> | null, retry: null as ReturnType<typeof setTimeout> | null, version: initialVersion, status: 'clean' as SaveState });
   const getContentRef = useRef(getContent); getContentRef.current = getContent;
   const remoteRef = useRef(onRemoteUpdate); remoteRef.current = onRemoteUpdate;
-  ref.current.version = state.version; ref.current.status = state.status;
+  ref.current.status = state.status;
 
   const clearTimers = () => { const r = ref.current; if (r.timer) clearTimeout(r.timer); if (r.retry) clearTimeout(r.retry); r.timer = null; r.retry = null; };
 
@@ -60,6 +60,8 @@ export function useAutosave({ pageId, initialVersion, getContent, onRemoteUpdate
     try {
       const head = await saveContent(pageId, options.overrideVersion ?? r.version, content, { ...(options.keepalive ? { keepalive: true } : {}) });
       r.inFlight = false;
+      // The ref is the source of truth for the next If-Match: a follow-up save may start before React re-renders.
+      r.version = head.version;
       dispatch({ type: 'saved', version: head.version, at: now(), stillDirty: r.dirty });
       if (r.dirty) schedule(0);
     } catch (error) {
@@ -98,7 +100,7 @@ export function useAutosave({ pageId, initialVersion, getContent, onRemoteUpdate
       await save({ overrideVersion: head.version });
     } else {
       dispatch({ type: 'reset', version: head?.version ?? r.version });
-      r.dirty = false; r.status = 'clean';
+      r.version = head?.version ?? r.version; r.dirty = false; r.status = 'clean';
       remoteRef.current();
     }
   }, [save, state.conflictHead]);
@@ -126,13 +128,13 @@ export function useAutosave({ pageId, initialVersion, getContent, onRemoteUpdate
         const head = await fetchHead(pageId);
         if (head.version > ref.current.version) {
           if (ref.current.dirty) dispatch({ type: 'conflict', head });
-          else { dispatch({ type: 'reset', version: head.version }); remoteRef.current(); }
+          else { ref.current.version = head.version; dispatch({ type: 'reset', version: head.version }); remoteRef.current(); }
         }
       } catch { /* transient; the next poll retries */ }
     }, HEAD_POLL_MS);
     return () => clearInterval(id);
   }, [pageId]);
 
-  const setVersion = useCallback((version: number) => dispatch({ type: 'version', version }), []);
+  const setVersion = useCallback((version: number) => { ref.current.version = version; dispatch({ type: 'version', version }); }, []);
   return { state, markDirty, flush, resolveConflict, setVersion, saveNow: () => save() };
 }

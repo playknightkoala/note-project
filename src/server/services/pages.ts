@@ -7,7 +7,7 @@ import { extractPlainText } from '../../shared/text.ts';
 
 export interface PageRow {
   rid: number; id: string; user_id: string; parent_id: string | null; kind: PageKind; database_id: string | null; position: number;
-  title: string; icon: string | null; cover_file_id: string | null; cover_position: number; content: string; content_text: string;
+  title: string; icon: string | null; cover_file_id: string | null; cover_preset: string | null; cover_position: number; content: string; content_text: string;
   version: number; is_favorite: number; favorite_position: number | null; full_width: number; trashed_at: number | null;
   trash_root_id: string | null; import_key: string | null; created_at: number; updated_at: number;
 }
@@ -20,7 +20,7 @@ export const fileUrl = (fileId: string | null): string | null => fileId ? `/api/
 
 export function toPageDto(row: PageRow): PageDto {
   return { id: row.id, parentId: row.parent_id, kind: row.kind, databaseId: row.database_id, title: row.title, icon: row.icon,
-    coverUrl: fileUrl(row.cover_file_id), coverPosition: row.cover_position, fullWidth: row.full_width === 1,
+    coverUrl: row.cover_file_id ? fileUrl(row.cover_file_id) : row.cover_preset, coverPosition: row.cover_position, fullWidth: row.full_width === 1,
     content: JSON.parse(row.content) as unknown[], version: row.version, isFavorite: row.is_favorite === 1,
     trashedAt: row.trashed_at, createdAt: row.created_at, updatedAt: row.updated_at };
 }
@@ -129,7 +129,7 @@ export function updateContent(db: Db, userId: string, id: string, content: unkno
   });
 }
 
-export interface PatchPageInput { title?: string | undefined; icon?: string | null | undefined; coverFileId?: string | null | undefined; coverPosition?: number | undefined; fullWidth?: boolean | undefined }
+export interface PatchPageInput { title?: string | undefined; icon?: string | null | undefined; coverFileId?: string | null | undefined; coverPreset?: string | null | undefined; coverPosition?: number | undefined; fullWidth?: boolean | undefined }
 
 export function patchPage(db: Db, userId: string, id: string, input: PatchPageInput, now: number): PageRow {
   return db.transaction(() => {
@@ -139,8 +139,12 @@ export function patchPage(db: Db, userId: string, id: string, input: PatchPageIn
       if (!file) throw new AppError('not_found', '找不到封面圖片。');
     }
     // Metadata is not guarded by the content version: a title edit must never make a concurrent content save conflict.
-    db.run('UPDATE pages SET title = ?, icon = ?, cover_file_id = ?, cover_position = ?, full_width = ?, updated_at = ? WHERE id = ?',
-      input.title ?? row.title, input.icon === undefined ? row.icon : input.icon, input.coverFileId === undefined ? row.cover_file_id : input.coverFileId,
+    // A file cover and a preset cover are exclusive: setting either clears the other.
+    let coverFileId = row.cover_file_id, coverPreset = row.cover_preset;
+    if (input.coverFileId !== undefined) { coverFileId = input.coverFileId; if (input.coverFileId) coverPreset = null; }
+    if (input.coverPreset !== undefined) { coverPreset = input.coverPreset; if (input.coverPreset) coverFileId = null; }
+    db.run('UPDATE pages SET title = ?, icon = ?, cover_file_id = ?, cover_preset = ?, cover_position = ?, full_width = ?, updated_at = ? WHERE id = ?',
+      input.title ?? row.title, input.icon === undefined ? row.icon : input.icon, coverFileId, coverPreset,
       input.coverPosition ?? row.cover_position, input.fullWidth === undefined ? row.full_width : (input.fullWidth ? 1 : 0), now, id);
     return loadPage(db, userId, id);
   });
@@ -229,9 +233,9 @@ export function duplicatePage(db: Db, userId: string, id: string, now: number): 
     if (source.kind !== 'page') throw new AppError('bad_request', '目前只能複製一般頁面。');
     const copy = (row: PageRow, parentId: string | null, position: number): string => {
       const newId = crypto.randomUUID();
-      db.run(`INSERT INTO pages (id, user_id, parent_id, kind, position, title, icon, cover_file_id, cover_position, content, content_text, full_width, created_at, updated_at)
-              VALUES (?, ?, ?, 'page', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        newId, userId, parentId, position, row.title, row.icon, row.cover_file_id, row.cover_position, row.content, row.content_text, row.full_width, now, now);
+      db.run(`INSERT INTO pages (id, user_id, parent_id, kind, position, title, icon, cover_file_id, cover_preset, cover_position, content, content_text, full_width, created_at, updated_at)
+              VALUES (?, ?, ?, 'page', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        newId, userId, parentId, position, row.title, row.icon, row.cover_file_id, row.cover_preset, row.cover_position, row.content, row.content_text, row.full_width, now, now);
       const children = db.all<PageRow>("SELECT * FROM pages WHERE parent_id = ? AND user_id = ? AND trashed_at IS NULL AND kind = 'page' ORDER BY position", row.id, userId);
       children.forEach((child, i) => copy(child, newId, (i + 1) * GAP));
       return newId;

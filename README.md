@@ -2,7 +2,7 @@
 
 Notion 式的筆記網站：自有帳號（邀請碼註冊，第一位註冊者為管理者）、BlockNote 區塊編輯器、頁面樹、資料庫表格視圖、全文搜尋、Joplin 匯入。單一 Docker 容器 + SQLite，資料與附件放在同一個 volume。
 
-> 開發中：目前為里程碑 M0（骨架與容器）。各里程碑的範圍與驗證方式見 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
+> 開發中：M0、M1 已驗證，M2 程式完成，M3 部分完成。接手請先讀 [docs/HANDOFF.md](docs/HANDOFF.md)；里程碑見 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 
 ## Docker 啟動
 

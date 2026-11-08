@@ -68,7 +68,7 @@ export const useTrashPage = () => useTreeMutation(
 export function usePatchPage() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (input: { id: string; title?: string; icon?: string | null; coverFileId?: string | null; coverPosition?: number; fullWidth?: boolean }) => {
+    mutationFn: (input: { id: string; title?: string; icon?: string | null; coverFileId?: string | null; coverPreset?: string | null; coverPosition?: number; fullWidth?: boolean }) => {
       const { id, ...body } = input;
       return api<PageResponse>('PATCH', `/api/pages/${id}`, { json: body });
     },

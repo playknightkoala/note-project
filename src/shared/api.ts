@@ -96,6 +96,7 @@ export const patchPageSchema = z.object({
   title: z.string().max(500).optional(),
   icon: z.string().max(16).nullable().optional(),
   coverFileId: z.string().uuid().nullable().optional(),
+  coverPreset: z.string().regex(/^gradient:[0-9]$/).nullable().optional(),
   coverPosition: z.number().int().min(0).max(100).optional(),
   fullWidth: z.boolean().optional(),
 });

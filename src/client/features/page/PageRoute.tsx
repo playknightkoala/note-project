@@ -11,7 +11,8 @@ import { BlockEditor } from '../editor/BlockEditor.tsx';
 import type { AppEditor } from '../editor/schema.ts';
 import type { schema } from '../editor/schema.ts';
 import { TopBar } from '../shell/TopBar.tsx';
-import { PageTitle } from './PageTitle.tsx';
+import { PageHeader } from './PageHeader.tsx';
+import { uploadFile } from '../../api/files.ts';
 import { useAutosave } from './useAutosave.ts';
 
 type Blocks = PartialBlock<typeof schema.blockSchema, typeof schema.inlineContentSchema, typeof schema.styleSchema>[];
@@ -33,7 +34,7 @@ function PageView({ initial }: { initial: PageResponse }) {
   const { rememberPage, expandMany } = useUiState();
   const editorRef = useRef<AppEditor | null>(null);
   const composingRef = useRef<() => boolean>(() => false);
-  const [meta, setMeta] = useState({ title: initial.page.title, icon: initial.page.icon, fullWidth: initial.page.fullWidth });
+  const [meta, setMeta] = useState({ title: initial.page.title, icon: initial.page.icon, fullWidth: initial.page.fullWidth, coverUrl: initial.page.coverUrl, coverPosition: initial.page.coverPosition });
   useEffect(() => { rememberPage(pageId); expandMany(initial.breadcrumbs.slice(0, -1).map(b => b.id)); }, [pageId, rememberPage, expandMany, initial.breadcrumbs]);
 
   const replaceContent = useCallback((content: unknown[]) => {
@@ -47,7 +48,7 @@ function PageView({ initial }: { initial: PageResponse }) {
     getContent: () => (composingRef.current() || !editorRef.current) ? null : editorRef.current.document as unknown[],
     onRemoteUpdate: () => {
       void queryClient.fetchQuery({ queryKey: pageKeys.page(pageId), queryFn: () => import('../../api/client.ts').then(m => m.api<PageResponse>('GET', `/api/pages/${pageId}`)) })
-        .then(fresh => { replaceContent(fresh.page.content); setMeta({ title: fresh.page.title, icon: fresh.page.icon, fullWidth: fresh.page.fullWidth }); autosave.setVersion(fresh.page.version); });
+        .then(fresh => { replaceContent(fresh.page.content); setMeta({ title: fresh.page.title, icon: fresh.page.icon, fullWidth: fresh.page.fullWidth, coverUrl: fresh.page.coverUrl, coverPosition: fresh.page.coverPosition }); autosave.setVersion(fresh.page.version); });
     },
   });
 
@@ -55,6 +56,14 @@ function PageView({ initial }: { initial: PageResponse }) {
   const onChange = useCallback(() => autosave.markDirty(), [autosave]);
   const onCompositionSettled = useCallback(() => autosave.markDirty(), [autosave]);
   const saveTitle = useCallback((title: string) => { setMeta(m => ({ ...m, title })); patch.mutate({ id: pageId, title }); }, [patch, pageId]);
+  const saveIcon = useCallback((icon: string | null) => { setMeta(m => ({ ...m, icon })); patch.mutate({ id: pageId, icon }); }, [patch, pageId]);
+  const saveCover = useCallback((cover: string | null) => {
+    if (cover === null) { setMeta(m => ({ ...m, coverUrl: null })); patch.mutate({ id: pageId, coverFileId: null, coverPreset: null }); return; }
+    if (cover.startsWith('gradient:')) { setMeta(m => ({ ...m, coverUrl: cover })); patch.mutate({ id: pageId, coverPreset: cover }); return; }
+    patch.mutate({ id: pageId, coverFileId: cover, coverPosition: 50 }, { onSuccess: response => setMeta(m => ({ ...m, coverUrl: response.page.coverUrl, coverPosition: 50 })) });
+  }, [patch, pageId]);
+  const saveCoverPosition = useCallback((coverPosition: number) => { setMeta(m => ({ ...m, coverPosition })); patch.mutate({ id: pageId, coverPosition }); }, [patch, pageId]);
+  const upload = useCallback(async (file: File) => (await uploadFile(file)).url, []);
   const focusEditor = useCallback(() => {
     const editor = editorRef.current; if (!editor) return;
     const first = editor.document[0]; if (first) editor.setTextCursorPosition(first, 'start');
@@ -74,13 +83,11 @@ function PageView({ initial }: { initial: PageResponse }) {
       </Group>
     </Alert>}
     <div className={`page-body${meta.fullWidth ? ' page-body--full' : ''}`}>
-      <header className="page-header">
-        {meta.icon && <div className="page-icon" aria-hidden>{meta.icon}</div>}
-        <PageTitle value={meta.title} onChange={saveTitle} onEnter={focusEditor} />
-      </header>
+      <PageHeader title={meta.title} icon={meta.icon} coverUrl={meta.coverUrl} coverPosition={meta.coverPosition}
+        onTitle={saveTitle} onIcon={saveIcon} onCover={saveCover} onCoverPosition={saveCoverPosition} onEnter={focusEditor} />
       {initial.page.kind === 'database'
         ? <Text c="dimmed" px="md">資料庫表格視圖將在下一個里程碑加入。</Text>
-        : <BlockEditor pageId={pageId} initialContent={initialContent} onReady={onReady} onChange={onChange} onCompositionSettled={onCompositionSettled} fullWidth={meta.fullWidth} />}
+        : <BlockEditor pageId={pageId} initialContent={initialContent} onReady={onReady} onChange={onChange} onCompositionSettled={onCompositionSettled} fullWidth={meta.fullWidth} uploadFile={upload} />}
     </div>
   </div>;
 }
