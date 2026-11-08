@@ -1,9 +1,10 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { AppShell as MantineAppShell, Avatar, Group, Menu, ScrollArea, Text, UnstyledButton, useComputedColorScheme, useMantineColorScheme } from '@mantine/core';
+import { Alert, AppShell as MantineAppShell, Avatar, Group, Menu, ScrollArea, Text, UnstyledButton, useComputedColorScheme, useMantineColorScheme } from '@mantine/core';
 import { useDisclosure, useMediaQuery } from '@mantine/hooks';
 import { ChevronsUpDown, LogOut, Moon, Plus, Search, Settings, Sun, Table2, Trash2 } from 'lucide-react';
 import { Link, Outlet, useLocation, useNavigate, useParams } from 'react-router';
 import { useLogout, useMe } from '../../api/auth.ts';
+import { errorText } from '../../api/client.ts';
 import { useCreatePage, useTree } from '../../api/pages.ts';
 import { PageTree } from './PageTree.tsx';
 import { PageTreeItem } from './PageTreeItem.tsx';
@@ -46,7 +47,11 @@ export function AppShell() {
   const scheme = useComputedColorScheme('light');
   const index = useMemo(() => buildTreeIndex(tree.data ?? []), [tree.data]);
   const user = me.data;
-  const signOut = () => logout.mutate(undefined, { onSettled: () => navigate('/login', { replace: true }) });
+  const [logoutError, setLogoutError] = useState<string | null>(null);
+  const signOut = () => logout.mutate(undefined, {
+    onSuccess: () => navigate('/login', { replace: true }),
+    onError: error => setLogoutError(errorText(error)),
+  });
   const newPage = () => create.mutate({}, { onSuccess: result => { close(); navigate(`/p/${result.page.id}`); } });
   const newPageRef = useRef(newPage); newPageRef.current = newPage;
   const toggleRef = useRef(toggle); toggleRef.current = toggle;
@@ -94,7 +99,10 @@ export function AppShell() {
           <Link to="/settings" className={`sidebar-button${location.pathname === '/settings' ? ' sidebar-button--active' : ''}`}><Settings size={15} /><span>設定</span></Link>
         </div>
       </MantineAppShell.Navbar>
-      <MantineAppShell.Main className="app-main"><Outlet /></MantineAppShell.Main>
+      <MantineAppShell.Main className="app-main">
+        {logoutError && <Alert color="red" variant="light" m="md" withCloseButton onClose={() => setLogoutError(null)} title="登出失敗">{logoutError}</Alert>}
+        <Outlet />
+      </MantineAppShell.Main>
     </MantineAppShell>
     {user && <CommandPalette key={user.id} userId={user.id} opened={searchOpened} onClose={() => setSearchOpened(false)} />}
   </ShellCtx.Provider>;

@@ -42,7 +42,7 @@ export function useLogout() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: () => api<void>('POST', '/api/auth/logout'),
-    onSettled: () => { setCsrfToken(null); queryClient.clear(); },
+    onSuccess: () => { setCsrfToken(null); queryClient.clear(); },
   });
 }
 

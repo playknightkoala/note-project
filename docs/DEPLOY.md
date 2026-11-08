@@ -67,7 +67,7 @@ npm run test:app -- https://你的網域
 ### 反向代理注意事項
 
 - 代理必須傳 `X-Forwarded-Proto: https` 與 `X-Forwarded-For`，且 app 只在 `TRUST_PROXY=1` 時信任這些標頭。沒有代理時不要開，否則客戶端可以偽造來源 IP 影響速率限制。
-- 若代理改寫 `Host`，請設 `PUBLIC_ORIGIN=https://你的網域`，CSRF 的同源檢查以它為準。
+- 寫入請求的來源檢查只比對主機名：`Origin` 必須是 `NOTES_PUBLIC_ORIGIN`，或等於請求抵達時的 `Host`（`NOTES_TRUST_PROXY=1` 時改看 `X-Forwarded-Host`）。若代理或 tunnel 改寫了 `Host`（症狀：登入後所有寫入動作都回 403 `csrf`，例如產生邀請碼、登出），在 `.env` 設 `NOTES_PUBLIC_ORIGIN=https://你的網域` 後 `docker compose up -d --wait`。
 - 匯入或上傳大檔時代理的 body 上限要高於 `NOTES_MAX_UPLOAD_MB`（overlay 已設 220 MB、讀取逾時 300 秒）。
 
 ## 備份與還原

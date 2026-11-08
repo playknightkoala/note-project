@@ -92,3 +92,11 @@
 - **備份**：`cli backup` 使用 `node:sqlite` 線上備份並保留 7 份；還原與 Cloudflare 部署步驟寫在 [DEPLOY.md](DEPLOY.md)。本輪未實際演練整個還原流程。
 - 檢查：`npm run check` 全過（typecheck、lint、12 檔／77 tests、build）；容器重建 healthy。
 - 未做：Playwright 端到端套件（改以 `test:app` 靜態檢查＋CDP 冒煙腳本，腳本在 scratch 未納入專案）、真實手機與輸入法、附件 Range 請求、未引用 blob 回收。
+
+## 右鍵選單、反向代理 CSRF、登出與記住帳號（2026-11-08 稍後）
+
+- **右鍵選單**（`src/client/features/shell/ContextMenu.tsx`、`PageMenuItems.tsx`）：頁面本體、側邊欄頁面、資料庫欄位標頭、資料列四種表面；桌面指標才啟用，輸入框、文字區、連結、`contenteditable`、BlockNote 編輯器、對話框與 Shift+右鍵保留瀏覽器原生選單；`Shift+F10` 與選單鍵以鍵盤開啟；捲動、縮放或 Esc 關閉；巢狀表面只開最近的一層。`tests/client/contextMenu.test.tsx` 覆蓋以上行為。隔離 Chrome（CDP）實測：頁面選單 8 項、側欄選單 6 項、欄位選單（標題欄 3 項）、資料列選單 3 項，各自 Esc 可關；在編輯器內右鍵沒有自訂選單；側欄項目 `Shift+F10` 開啟；從選單「加入最愛」後側欄出現「最愛」區塊。
+- **反向代理下的 CSRF 403**（使用者回報 `https://notebook.yshongcode.com` 產生邀請碼 403 `csrf`）：原本比對完整 origin，代理或 tunnel 未轉送 `X-Forwarded-Proto` 時 `https` 對 `http` 不符而全部寫入被拒，登出也因此失敗並跳回原頁。改為只比對主機名（`Origin` 的 host 等於請求的 `Host`，`NOTES_TRUST_PROXY=1` 時改看 `X-Forwarded-Host`），或等於新設定 `NOTES_PUBLIC_ORIGIN`；不同主機仍 403，`Origin: null` 403。`compose.yaml` 新增 `PUBLIC_ORIGIN`。測試：同主機不同 scheme 201、不同主機與不同埠 403、`PUBLIC_ORIGIN` 與 `X-Forwarded-Host` 情境、代理下 cookie 帶 `Secure`。容器 curl：`Origin https://127.0.0.1:8081` 對 http 站 201，`https://evil.example` 與 `https://127.0.0.1:9999` 403，登出 204。
+- **登出回跳**：根因同上（登出 403 後客戶端仍導向 `/login`，而 session 仍有效，登入頁又導回）。客戶端改為只在伺服器確認登出後清除本機狀態並導向；失敗時留在原頁並以警示顯示原因。瀏覽器實測登出後停在 `/login`。
+- **記住帳號**：登入頁新增「記住帳號」核取方塊，只把帳號名稱存在 `localStorage`，不存密碼；勾選登入後登出，登入頁預填帳號並把焦點放在密碼欄；取消勾選再登入即忘記。瀏覽器實測三種情況。
+- 檢查：typecheck、lint、13 檔／85 tests、build 通過；容器重建 healthy。

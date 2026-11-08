@@ -51,6 +51,7 @@ describe('registration and invites', () => {
     expect(body.user).toMatchObject({ email: 'admin@example.test', role: 'admin' });
     expect(a.cookie).toMatch(/^sid=/);
     expect(created.headers.get('set-cookie')).toMatch(/HttpOnly/); expect(created.headers.get('set-cookie')).toMatch(/SameSite=Lax/);
+    expect(created.headers.get('set-cookie')).toMatch(/Max-Age=7776000/);
     expect(await (await t.app.request('/api/auth/status')).json()).toEqual({ setupRequired: false });
 
     const b = t.client();
@@ -125,8 +126,24 @@ describe('login, sessions and CSRF', () => {
     expect((await c.request('POST', '/api/admin/invites', { json: {}, csrf: false })).status).toBe(403);
     expect((await c.request('POST', '/api/admin/invites', { json: {}, headers: { 'x-csrf-token': 'bad' }, csrf: false })).status).toBe(403);
     expect((await c.request('POST', '/api/admin/invites', { json: {}, origin: 'https://evil.example' })).status).toBe(403);
+    expect((await c.request('POST', '/api/admin/invites', { json: {}, origin: 'http://localhost:9999' })).status).toBe(403);
+    expect((await c.request('POST', '/api/admin/invites', { json: {}, origin: 'null' })).status).toBe(403);
     expect((await c.request('POST', '/api/admin/invites', { json: {}, origin: null })).status).toBe(201);
     expect((await c.request('POST', '/api/admin/invites', { json: {} })).status).toBe(201);
+    // A TLS-terminating proxy that does not forward the scheme: same host, different scheme is still this site.
+    expect((await c.request('POST', '/api/admin/invites', { json: {}, origin: 'https://localhost' })).status).toBe(201);
+  });
+
+  it('accepts the configured public origin and the forwarded host behind a trusted proxy', async () => {
+    const proxied = createTestApp({ TRUST_PROXY: '1', PUBLIC_ORIGIN: 'https://notes.example.test/', COOKIE_SECURE: 'auto' });
+    try {
+      const c = proxied.client(); await c.register(admin);
+      expect((await c.request('POST', '/api/admin/invites', { json: {}, origin: 'https://notes.example.test' })).status).toBe(201);
+      expect((await c.request('POST', '/api/admin/invites', { json: {}, origin: 'https://other.example.test', headers: { 'x-forwarded-host': 'other.example.test', 'x-forwarded-proto': 'https' } })).status).toBe(201);
+      expect((await c.request('POST', '/api/admin/invites', { json: {}, origin: 'https://evil.example', headers: { 'x-forwarded-host': 'notes.example.test' } })).status).toBe(403);
+      const login = await proxied.client().request('POST', '/api/auth/login', { json: { identifier: admin.email, password: admin.password }, headers: { 'x-forwarded-proto': 'https' } });
+      expect(login.headers.get('set-cookie')).toMatch(/Secure/);
+    } finally { proxied.close(); }
   });
 
   it('expires idle sessions after 30 days and slides them while in use', async () => {
@@ -136,6 +153,16 @@ describe('login, sessions and CSRF', () => {
     t.clock.now += 20 * 24 * 60 * 60 * 1000;
     expect((await c.request('GET', '/api/auth/me')).status).toBe(200);
     t.clock.now += 31 * 24 * 60 * 60 * 1000;
+    expect((await c.request('GET', '/api/auth/me')).status).toBe(401);
+  });
+
+  it('expires active sessions at the absolute 90-day limit', async () => {
+    const c = t.client(); await c.login('admin@example.test', admin.password);
+    for (let i = 0; i < 4; i++) {
+      t.clock.now += 20 * 24 * 60 * 60 * 1000;
+      expect((await c.request('GET', '/api/auth/me')).status).toBe(200);
+    }
+    t.clock.now += 10 * 24 * 60 * 60 * 1000;
     expect((await c.request('GET', '/api/auth/me')).status).toBe(401);
   });
 

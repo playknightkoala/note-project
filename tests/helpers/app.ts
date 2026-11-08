@@ -28,9 +28,9 @@ export interface TestClient {
 }
 
 /** In-memory SQLite, temporary data directory, fixed clock: every test gets an isolated server. */
-export function createTestApp(): TestApp {
+export function createTestApp(env: Record<string, string> = {}): TestApp {
   const dataDir = mkdtempSync(join(tmpdir(), 'notes-test-'));
-  const config = loadConfig({ NODE_ENV: 'test', DATA_DIR: dataDir, COOKIE_SECURE: 'false' });
+  const config = loadConfig({ NODE_ENV: 'test', DATA_DIR: dataDir, COOKIE_SECURE: 'false', ...env });
   const db = openDatabase(':memory:');
   migrate(db);
   const clock = { now: 1_800_000_000_000 };

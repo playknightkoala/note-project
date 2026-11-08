@@ -4,7 +4,7 @@
 
 ## 目前狀態
 
-**M0–M5 與 M7 完成並驗證；M6 Joplin 匯入已取消。** 功能範圍以 README「功能」段落為準。最後一次 `npm run check`：typecheck、lint、77 tests、build 全過；`docker compose up -d --build --wait` healthy；`npm run test:app -- http://127.0.0.1:8081` 25 項 PASS。各里程碑的實際驗證內容與限制見 [VALIDATION.md](VALIDATION.md)。
+**M0–M5 與 M7 完成並驗證；M6 Joplin 匯入已取消。** 之後追加：右鍵選單（頁面、側欄、資料庫欄位與資料列）、登入頁記住帳號、反向代理下的 CSRF 來源檢查修正與 `NOTES_PUBLIC_ORIGIN` 設定、登出失敗不再回跳；皆已驗證（VALIDATION 末段）。 功能範圍以 README「功能」段落為準。最後一次 `npm run check`：typecheck、lint、77 tests、build 全過；`docker compose up -d --build --wait` healthy；`npm run test:app -- http://127.0.0.1:8081` 25 項 PASS。各里程碑的實際驗證內容與限制見 [VALIDATION.md](VALIDATION.md)。
 
 ## 下一步（若要繼續）
 

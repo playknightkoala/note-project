@@ -8,6 +8,7 @@ services:
       - "${NOTES_BIND:-127.0.0.1}:${NOTES_PORT:-8080}:8080"
     environment:
       TRUST_PROXY: "${NOTES_TRUST_PROXY:-0}"
+      PUBLIC_ORIGIN: "${NOTES_PUBLIC_ORIGIN:-}"
       MAX_UPLOAD_MB: "${NOTES_MAX_UPLOAD_MB:-20}"
       MAX_IMPORT_MB: "${NOTES_MAX_IMPORT_MB:-200}"
     volumes:

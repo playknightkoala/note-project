@@ -17,6 +17,8 @@ import { useAutosave } from './useAutosave.ts';
 import { HistoryDrawer } from './HistoryDrawer.tsx';
 import { DatabaseView } from '../database/DatabaseView.tsx';
 import { RowPropertiesPanel } from '../database/RowPropertiesPanel.tsx';
+import { ContextMenu } from '../shell/ContextMenu.tsx';
+import { PageMenuItems } from '../shell/PageMenuItems.tsx';
 
 type Blocks = PartialBlock<typeof schema.blockSchema, typeof schema.inlineContentSchema, typeof schema.styleSchema>[];
 
@@ -97,11 +99,14 @@ function PageView({ initial }: { initial: PageResponse }) {
     editor.focus();
   }, []);
   const initialContent = useMemo(() => initial.page.content as Blocks, [initial.page.content]);
+  const currentPage = { id: pageId, kind: initial.page.kind, title: meta.title, icon: meta.icon, fullWidth: meta.fullWidth };
+  const toggleFullWidth = () => { const fullWidth = !meta.fullWidth; setMeta(m => ({ ...m, fullWidth })); patch.mutate({ id: pageId, fullWidth }); };
 
-  return <div className="page">
-    <TopBar page={{ id: pageId, kind: initial.page.kind, title: meta.title, icon: meta.icon, fullWidth: meta.fullWidth }} breadcrumbs={initial.breadcrumbs}
+  return <ContextMenu label="頁面右鍵選單" items={<PageMenuItems page={currentPage} onToggleFullWidth={toggleFullWidth} smallText={smallText} onToggleSmallText={toggleSmallText} onOpenHistory={() => setHistoryOpen(true)} />}>
+    {handlers => <div className="page" {...handlers}>
+    <TopBar page={currentPage} breadcrumbs={initial.breadcrumbs}
       saveStatus={autosave.state.status} saveError={autosave.state.error} onRetry={() => { void autosave.saveNow(); }}
-      onToggleFullWidth={() => { const fullWidth = !meta.fullWidth; setMeta(m => ({ ...m, fullWidth })); patch.mutate({ id: pageId, fullWidth }); }}
+      onToggleFullWidth={toggleFullWidth}
       smallText={smallText} onToggleSmallText={toggleSmallText} onOpenHistory={() => setHistoryOpen(true)} />
     <HistoryDrawer pageId={pageId} opened={historyOpen} onClose={() => setHistoryOpen(false)} currentVersion={autosave.state.version}
       onRestored={() => { void autosave.resolveConflict('reload'); }} />
@@ -123,5 +128,6 @@ function PageView({ initial }: { initial: PageResponse }) {
           <BlockEditor pageId={pageId} initialContent={initialContent} onReady={onReady} onChange={onChange} onCompositionSettled={onCompositionSettled} fullWidth={meta.fullWidth} uploadFile={upload} />
         </>}
     </div>
-  </div>;
+  </div>}
+  </ContextMenu>;
 }
