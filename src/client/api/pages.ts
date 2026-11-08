@@ -81,6 +81,7 @@ export function usePatchPage() {
     onError: (_error, _input, context) => { if (context?.previous) queryClient.setQueryData(pageKeys.tree, context.previous); },
     onSuccess: (response, input) => {
       queryClient.setQueryData<PageResponse>(pageKeys.page(input.id), current => current ? { ...current, page: { ...current.page, ...pick(response.page), content: current.page.content }, breadcrumbs: response.breadcrumbs } : response);
+      if (response.page.kind === 'row') void queryClient.invalidateQueries({ queryKey: ['database-row', input.id] });
     },
     onSettled: () => queryClient.invalidateQueries({ queryKey: pageKeys.tree }),
   });

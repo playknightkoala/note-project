@@ -14,6 +14,9 @@ import { TopBar } from '../shell/TopBar.tsx';
 import { PageHeader } from './PageHeader.tsx';
 import { uploadFile } from '../../api/files.ts';
 import { useAutosave } from './useAutosave.ts';
+import { HistoryDrawer } from './HistoryDrawer.tsx';
+import { DatabaseView } from '../database/DatabaseView.tsx';
+import { RowPropertiesPanel } from '../database/RowPropertiesPanel.tsx';
 
 type Blocks = PartialBlock<typeof schema.blockSchema, typeof schema.inlineContentSchema, typeof schema.styleSchema>[];
 
@@ -37,6 +40,9 @@ function PageView({ initial }: { initial: PageResponse }) {
   const remoteContentRef = useRef<string | null>(null);
   const localRevisionRef = useRef(0);
   const [refreshError, setRefreshError] = useState<string | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [smallText, setSmallText] = useState(() => { try { return localStorage.getItem('notes:small-text') === '1'; } catch { return false; } });
+  const toggleSmallText = () => setSmallText(value => { try { localStorage.setItem('notes:small-text', value ? '0' : '1'); } catch { /* ignore */ } return !value; });
   const composingRef = useRef<() => boolean>(() => false);
   const [meta, setMeta] = useState({ title: initial.page.title, icon: initial.page.icon, fullWidth: initial.page.fullWidth, coverUrl: initial.page.coverUrl, coverPosition: initial.page.coverPosition });
   useEffect(() => { rememberPage(pageId); expandMany(initial.breadcrumbs.slice(0, -1).map(b => b.id)); }, [pageId, rememberPage, expandMany, initial.breadcrumbs]);
@@ -95,7 +101,10 @@ function PageView({ initial }: { initial: PageResponse }) {
   return <div className="page">
     <TopBar page={{ id: pageId, kind: initial.page.kind, title: meta.title, icon: meta.icon, fullWidth: meta.fullWidth }} breadcrumbs={initial.breadcrumbs}
       saveStatus={autosave.state.status} saveError={autosave.state.error} onRetry={() => { void autosave.saveNow(); }}
-      onToggleFullWidth={() => { const fullWidth = !meta.fullWidth; setMeta(m => ({ ...m, fullWidth })); patch.mutate({ id: pageId, fullWidth }); }} />
+      onToggleFullWidth={() => { const fullWidth = !meta.fullWidth; setMeta(m => ({ ...m, fullWidth })); patch.mutate({ id: pageId, fullWidth }); }}
+      smallText={smallText} onToggleSmallText={toggleSmallText} onOpenHistory={() => setHistoryOpen(true)} />
+    <HistoryDrawer pageId={pageId} opened={historyOpen} onClose={() => setHistoryOpen(false)} currentVersion={autosave.state.version}
+      onRestored={() => { void autosave.resolveConflict('reload'); }} />
     {autosave.state.status === 'conflict' && <Alert color="red" variant="light" className="conflict-bar" title="此頁面已在其他地方更新">
       <Group gap="sm">
         <Text size="sm">你可以載入最新版本（會捨棄這裡尚未儲存的修改），或以這裡的內容覆蓋（被覆蓋的版本會留在頁面歷史）。</Text>
@@ -104,12 +113,15 @@ function PageView({ initial }: { initial: PageResponse }) {
       </Group>
     </Alert>}
     {refreshError && <Alert color="red" title="無法載入最新內容">{refreshError}</Alert>}
-    <div className={`page-body${meta.fullWidth ? ' page-body--full' : ''}`}>
+    <div className={`page-body${meta.fullWidth ? ' page-body--full' : ''}${smallText ? ' page-body--small' : ''}`}>
       <PageHeader title={meta.title} icon={meta.icon} coverUrl={meta.coverUrl} coverPosition={meta.coverPosition}
         onTitle={saveTitle} onIcon={saveIcon} onCover={saveCover} onCoverPosition={saveCoverPosition} onEnter={focusEditor} />
       {initial.page.kind === 'database'
-        ? <Text c="dimmed" px="md">資料庫表格視圖將在下一個里程碑加入。</Text>
-        : <BlockEditor pageId={pageId} initialContent={initialContent} onReady={onReady} onChange={onChange} onCompositionSettled={onCompositionSettled} fullWidth={meta.fullWidth} uploadFile={upload} />}
+        ? <DatabaseView databaseId={pageId} />
+        : <>
+          {initial.page.kind === 'row' && initial.page.databaseId && <RowPropertiesPanel rowId={pageId} databaseId={initial.page.databaseId} />}
+          <BlockEditor pageId={pageId} initialContent={initialContent} onReady={onReady} onChange={onChange} onCompositionSettled={onCompositionSettled} fullWidth={meta.fullWidth} uploadFile={upload} />
+        </>}
     </div>
   </div>;
 }

@@ -15,6 +15,7 @@ import { fileRoutes } from './routes/files.ts';
 import { pageRoutes, trashRoutes } from './routes/pages.ts';
 import { staticRoutes } from './static.ts';
 import { searchRoutes } from './routes/search.ts';
+import { databaseRoutes, rowRoutes } from './routes/databases.ts';
 
 export interface AppDeps {
   db: Db;
@@ -67,6 +68,8 @@ export function createApp(input: Omit<AppDeps, 'now' | 'rateLimiter'> & Partial<
   app.route('/api/trash', trashRoutes());
   app.route('/api/files', fileRoutes());
   app.route('/api/search', searchRoutes());
+  app.route('/api/databases', databaseRoutes());
+  app.route('/api/rows', rowRoutes());
 
   app.notFound(c => c.req.path.startsWith('/api/')
     ? c.json(errorBody(new AppError('not_found')), 404)

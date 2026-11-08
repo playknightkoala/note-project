@@ -1,7 +1,7 @@
-import { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { AppShell as MantineAppShell, Avatar, Group, Menu, ScrollArea, Text, UnstyledButton, useComputedColorScheme, useMantineColorScheme } from '@mantine/core';
 import { useDisclosure, useMediaQuery } from '@mantine/hooks';
-import { ChevronsUpDown, LogOut, Moon, Plus, Search, Settings, Sun, Trash2 } from 'lucide-react';
+import { ChevronsUpDown, LogOut, Moon, Plus, Search, Settings, Sun, Table2, Trash2 } from 'lucide-react';
 import { Link, Outlet, useLocation, useNavigate, useParams } from 'react-router';
 import { useLogout, useMe } from '../../api/auth.ts';
 import { useCreatePage, useTree } from '../../api/pages.ts';
@@ -26,6 +26,8 @@ export function AppShell() {
   const { pageId } = useParams();
   const isMobile = useMediaQuery(`(max-width: ${SIDEBAR_BREAKPOINT - 1}px)`) ?? false;
   const [opened, { toggle, close }] = useDisclosure(false);
+  const [desktopCollapsed, setDesktopCollapsed] = useState(() => { try { return localStorage.getItem('notes:sidebar-collapsed') === '1'; } catch { return false; } });
+  const toggleDesktop = () => setDesktopCollapsed(value => { try { localStorage.setItem('notes:sidebar-collapsed', value ? '0' : '1'); } catch { /* ignore */ } return !value; });
   const [searchOpened, setSearchOpened] = useState(false);
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
@@ -33,6 +35,9 @@ export function AppShell() {
       if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === 'k') {
         event.preventDefault(); setSearchOpened(value => !value);
       }
+      // Ctrl/⌘+\ toggles the sidebar; Ctrl/⌘+Alt+N creates a page (plain Ctrl+N is reserved by browsers).
+      if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key === '\\') { event.preventDefault(); if (isMobileRef.current) toggleRef.current(); else toggleDesktopRef.current(); }
+      if ((event.ctrlKey || event.metaKey) && event.altKey && event.key.toLowerCase() === 'n') { event.preventDefault(); newPageRef.current(); }
     };
     window.addEventListener('keydown', keydown);
     return () => window.removeEventListener('keydown', keydown);
@@ -43,10 +48,15 @@ export function AppShell() {
   const user = me.data;
   const signOut = () => logout.mutate(undefined, { onSettled: () => navigate('/login', { replace: true }) });
   const newPage = () => create.mutate({}, { onSuccess: result => { close(); navigate(`/p/${result.page.id}`); } });
-  const shell = useMemo<ShellContext>(() => ({ sidebarOpen: opened, toggleSidebar: toggle, closeSidebar: close }), [opened, toggle, close]);
+  const newPageRef = useRef(newPage); newPageRef.current = newPage;
+  const toggleRef = useRef(toggle); toggleRef.current = toggle;
+  const toggleDesktopRef = useRef(toggleDesktop); toggleDesktopRef.current = toggleDesktop;
+  const isMobileRef = useRef(isMobile); isMobileRef.current = isMobile;
+  const newDatabase = () => create.mutate({ kind: 'database' }, { onSuccess: result => { close(); navigate(`/p/${result.page.id}`); } });
+  const shell = useMemo<ShellContext>(() => ({ sidebarOpen: isMobile ? opened : !desktopCollapsed, toggleSidebar: isMobile ? toggle : toggleDesktop, closeSidebar: close }), [opened, toggle, close, isMobile, desktopCollapsed]);
   const favoriteRows: FlatRow[] = index.favorites.map((node, i) => ({ id: node.id, parentId: null, depth: 0, index: i, node }));
   return <ShellCtx.Provider value={shell}>
-    <MantineAppShell navbar={{ width: 260, breakpoint: SIDEBAR_BREAKPOINT, collapsed: { mobile: !opened } }} padding={0} className="app-shell">
+    <MantineAppShell navbar={{ width: 260, breakpoint: SIDEBAR_BREAKPOINT, collapsed: { mobile: !opened, desktop: desktopCollapsed } }} padding={0} className="app-shell">
       <MantineAppShell.Navbar className="sidebar" onClick={isMobile ? close : undefined}>
         <Menu position="bottom-start" width={240} shadow="md">
           <Menu.Target>
@@ -68,7 +78,8 @@ export function AppShell() {
         </Menu>
         <div className="sidebar-actions">
           <button type="button" className="sidebar-button" title="搜尋（Ctrl / ⌘ K）" onClick={() => { close(); setSearchOpened(true); }}><Search size={15} /><span>搜尋</span></button>
-          <button type="button" className="sidebar-button" onClick={newPage}><Plus size={15} /><span>新增頁面</span></button>
+          <button type="button" className="sidebar-button" title="新增頁面（Ctrl / ⌘ Alt N）" onClick={newPage}><Plus size={15} /><span>新增頁面</span></button>
+          <button type="button" className="sidebar-button" onClick={newDatabase}><Table2 size={15} /><span>新增資料庫</span></button>
         </div>
         <ScrollArea className="sidebar-scroll" type="auto">
           {favoriteRows.length > 0 && <>

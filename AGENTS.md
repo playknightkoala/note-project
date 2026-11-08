@@ -2,7 +2,7 @@
 
 ## 專案目標
 
-以 Docker 啟動的獨立筆記網站：自有帳號系統（邀請碼註冊、第一位註冊者為管理者）、BlockNote 區塊編輯器、頁面樹、資料庫表格視圖、全文搜尋、Joplin 匯入。單一容器 + SQLite，資料與附件放同一個 volume。不依賴 Joplin 的任何執行環境或同步機制；Joplin 只作為一次性匯入來源。
+以 Docker 啟動的獨立筆記網站：自有帳號系統（邀請碼註冊、第一位註冊者為管理者）、BlockNote 區塊編輯器、頁面樹、資料庫表格視圖、全文搜尋、頁面歷史。單一容器 + SQLite，資料與附件放同一個 volume。不依賴 Joplin；原規劃的 Joplin 匯入已於 2026-11-08 取消，不要重新加入。
 
 ## 正式資料
 
@@ -23,7 +23,7 @@
 ## 專案結構
 
 - `src/shared`：zod schema、型別、純函式（前後端共用，不得引用 Node 或 DOM API）。
-- `src/server`：Hono API、SQLite、認證、檔案、搜尋、匯入。
+- `src/server`：Hono API、SQLite、認證、檔案、搜尋、資料庫。
 - `src/client`：Vite + React + BlockNote + Mantine 的 SPA。
 - `tests`：vitest（伺服器以 `app.request()` 對 `:memory:` 資料庫；客戶端 jsdom）。
 - `docker/`、`Dockerfile`、`compose*.yaml`：容器與 HTTPS overlay。

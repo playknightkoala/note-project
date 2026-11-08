@@ -8,7 +8,7 @@ import { AppError } from '../../shared/errors.ts';
 import { dummyVerify, hashPassword, needsRehash, verifyPassword } from '../auth/password.ts';
 import { redeemInvite } from '../auth/invites.ts';
 import { clientIp, requireAuth, requireCsrf } from '../auth/middleware.ts';
-import { SESSION_COOKIE, createSession, deleteSession, deleteUserSessions, userDto } from '../auth/session.ts';
+import { ABSOLUTE_TTL_MS, SESSION_COOKIE, createSession, deleteSession, deleteUserSessions, userDto } from '../auth/session.ts';
 import { countUsers, findUserByIdentifier, insertUser } from '../services/users.ts';
 import { parseBody } from './validate.ts';
 
@@ -23,7 +23,8 @@ function cookieSecure(c: Context<AppEnv>): boolean {
 function issueSession(c: Context<AppEnv>, userId: string): string {
   const deps = c.get('deps');
   const { token, csrfToken } = createSession(deps.db, userId, deps.now(), { userAgent: c.req.header('user-agent'), ip: clientIp(c) });
-  setCookie(c, SESSION_COOKIE, token, { httpOnly: true, sameSite: 'Lax', path: '/', secure: cookieSecure(c), maxAge: 30 * 24 * 60 * 60 });
+  // The cookie outlives the 30-day idle window so a sliding session is not cut short by the browser; the DB decides.
+  setCookie(c, SESSION_COOKIE, token, { httpOnly: true, sameSite: 'Lax', path: '/', secure: cookieSecure(c), maxAge: Math.floor(ABSOLUTE_TTL_MS / 1000) });
   return csrfToken;
 }
 
@@ -96,7 +97,7 @@ export function authRoutes(): Hono<AppEnv> {
     const deps = c.get('deps');
     const auth = c.get('auth')!;
     const input = await parseBody(c, passwordChangeSchema);
-    if (!await verifyPassword(auth.user.password_hash, input.currentPassword)) throw new AppError('unauthorized', '目前密碼不正確。');
+    if (!await verifyPassword(auth.user.password_hash, input.currentPassword)) throw new AppError('bad_request', '目前密碼不正確。');
     deps.db.run('UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?', await hashPassword(input.newPassword), deps.now(), auth.user.id);
     deleteUserSessions(deps.db, auth.user.id, getCookie(c, SESSION_COOKIE));
     return c.body(null, 204);

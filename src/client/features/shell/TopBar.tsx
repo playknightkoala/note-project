@@ -1,6 +1,6 @@
 import { ActionIcon, Anchor, Breadcrumbs, Burger, Menu, Text } from '@mantine/core';
 import { useClipboard, useMediaQuery } from '@mantine/hooks';
-import { Copy, Link2, MoreHorizontal, Star, StarOff, Trash2, Maximize2, Minimize2 } from 'lucide-react';
+import { ALargeSmall, Copy, History, Link2, MoreHorizontal, Star, StarOff, Trash2, Maximize2, Minimize2 } from 'lucide-react';
 import { Link, useNavigate } from 'react-router';
 import type { Breadcrumb, PageKind } from '@shared/api';
 import { useDuplicatePage, useToggleFavorite, useTrashPage, useTree } from '../../api/pages.ts';
@@ -13,9 +13,11 @@ interface Props {
   breadcrumbs: Breadcrumb[];
   saveStatus: SaveState; saveError: string | null; onRetry: () => void;
   onToggleFullWidth: () => void;
+  smallText: boolean; onToggleSmallText: () => void;
+  onOpenHistory: () => void;
 }
 
-export function TopBar({ page, breadcrumbs, saveStatus, saveError, onRetry, onToggleFullWidth }: Props) {
+export function TopBar({ page, breadcrumbs, saveStatus, saveError, onRetry, onToggleFullWidth, smallText, onToggleSmallText, onOpenHistory }: Props) {
   const isMobile = useMediaQuery('(max-width: 767px)');
   const shell = useShell();
   const tree = useTree();
@@ -34,7 +36,7 @@ export function TopBar({ page, breadcrumbs, saveStatus, saveError, onRetry, onTo
   });
   const visibleCrumbs = isMobile && crumbs.length > 2 ? [<Text key="ellipsis" size="sm" c="dimmed">…</Text>, ...crumbs.slice(-2)] : crumbs;
   return <div className="topbar">
-    {isMobile && <Burger opened={shell.sidebarOpen} onClick={shell.toggleSidebar} size="sm" aria-label="開啟側邊欄" />}
+    {(isMobile || !shell.sidebarOpen) && <Burger opened={shell.sidebarOpen} onClick={shell.toggleSidebar} size="sm" aria-label="開啟側邊欄" title="側邊欄（Ctrl / ⌘ \\）" />}
     <Breadcrumbs separator="/" className="topbar__crumbs">{visibleCrumbs}</Breadcrumbs>
     <span style={{ flex: 1 }} />
     <SaveStatus status={saveStatus} error={saveError} onRetry={onRetry} />
@@ -45,6 +47,8 @@ export function TopBar({ page, breadcrumbs, saveStatus, saveError, onRetry, onTo
         <Menu.Item leftSection={<Link2 size={16} />} onClick={() => clipboard.copy(`${window.location.origin}/p/${page.id}`)}>{clipboard.copied ? '已複製連結' : '複製連結'}</Menu.Item>
         {page.kind === 'page' && <Menu.Item leftSection={<Copy size={16} />} onClick={() => duplicate.mutate(page.id, { onSuccess: result => navigate(`/p/${result.page.id}`) })}>複製頁面</Menu.Item>}
         <Menu.Item leftSection={page.fullWidth ? <Minimize2 size={16} /> : <Maximize2 size={16} />} onClick={onToggleFullWidth}>{page.fullWidth ? '一般寬度' : '全寬'}</Menu.Item>
+        <Menu.Item leftSection={<ALargeSmall size={16} />} onClick={onToggleSmallText}>{smallText ? '一般字體' : '小字體'}</Menu.Item>
+        {page.kind !== 'database' && <Menu.Item leftSection={<History size={16} />} onClick={onOpenHistory}>頁面歷史</Menu.Item>}
         <Menu.Divider />
         <Menu.Item color="red" leftSection={<Trash2 size={16} />} onClick={() => trash.mutate({ id: page.id }, { onSuccess: () => navigate('/') })}>移至垃圾桶</Menu.Item>
       </Menu.Dropdown>

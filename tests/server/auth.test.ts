@@ -28,6 +28,13 @@ describe('rate limiter', () => {
     expect(limiter.hit('k', 3, 1000, 11_001).allowed).toBe(true);
     limiter.clear('k'); expect(limiter.hit('k', 1, 1000, 11_002).allowed).toBe(true);
   });
+  it('keeps each key\'s own window across sweeps', () => {
+    const limiter = new RateLimiter();
+    limiter.hit('long', 1, 60 * 60_000, 0); // one-hour window
+    // A sweep triggered by a short-window key must not forget the long-window attempt.
+    limiter.hit('short', 5, 1000, 61_000);
+    expect(limiter.hit('long', 1, 60 * 60_000, 62_000).allowed).toBe(false);
+  });
 });
 
 describe('registration and invites', () => {
@@ -135,7 +142,7 @@ describe('login, sessions and CSRF', () => {
   it('changes the password and invalidates other sessions', async () => {
     const c = t.client(); await c.login('admin@example.test', admin.password);
     const other = t.client(); await other.login('admin@example.test', admin.password);
-    expect((await c.request('POST', '/api/auth/password', { json: { currentPassword: 'nope', newPassword: 'brand new password' } })).status).toBe(401);
+    expect((await c.request('POST', '/api/auth/password', { json: { currentPassword: 'nope', newPassword: 'brand new password' } })).status).toBe(400);
     expect((await c.request('POST', '/api/auth/password', { json: { currentPassword: admin.password, newPassword: 'brand new password' } })).status).toBe(204);
     expect((await c.request('GET', '/api/auth/me')).status).toBe(200);
     expect((await other.request('GET', '/api/auth/me')).status).toBe(401);

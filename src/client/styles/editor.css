@@ -2,6 +2,14 @@
 .page { min-height: 100vh; display: flex; flex-direction: column; }
 .page-body { width: 100%; max-width: 900px; margin: 0 auto; padding: 48px 96px 30vh; box-sizing: border-box; }
 .page-body--full { max-width: none; }
+.page-body--small { font-size: 14px; }
+.page-body--small .block-editor .bn-editor { font-size: 14px; }
+.page-body--small .page-title { font-size: 32px; }
+.history-item { display: block; width: 100%; padding: 6px 8px; border-radius: var(--app-radius); }
+.history-item:hover { background: var(--app-hover); }
+.history-item--active { background: var(--app-selection); }
+.history-preview { border: 1px solid var(--app-border); border-radius: var(--app-radius); padding: 8px; }
+.history-preview__text { margin: 0; white-space: pre-wrap; font: inherit; font-size: 13px; line-height: 1.5; }
 .page-header { margin-bottom: 8px; }
 .page-header--cover { margin-top: -48px; }
 .page-cover { position: relative; height: 30vh; min-height: 200px; max-height: 320px; margin: 0 -96px 0; background-size: cover; background-position-x: center; user-select: none; }

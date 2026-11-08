@@ -18,6 +18,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.server.json && tsc --noEmit -p tsconfig.client.json",
     "lint": "eslint src tests scripts eslint.config.js vite.config.ts vitest.config.ts",
     "test": "vitest run",
+    "test:app": "node scripts/check-app.mjs",
     "check": "npm run typecheck && npm run lint && npm test && npm run build"
   },
   "dependencies": {

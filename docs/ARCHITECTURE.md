@@ -13,10 +13,11 @@
 | 前端 | Vite + React 19 + BlockNote 0.57 + Mantine 9.7 + TanStack Query 5 + react-router 7 + dnd-kit + react-virtual |
 | 正式資料 | `pages.content` 的 BlockNote 區塊 JSON；`version` 樂觀並行；`page_versions` 快照 |
 | 搜尋 | FTS5 `trigram`（中文子字串），少於 3 個 Unicode 字元用跳脫萬用字元的 LIKE；純文字片段由 React 高亮 |
+| 資料庫 | 資料列是 `kind='row'` 頁面，七種屬性存於 `row_values`；伺服器以 JS 排序／AND 篩選，最多 5,000 列（含垃圾桶），每批最多 200 列 |
 | 匯入 | 伺服器端 markdown-it → 區塊 JSON；JEX（tar）與 Markdown 匯出（zip）；以 `import_key` 冪等 |
 | 部署 | 單容器、`/data` named volume、唯讀根檔案系統、uid 101、`cap_drop ALL`；HTTPS 以 nginx overlay |
 
-資料模型、API、自動保存協定、匯入流程與安全規則的完整說明見專案計畫（實作時逐段落實於程式與本文件）。
+資料模型、API、自動保存協定與安全規則的完整說明以程式與本文件為準；部署、備份與 HTTPS 見 [DEPLOY.md](DEPLOY.md)。
 
 ## 里程碑
 
@@ -27,9 +28,9 @@
 | M2 頁面與編輯器 | 頁面樹、CRUD、搬移、最愛、垃圾桶、麵包屑；BlockNote 完整 schema、IME 防護、自動保存協定、深淺色 | 已驗證；連續存檔、雙分頁兩種解法、遠端同步及覆蓋快照已補測 |
 | M3 檔案與頁面標頭 | 上傳／提供、圖片與檔案區塊、封面、圖示、`@` 頁面提及 | 已驗證主要流程；圖示本機資料、封面位置、貼圖、附件與提及皆重測，下載事件觀測限制見 VALIDATION |
 | M4 搜尋 | 文字擷取、FTS、Ctrl+K 指令面板 | 已完成並驗證（API／客戶端測試、既有索引 migration、容器與瀏覽器） |
-| M5 資料庫 | 屬性、列、表格視圖含排序篩選、列頁面 | 未開始 |
-| M6 Joplin 匯入 | 管線、進度頁、報告 | 未開始 |
-| M7 收尾 | 頁面歷史、手機版、快捷鍵、備份 CLI、CSP 稽核、HTTPS 冒煙、文件 | 未開始 |
+| M5 資料庫 | 屬性、列、表格視圖含排序篩選、列頁面 | 已完成並驗證：七種型別、視圖保存、虛擬捲動、鍵盤、列頁面與雙分頁屬性衝突；76 tests／容器／瀏覽器通過 |
+| M6 Joplin 匯入 | 管線、進度頁、報告 | 已取消（使用者決定不做；`import_jobs` 表與 `markdown-it`、`tar`、`fflate` 依賴保留但未使用） |
+| M7 收尾 | 頁面歷史、手機版、快捷鍵、小字體、帳號稽核修正、備份 CLI、靜態檢查、CSP 稽核、HTTPS 冒煙、文件 | 已完成並驗證（見 VALIDATION 的 M7 段落） |
 
 ## 驗證紀錄
 
@@ -42,3 +43,15 @@
 - FTS 長查詢以雙引號包成字面片語，內部引號跳脫；短查詢以參數化 LIKE 並跳脫 `%`、`_`、反斜線。FTS 以標題較高權重排序，再依更新時間與 ID 排序。
 - migration `0003_search_content` 將外部內容 FTS 欄名修正為 `content_text`，重建既有索引；不改筆記內容。套用紀錄確保只執行一次。
 - 圖示資料取自固定版本 BlockNote 的本機動態 chunk，不開放外部 CDN。只有 PNG／JPEG／GIF／WebP inline；SVG 與所有非圖片以 attachment＋sandbox 提供。
+
+## M5 資料庫協定與限制
+
+- `GET /api/databases/:id` 回 `{ id, version, properties, views }`；建立資料庫時已有一個預設表格視圖。屬性型別為文字、數字、單選、多選、日期、核取方塊、網址；選項有穩定 UUID 與九種標籤顏色。
+- `POST /api/databases/:id/properties`、`PATCH|DELETE /api/databases/:id/properties/:pid`、`PATCH /api/databases/:id/views/:vid` 皆以資料庫 `schema_version` 做 If-Match；成功變更使 schema_version 遞增。最多 50 個屬性、每個單選／多選欄位最多 100 個選項。
+- 有資料的欄位拒絕直接改型別；仍被使用的選項拒絕刪除，避免靜默丟資料。刪除欄位會級聯移除值，並清除已儲存視圖對該欄位的排序、篩選與顯示設定；介面須確認刪除。
+- `POST /api/databases/:id/rows` 以 schema_version 驗證當前結構，新增列不會增版結構。`GET /api/rows/:id` 回資料列及屬性版本；`PATCH /api/rows/:id/values` 以該列 `attributes_version` 做 If-Match，可更新名稱與部分屬性值，null 清除值。
+- 區塊內文仍使用原本 `pages.version` 與 page_versions，與屬性版本獨立。migration `0004_database_versions` 新增 schema_version、attributes_version；row_title_version trigger 確保透過頁面標題 API 改名也會讓舊屬性寫入衝突。更新在單一交易內完成。
+- `GET /api/databases/:id/rows?sort=<JSON>&filter=<JSON>&offset&limit` 回 `{ rows, total, offset, limit }`。排序最多 10 層、篩選最多 20 個且採 AND；型別與欄位歸屬均驗證，空值固定排最後，選項依標籤文字排序。回傳當前使用者的活動列；資料庫刪除與還原沿用頁面子樹機制。
+- 每個資料庫上限 5,000 列包含垃圾桶內的列，防止還原後突破上限。客戶端以 100 列分批載入，CSS grid＋react-virtual 呈現 34px 列。欄寬依資料庫存於 localStorage；排序／篩選／顯示欄位可放在網址，也可保存到預設視圖。
+- 儲存格開啟時固定草稿與基準版本；背景刷新不會偷偷採用新版本號。409 保留草稿並讓使用者明確選擇捨棄、重新載入。列頁面上方顯示 RowPropertiesPanel，內文仍使用完整 BlockNote。
+- 本里程碑提供單一預設表格視圖，未實作多視圖切換、OR 群組、公式／關聯欄位或已刪屬性的回收站。
