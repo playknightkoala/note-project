@@ -4,6 +4,7 @@ import { emptyParagraph, parseBlocks } from '../../shared/blocks.ts';
 import type { Block } from '../../shared/blocks.ts';
 import { AppError } from '../../shared/errors.ts';
 import { extractPlainText } from '../../shared/text.ts';
+import { stripAnnotationAnchors } from '../../shared/annotations.ts';
 
 export interface PageRow {
   rid: number; id: string; user_id: string; parent_id: string | null; kind: PageKind; database_id: string | null; position: number;
@@ -235,7 +236,7 @@ export function duplicatePage(db: Db, userId: string, id: string, now: number): 
       const newId = crypto.randomUUID();
       db.run(`INSERT INTO pages (id, user_id, parent_id, kind, position, title, icon, cover_file_id, cover_preset, cover_position, content, content_text, full_width, created_at, updated_at)
               VALUES (?, ?, ?, 'page', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        newId, userId, parentId, position, row.title, row.icon, row.cover_file_id, row.cover_preset, row.cover_position, row.content, row.content_text, row.full_width, now, now);
+        newId, userId, parentId, position, row.title, row.icon, row.cover_file_id, row.cover_preset, row.cover_position, JSON.stringify(stripAnnotationAnchors(JSON.parse(row.content) as unknown[])), row.content_text, row.full_width, now, now);
       const children = db.all<PageRow>("SELECT * FROM pages WHERE parent_id = ? AND user_id = ? AND trashed_at IS NULL AND kind = 'page' ORDER BY position", row.id, userId);
       children.forEach((child, i) => copy(child, newId, (i + 1) * GAP));
       return newId;

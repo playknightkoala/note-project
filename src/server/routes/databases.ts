@@ -29,6 +29,14 @@ export function databaseRoutes(): Hono<AppEnv> {
     const { db, userId, now } = context(c);
     return c.json(databases.deleteProperty(db, userId, c.req.param('id'), c.req.param('pid'), expectedVersion(c), now));
   });
+  app.post('/:id/views', async c => {
+    const { db, userId, now } = context(c); const input = await parseBody(c, viewInputSchema);
+    return c.json(databases.addView(db, userId, c.req.param('id'), input, expectedVersion(c), now), 201);
+  });
+  app.delete('/:id/views/:vid', c => {
+    const { db, userId, now } = context(c);
+    return c.json(databases.deleteView(db, userId, c.req.param('id'), c.req.param('vid'), expectedVersion(c), now));
+  });
   app.patch('/:id/views/:vid', async c => {
     const { db, userId, now } = context(c); const input = await parseBody(c, viewInputSchema);
     return c.json(databases.updateView(db, userId, c.req.param('id'), c.req.param('vid'), input, expectedVersion(c), now));

@@ -1,5 +1,5 @@
 import type { Db } from '../db/driver.ts';
-import type { DatabaseDto, DatabaseProperty, DatabaseRow, PropertyInput, PropertyPatch, RowInput, CellValue, ViewConfig, RowsDto } from '../../shared/database.ts';
+import type { DatabaseDto, DatabaseProperty, DatabaseRow, PropertyInput, PropertyPatch, RowInput, CellValue, ViewConfig, ViewInput, RowsDto, ViewType } from '../../shared/database.ts';
 import { evaluateRows, propertyInputSchema, validateView, valueSchema, viewConfigSchema } from '../../shared/database.ts';
 import { emptyParagraph } from '../../shared/blocks.ts';
 import { AppError } from '../../shared/errors.ts';
@@ -24,8 +24,8 @@ function properties(db: Db, userId: string, id: string): DatabaseProperty[] {
 }
 export function getDatabase(db: Db, userId: string, id: string): DatabaseDto {
   const row = database(db, userId, id);
-  const views = db.all<{ id: string; name: string; config: string }>('SELECT v.* FROM db_views v JOIN pages p ON p.id = v.database_id WHERE p.id = ? AND p.user_id = ? ORDER BY v.position, v.id', id, userId);
-  return { id, version: row.schema_version, properties: properties(db, userId, id), views: views.map(view => ({ id: view.id, name: view.name, config: viewConfigSchema.parse(JSON.parse(view.config)) })) };
+  const views = db.all<{ id: string; name: string; type: ViewType; config: string }>('SELECT v.* FROM db_views v JOIN pages p ON p.id = v.database_id WHERE p.id = ? AND p.user_id = ? ORDER BY v.position, v.id', id, userId);
+  return { id, version: row.schema_version, properties: properties(db, userId, id), views: views.map(view => ({ id: view.id, name: view.name, type: view.type, config: viewConfigSchema.parse(JSON.parse(view.config)) })) };
 }
 function bumpSchema(db: Db, userId: string, id: string, now: number): DatabaseDto {
   db.run('UPDATE pages SET schema_version = schema_version + 1, updated_at = ? WHERE id = ? AND user_id = ?', now, id, userId);
@@ -46,12 +46,13 @@ export function addProperty(db: Db, userId: string, id: string, input: PropertyI
     return bumpSchema(db, userId, id, now);
   });
 }
-function pruneViews(db: Db, userId: string, id: string, propertyId: string, remove: boolean): void {
+function pruneViews(db: Db, userId: string, id: string, propertyId: string, remove: boolean, clearGrouping = remove): void {
   const views = getDatabase(db, userId, id).views;
   for (const view of views) {
     const config = { ...view.config, sorts: view.config.sorts.filter(sort => sort.propertyId !== propertyId), filters: view.config.filters.filter(filter => filter.propertyId !== propertyId),
       ...(remove && view.config.columns ? { columns: view.config.columns.filter(col => col !== propertyId) } : {}) };
-    db.run('UPDATE db_views SET config = ? WHERE id = ? AND database_id = ?', JSON.stringify(config), view.id, id);
+    if (clearGrouping && config.groupBy === propertyId) delete config.groupBy;
+    db.run('UPDATE db_views SET config = ? WHERE id = ? AND database_id = ? AND EXISTS (SELECT 1 FROM pages WHERE id = db_views.database_id AND user_id = ?)', JSON.stringify(config), view.id, id, userId);
   }
 }
 export function updateProperty(db: Db, userId: string, id: string, propertyId: string, patch: PropertyPatch, version: number, now: number): DatabaseDto {
@@ -65,7 +66,7 @@ export function updateProperty(db: Db, userId: string, id: string, propertyId: s
     if (input.type !== current.type && values.length) throw new AppError('conflict', '此欄位已有資料，請先清空後再變更型別。');
     const candidate: DatabaseProperty = { ...current, ...input };
     if (input.type === current.type && values.some(value => !valueSchema(candidate).safeParse(JSON.parse(value.value_json)).success)) throw new AppError('conflict', '選項仍有資料列使用，請先更新資料列後再移除。');
-    if (input.type !== current.type || JSON.stringify(input.choices) !== JSON.stringify(current.choices)) pruneViews(db, userId, id, propertyId, false);
+    if (input.type !== current.type || JSON.stringify(input.choices) !== JSON.stringify(current.choices)) pruneViews(db, userId, id, propertyId, false, input.type !== 'select');
     db.run('UPDATE db_properties SET name = ?, type = ?, options = ? WHERE id = ? AND database_id = ?', input.name, input.type, JSON.stringify({ choices: input.choices }), propertyId, id);
     return bumpSchema(db, userId, id, now);
   });
@@ -79,12 +80,50 @@ export function deleteProperty(db: Db, userId: string, id: string, propertyId: s
     return bumpSchema(db, userId, id, now);
   });
 }
-export function updateView(db: Db, userId: string, id: string, viewId: string, input: { name: string; config: ViewConfig }, version: number, now: number): DatabaseDto {
+export function addView(db: Db, userId: string, id: string, input: ViewInput, version: number, now: number): DatabaseDto {
+  return db.transaction(() => {
+    assertVersion(database(db, userId, id).schema_version, version);
+    const meta = getDatabase(db, userId, id);
+    if (meta.views.length >= 20) throw new AppError('conflict', '每個資料庫最多 20 個視圖。');
+    const config = { ...input.config };
+    const error = validateView(config, meta.properties);
+    if (error) throw new AppError('bad_request', error);
+    if (input.type === 'board' && !config.groupBy) {
+      let group = meta.properties.find(property => property.type === 'select');
+      if (!group) {
+        if (meta.properties.length >= 50) throw new AppError('conflict', '請先建立或改用單選欄位作為看板分組。');
+        group = { id: crypto.randomUUID(), name: '狀態', type: 'select', position: (meta.properties.at(-1)?.position ?? 0) + 1024, choices: [
+          { id: crypto.randomUUID(), label: '尚未開始', color: 'gray' },
+          { id: crypto.randomUUID(), label: '進行中', color: 'blue' },
+          { id: crypto.randomUUID(), label: '已完成', color: 'green' },
+        ] };
+        db.run('INSERT INTO db_properties (id, database_id, name, type, options, position, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)', group.id, id, group.name, group.type, JSON.stringify({ choices: group.choices }), group.position, now);
+      }
+      config.groupBy = group.id;
+    }
+    const last = db.get<{ position: number }>('SELECT MAX(v.position) AS position FROM db_views v JOIN pages p ON p.id = v.database_id WHERE p.id = ? AND p.user_id = ?', id, userId)?.position ?? 0;
+    db.run('INSERT INTO db_views (id, database_id, name, type, config, position, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)', crypto.randomUUID(), id, input.name, input.type ?? 'table', JSON.stringify(config), last + 1024, now);
+    return bumpSchema(db, userId, id, now);
+  });
+}
+export function deleteView(db: Db, userId: string, id: string, viewId: string, version: number, now: number): DatabaseDto {
+  return db.transaction(() => {
+    assertVersion(database(db, userId, id).schema_version, version);
+    const views = getDatabase(db, userId, id).views;
+    if (!views.some(view => view.id === viewId)) throw new AppError('not_found');
+    if (views.length <= 1) throw new AppError('conflict', '至少需要保留一個視圖。');
+    db.run('DELETE FROM db_views WHERE id = ? AND database_id = ? AND EXISTS (SELECT 1 FROM pages WHERE id = db_views.database_id AND user_id = ?)', viewId, id, userId);
+    return bumpSchema(db, userId, id, now);
+  });
+}
+export function updateView(db: Db, userId: string, id: string, viewId: string, input: ViewInput, version: number, now: number): DatabaseDto {
   return db.transaction(() => {
     assertVersion(database(db, userId, id).schema_version, version);
     const error = validateView(input.config, properties(db, userId, id));
     if (error) throw new AppError('bad_request', error);
-    if (!db.run('UPDATE db_views SET name = ?, config = ? WHERE id = ? AND database_id = ?', input.name, JSON.stringify(input.config), viewId, id).changes) throw new AppError('not_found');
+    const current = getDatabase(db, userId, id).views.find(view => view.id === viewId);
+    if (!current) throw new AppError('not_found');
+    db.run('UPDATE db_views SET name = ?, type = ?, config = ? WHERE id = ? AND database_id = ? AND EXISTS (SELECT 1 FROM pages WHERE id = db_views.database_id AND user_id = ?)', input.name, input.type ?? current.type, JSON.stringify(input.config), viewId, id, userId);
     return bumpSchema(db, userId, id, now);
   });
 }

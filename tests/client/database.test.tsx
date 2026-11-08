@@ -2,8 +2,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { MantineProvider } from '@mantine/core';
+import { MemoryRouter } from 'react-router';
 import { ApiError } from '../../src/client/api/client.ts';
 import { EditableCell } from '../../src/client/features/database/EditableCell.tsx';
+import { DataGrid } from '../../src/client/features/database/DataGrid.tsx';
+import { NewRowInput } from '../../src/client/features/database/NewRowInput.tsx';
+import { BoardView, ListView } from '../../src/client/features/database/CollectionViews.tsx';
 import { readViewParams, writeViewParams } from '../../src/client/features/database/viewParams.ts';
 import { evaluateRows, validateView } from '../../src/shared/database.ts';
 import type { DatabaseProperty, DatabaseRow } from '../../src/shared/database.ts';
@@ -23,7 +27,7 @@ it('retains the version at editor opening even if a background refresh brings a 
   fireEvent.click(screen.getByRole('button', { name: '編輯摘要' }));
   fireEvent.change(screen.getByLabelText('摘要'), { target: { value: '我的草稿' } });
   rerender(view(2, '另一個分頁的修改'));
-  await act(async () => { fireEvent.click(screen.getByRole('button', { name: '儲存' })); });
+  await act(async () => { fireEvent.keyDown(screen.getByLabelText('摘要'), { key: 'Enter' }); });
   expect(save).toHaveBeenCalledWith('我的草稿', 1);
 });
 
@@ -33,7 +37,7 @@ it('keeps a rejected draft visible and lets the user explicitly discard and relo
   render(<MantineProvider env="test"><EditableCell property={property} value="原文" version={1} label="編輯摘要" onSave={save} onReload={reload} /></MantineProvider>);
   fireEvent.click(screen.getByRole('button', { name: '編輯摘要' }));
   fireEvent.change(screen.getByLabelText('摘要'), { target: { value: '保留這份草稿' } });
-  await act(async () => { fireEvent.click(screen.getByRole('button', { name: '儲存' })); });
+  await act(async () => { fireEvent.blur(screen.getByLabelText('摘要')); });
   expect((screen.getByLabelText('摘要') as HTMLInputElement).value).toBe('保留這份草稿');
   expect(reload).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole('button', { name: '重新載入並捨棄草稿' }));
@@ -58,8 +62,7 @@ it('rejects an incomplete number instead of serializing NaN as null and clearing
   render(<MantineProvider env="test"><EditableCell property={{ ...property, type: 'number' }} value={1} version={2} label="編輯數字" onSave={save} onReload={vi.fn()} /></MantineProvider>);
   fireEvent.click(screen.getByRole('button', { name: '編輯數字' }));
   fireEvent.change(screen.getByRole('textbox'), { target: { value: '-' } });
-  fireEvent.blur(screen.getByRole('textbox'));
-  await act(async () => { fireEvent.click(screen.getByRole('button', { name: '儲存' })); });
+  await act(async () => { fireEvent.blur(screen.getByRole('textbox')); });
   expect(save).not.toHaveBeenCalled();
   expect(screen.getByText('輸入值與欄位型別不符，請檢查後再儲存。')).toBeTruthy();
 });
@@ -71,6 +74,84 @@ it('round-trips sort/filter/column URL parameters, preserves other parameters an
   expect(readViewParams(params, { sorts: [], filters: [] }, [property])).toEqual({ config, error: null });
   expect(readViewParams(params, { sorts: [], filters: [] }, []).error).toContain('不存在');
   expect(readViewParams(new URLSearchParams('filter=invalid'), config, [property]).error).toContain('網址');
+});
+
+it('saves on blur once, ignores IME Enter, and cancels edits with Escape', async () => {
+  let finish!: () => void;
+  const save = vi.fn(() => new Promise<void>(resolve => { finish = resolve; }));
+  render(<MantineProvider env="test"><EditableCell property={property} value="原文" version={3} label="摘要格" onSave={save} onReload={vi.fn()} /></MantineProvider>);
+  fireEvent.click(screen.getByRole('button', { name: '摘要格' }));
+  const input = screen.getByLabelText('摘要');
+  fireEvent.change(input, { target: { value: '新內容' } });
+  fireEvent.compositionStart(input); fireEvent.keyDown(input, { key: 'Enter', keyCode: 229 });
+  expect(save).not.toHaveBeenCalled();
+  fireEvent.compositionEnd(input);
+  await act(async () => { fireEvent.keyDown(input, { key: 'Enter' }); fireEvent.blur(input); });
+  expect(save).toHaveBeenCalledExactlyOnceWith('新內容', 3);
+  await act(async () => finish());
+  fireEvent.click(screen.getByRole('button', { name: '摘要格' }));
+  fireEvent.change(screen.getByLabelText('摘要'), { target: { value: '取消這份草稿' } });
+  fireEvent.keyDown(screen.getByLabelText('摘要'), { key: 'Escape' });
+  expect(save).toHaveBeenCalledTimes(1);
+  expect(screen.queryByRole('textbox')).toBeNull();
+});
+
+it('shows two empty table inputs without creating records and creates only after a value is entered', async () => {
+  const create = vi.fn().mockResolvedValue({});
+  render(<MantineProvider env="test"><MemoryRouter><DataGrid databaseId="synthetic" rows={[]} properties={[property]} total={0} config={{ sorts: [], filters: [] }} onSave={vi.fn()} onReload={vi.fn()} onEditProperty={vi.fn()} onConfig={vi.fn()} onFilter={vi.fn()} onTrash={vi.fn()} hasMore={false} loadingMore={false} onMore={vi.fn()} onCreate={create} onAddProperty={vi.fn()} adding={false} onCloseAdd={vi.fn()} /></MemoryRouter></MantineProvider>);
+  expect(screen.getAllByRole('row')).toHaveLength(3);
+  expect(create).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: '空白列 1／名稱' }));
+  fireEvent.blur(screen.getByLabelText('名稱'));
+  expect(create).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: '空白列 2／摘要' }));
+  fireEvent.change(screen.getByLabelText('摘要'), { target: { value: '先填屬性' } });
+  await act(async () => { fireEvent.keyDown(screen.getByLabelText('摘要'), { key: 'Enter' }); });
+  expect(create).toHaveBeenCalledExactlyOnceWith('', { [property.id]: '先填屬性' });
+});
+
+it('creates from the bottom input on Enter and keeps a failed title for retry', async () => {
+  const create = vi.fn().mockRejectedValueOnce(new Error('連線失敗')).mockResolvedValueOnce({});
+  render(<MantineProvider env="test"><NewRowInput onCreate={create} /></MantineProvider>);
+  fireEvent.click(screen.getByRole('button', { name: '新增頁面' }));
+  fireEvent.change(screen.getByLabelText('新資料列名稱'), { target: { value: '保留標題' } });
+  fireEvent.compositionStart(screen.getByLabelText('新資料列名稱'));
+  fireEvent.keyDown(screen.getByLabelText('新資料列名稱'), { key: 'Enter' });
+  expect(create).not.toHaveBeenCalled();
+  fireEvent.compositionEnd(screen.getByLabelText('新資料列名稱'));
+  await act(async () => { fireEvent.keyDown(screen.getByLabelText('新資料列名稱'), { key: 'Enter' }); });
+  expect(screen.getByRole('alert').textContent).toContain('連線失敗');
+  expect((screen.getByLabelText('新資料列名稱') as HTMLInputElement).value).toBe('保留標題');
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: '重試' })); });
+  expect(create).toHaveBeenCalledTimes(2);
+  expect(screen.getByRole('button', { name: '新增頁面' })).toBeTruthy();
+});
+
+it('toggles a checkbox directly with the captured row version and suppresses double clicks while saving', async () => {
+  let finish!: () => void;
+  const save = vi.fn(() => new Promise<void>(resolve => { finish = resolve; }));
+  render(<MantineProvider env="test"><EditableCell property={{ ...property, type: 'checkbox' }} value={false} version={8} label="完成狀態" onSave={save} onReload={vi.fn()} /></MantineProvider>);
+  fireEvent.click(screen.getByRole('button', { name: '完成狀態' }));
+  fireEvent.click(screen.getByRole('button', { name: '完成狀態' }));
+  expect(save).toHaveBeenCalledExactlyOnceWith(true, 8);
+  expect(screen.queryByRole('dialog')).toBeNull();
+  await act(async () => finish());
+});
+
+it('edits shared row titles in list view and moves board cards through the accessible menu using their original version', async () => {
+  const group: DatabaseProperty = { ...property, type: 'select', choices: [{ id: crypto.randomUUID(), label: '進行中', color: 'blue' }] };
+  const row: DatabaseRow = { id: crypto.randomUUID(), databaseId: 'synthetic', title: '共用任務', icon: null, version: 7, values: {}, updatedAt: 0 };
+  const save = vi.fn().mockResolvedValue({}); const move = vi.fn();
+  const props = { rows: [row], properties: [group], config: { sorts: [], filters: [], groupBy: group.id }, onSave: save, onCreate: vi.fn(), onTrash: vi.fn(), onReload: vi.fn(), adding: false, onCloseAdd: vi.fn() };
+  const { rerender } = render(<MantineProvider env="test"><MemoryRouter><ListView {...props} /></MemoryRouter></MantineProvider>);
+  fireEvent.click(screen.getByRole('button', { name: '共用任務／名稱' }));
+  fireEvent.change(screen.getByLabelText('名稱'), { target: { value: '改名' } });
+  await act(async () => { fireEvent.blur(screen.getByLabelText('名稱')); });
+  expect(save).toHaveBeenCalledWith(row, 'title', '改名', 7);
+  rerender(<MantineProvider env="test"><MemoryRouter><BoardView {...props} onMove={move} moving={false} /></MemoryRouter></MantineProvider>);
+  fireEvent.click(screen.getByRole('button', { name: '卡片選單：共用任務' }));
+  fireEvent.click(await screen.findByRole('menuitem', { name: '進行中' }));
+  expect(move).toHaveBeenCalledExactlyOnceWith(row, group.id, group.choices[0]!.id);
 });
 
 describe('typed view evaluation', () => {

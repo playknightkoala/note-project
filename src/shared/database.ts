@@ -25,14 +25,19 @@ export type FilterOperator = typeof FILTER_OPERATORS[number];
 export const filterLabels: Record<FilterOperator, string> = { contains: '包含', not_contains: '不包含', equals: '等於', not_equals: '不等於', gt: '大於／晚於', gte: '大於等於／不早於', lt: '小於／早於', lte: '小於等於／不晚於', is_empty: '為空', is_not_empty: '不為空' };
 export const filterSchema = z.object({ propertyId: fieldIdSchema, operator: z.enum(FILTER_OPERATORS), value: z.union([z.string().max(2000), z.number().finite(), z.boolean(), z.null()]).default(null) });
 export const viewConfigSchema = z.object({
+  groupBy: z.string().uuid().optional(),
   sorts: z.array(sortSchema).max(10).default([]), filters: z.array(filterSchema).max(20).default([]),
   columns: z.array(z.string().uuid()).max(50).refine(ids => new Set(ids).size === ids.length, '欄位不可重複。').optional(),
 });
 export type ViewConfig = z.infer<typeof viewConfigSchema>;
 export type DatabaseSort = z.infer<typeof sortSchema>;
 export type DatabaseFilter = z.infer<typeof filterSchema>;
-export const viewInputSchema = z.object({ name: z.string().trim().min(1).max(80), config: viewConfigSchema });
-export interface DatabaseView { id: string; name: string; config: ViewConfig }
+export const VIEW_TYPES = ['table', 'list', 'board'] as const;
+export type ViewType = typeof VIEW_TYPES[number];
+export const viewLabels: Record<ViewType, string> = { table: '表格', list: '清單', board: '看板' };
+export const viewInputSchema = z.object({ name: z.string().trim().min(1).max(80), type: z.enum(VIEW_TYPES).optional(), config: viewConfigSchema });
+export type ViewInput = z.infer<typeof viewInputSchema>;
+export interface DatabaseView { id: string; name: string; type: ViewType; config: ViewConfig }
 export interface DatabaseDto { id: string; version: number; properties: DatabaseProperty[]; views: DatabaseView[] }
 export interface RowsDto { rows: DatabaseRow[]; total: number; offset: number; limit: number }
 export const rowsQuerySchema = z.object({ offset: z.coerce.number().int().min(0).max(5000).default(0), limit: z.coerce.number().int().min(1).max(200).default(100), sort: z.string().max(5000).optional(), filter: z.string().max(20000).optional() });
@@ -63,6 +68,7 @@ export function valueSchema(property: DatabaseProperty) {
 
 export function validateView(config: ViewConfig, properties: DatabaseProperty[]): string | null {
   const byId = new Map(properties.map(p => [p.id, p]));
+  if (config.groupBy && byId.get(config.groupBy)?.type !== 'select') return '看板分組必須使用此資料庫的單選欄位。';
   for (const id of [...config.sorts.map(s => s.propertyId), ...config.filters.map(f => f.propertyId), ...(config.columns ?? [])]) {
     if (id !== 'title' && !byId.has(id)) return '視圖包含不存在的欄位。';
   }

@@ -16,6 +16,7 @@ import { pageRoutes, trashRoutes } from './routes/pages.ts';
 import { staticRoutes } from './static.ts';
 import { searchRoutes } from './routes/search.ts';
 import { databaseRoutes, rowRoutes } from './routes/databases.ts';
+import { annotationRoutes } from './routes/annotations.ts';
 
 export interface AppDeps {
   db: Db;
@@ -65,6 +66,7 @@ export function createApp(input: Omit<AppDeps, 'now' | 'rateLimiter'> & Partial<
   app.route('/api/auth', authRoutes());
   app.route('/api/admin', adminRoutes());
   app.route('/api/pages', pageRoutes());
+  app.route('/api/pages', annotationRoutes());
   app.route('/api/trash', trashRoutes());
   app.route('/api/files', fileRoutes());
   app.route('/api/search', searchRoutes());

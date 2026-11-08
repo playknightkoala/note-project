@@ -70,6 +70,71 @@ describe('database API', () => {
     expect((await c.request('PATCH', `/api/rows/${task.id}/values`, { headers: match(1), json: { values: { [prop.id]: 12 } } })).status).toBe(409);
   });
 
+  it('creates three view types over the same rows, preserves separate settings and rejects stale view writes', async () => {
+    const task = await row('共用資料');
+    const listInput = { name: '清單', type: 'list', config: { sorts: [{ propertyId: 'title', direction: 'desc' }], filters: [] } };
+    const path = `/api/databases/${meta.id}/views`;
+    expect((await c.request('POST', path, { json: listInput })).status).toBe(428);
+    const list = await c.request('POST', path, { headers: match(meta.version), json: listInput });
+    expect(list.status).toBe(201);
+    const previous = meta.version; meta = await list.json() as DatabaseDto;
+    expect(meta.views.at(-1)).toMatchObject(listInput);
+    expect((await c.request('POST', path, { headers: match(previous), json: listInput })).status).toBe(409);
+    const board = await c.request('POST', path, { headers: match(meta.version), json: { name: '看板', type: 'board', config: {} } });
+    expect(board.status).toBe(201); meta = await board.json() as DatabaseDto;
+    const status = meta.properties[0]!; const view = meta.views.at(-1)!;
+    expect(status).toMatchObject({ name: '狀態', type: 'select', choices: [{ label: '尚未開始' }, { label: '進行中' }, { label: '已完成' }] });
+    expect(view).toMatchObject({ type: 'board', config: { groupBy: status.id } });
+    expect((await rows()).rows).toHaveLength(1);
+    expect((await rows()).rows[0]).toMatchObject({ id: task.id, values: {} });
+    const moved = await c.request('PATCH', `/api/rows/${task.id}/values`, { headers: match(task.version), json: { values: { [status.id]: status.choices[1]!.id } } });
+    expect(moved.status).toBe(200);
+    expect((await rows()).rows[0]?.values[status.id]).toBe(status.choices[1]!.id);
+    expect((await c.request('PATCH', `/api/rows/${task.id}/values`, { headers: match(task.version), json: { values: { [status.id]: null } } })).status).toBe(409);
+    const renamed = await c.request('PATCH', `${path}/${view.id}`, { headers: match(meta.version), json: { name: '工作看板', config: view.config } });
+    meta = await renamed.json() as DatabaseDto;
+    expect(meta.views.at(-1)).toMatchObject({ name: '工作看板', type: 'board' });
+    expect(meta.views[1]).toMatchObject(listInput);
+    expect((await c.request('DELETE', `${path}/${view.id}`, { headers: match(meta.version - 1) })).status).toBe(409);
+    meta = await (await c.request('DELETE', `${path}/${view.id}`, { headers: match(meta.version) })).json() as DatabaseDto;
+    expect(meta.views).toHaveLength(2);
+    expect((await rows()).rows[0]?.id).toBe(task.id);
+    meta = await (await c.request('DELETE', `${path}/${meta.views[1]!.id}`, { headers: match(meta.version) })).json() as DatabaseDto;
+    expect((await c.request('DELETE', `${path}/${meta.views[0]!.id}`, { headers: match(meta.version) })).status).toBe(409);
+  });
+
+  it('validates view types and grouping, reuses select properties and clears invalid grouping on property changes', async () => {
+    const text = await property('text');
+    const path = `/api/databases/${meta.id}/views`;
+    for (const input of [
+      { name: '錯誤', type: 'calendar', config: {} },
+      { name: '錯誤', type: 'board', config: { groupBy: text.id } },
+      { name: '錯誤', type: 'board', config: { groupBy: crypto.randomUUID() } },
+    ]) expect((await c.request('POST', path, { headers: match(meta.version), json: input })).status).toBe(400);
+    const status = await property('select', [{ id: crypto.randomUUID(), label: '待辦', color: 'blue' }]);
+    meta = await (await c.request('POST', path, { headers: match(meta.version), json: { name: '看板', type: 'board', config: {} } })).json() as DatabaseDto;
+    expect(meta.properties).toHaveLength(2);
+    expect(meta.views.at(-1)?.config.groupBy).toBe(status.id);
+    meta = await (await c.request('PATCH', `/api/databases/${meta.id}/properties/${status.id}`, { headers: match(meta.version), json: { type: 'text', choices: [] } })).json() as DatabaseDto;
+    expect(meta.views.at(-1)?.config.groupBy).toBeUndefined();
+    meta = await (await c.request('PATCH', `/api/databases/${meta.id}/properties/${status.id}`, { headers: match(meta.version), json: { type: 'select', choices: [] } })).json() as DatabaseDto;
+    const board = meta.views.at(-1)!;
+    meta = await (await c.request('PATCH', `${path}/${board.id}`, { headers: match(meta.version), json: { name: board.name, config: { ...board.config, groupBy: status.id } } })).json() as DatabaseDto;
+    meta = await (await c.request('DELETE', `/api/databases/${meta.id}/properties/${status.id}`, { headers: match(meta.version) })).json() as DatabaseDto;
+    expect(meta.views.at(-1)?.config.groupBy).toBeUndefined();
+    expect(meta.views.at(-1)?.type).toBe('board');
+  });
+
+  it('bounds view creation and rolls back automatic status creation when a request cannot complete', async () => {
+    const path = `/api/databases/${meta.id}/views`;
+    for (let i = 1; i < 20; i++) meta = await (await c.request('POST', path, { headers: match(meta.version), json: { name: `清單 ${i}`, type: 'list', config: {} } })).json() as DatabaseDto;
+    expect((await c.request('POST', path, { headers: match(meta.version), json: { name: '超過上限', type: 'board', config: {} } })).status).toBe(409);
+    const current = await (await c.request('GET', `/api/databases/${meta.id}`)).json() as DatabaseDto;
+    expect(current.properties).toEqual([]);
+    expect(current.version).toBe(meta.version);
+    expect(current.views).toHaveLength(20);
+  });
+
   it.each([
     ['number', '12'], ['date', '2027-02-29'], ['date', '2026-13-01'], ['checkbox', 'true'],
     ['url', 'javascript:alert(1)'], ['select', 'not-an-option'], ['multi_select', ['unknown']],
@@ -127,6 +192,8 @@ describe('database API', () => {
       ['PATCH', `/api/databases/${meta.id}/properties/${prop.id}`, { name: 'x' }],
       ['DELETE', `/api/databases/${meta.id}/properties/${prop.id}`, undefined],
       ['PATCH', `/api/databases/${meta.id}/views/${meta.views[0]!.id}`, { name: 'x', config: {} }],
+      ['POST', `/api/databases/${meta.id}/views`, { name: 'x', type: 'list', config: {} }],
+      ['DELETE', `/api/databases/${meta.id}/views/${meta.views[0]!.id}`, undefined],
       ['POST', `/api/databases/${meta.id}/rows`, {}], ['PATCH', `/api/rows/${task.id}/values`, { values: {} }],
     ] as const) {
       const options = { headers: match(1), ...(json ? { json } : {}) };

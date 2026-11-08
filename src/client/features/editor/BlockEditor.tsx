@@ -11,6 +11,7 @@ import { schema } from './schema.ts';
 import type { AppEditor } from './schema.ts';
 import { usePageMentionItems } from './pageLink/usePageMentionItems.ts';
 import { slashItems } from './slashItems.ts';
+import { SelectionTools } from './SelectionTools.tsx';
 
 export interface BlockEditorProps {
   pageId: string;
@@ -44,12 +45,13 @@ export function BlockEditor({ pageId, initialContent, onReady, onChange, onCompo
   useEffect(() => { onReady(editor, () => ime.composing.current); }, [editor, onReady, ime.composing]);
   const mentionItems = usePageMentionItems(editor, pageId);
   return <div className={`block-editor${fullWidth ? ' block-editor--full' : ''}`} {...ime.wrapperProps}>
-    <BlockNoteView editor={editor} theme={scheme} slashMenu={false} emojiPicker={false}
+    <BlockNoteView editor={editor} theme={scheme} slashMenu={false} emojiPicker={false} formattingToolbar={false}
       onChange={() => { if (!ime.composing.current) onChange(); }}>
       <SuggestionMenuController triggerCharacter="/" shouldOpen={ime.notComposing}
         getItems={async query => filterSuggestionItems([...slashItems(editor, pageId, navigate), ...getDefaultReactSlashMenuItems(editor)], query)} />
       <SuggestionMenuController triggerCharacter="@" shouldOpen={ime.notComposing} minQueryLength={0} getItems={mentionItems} />
       <EmojiPickerController triggerCharacter=":" shouldOpen={ime.notComposing} minQueryLength={2} />
+      <SelectionTools editor={editor} pageId={pageId} />
     </BlockNoteView>
   </div>;
 }

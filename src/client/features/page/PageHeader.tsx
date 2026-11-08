@@ -80,7 +80,7 @@ export function PageHeader({ title, icon, coverUrl, coverPosition, onTitle, onIc
   </div>;
 }
 
-function IconPicker({ onPick, onRemove }: { onPick: (emoji: string) => void; onRemove?: () => void }) {
+export function IconPicker({ onPick, onRemove }: { onPick: (emoji: string) => void; onRemove?: () => void }) {
   return <div className="icon-picker">
     <EmojiPicker.Root onEmojiSelect={({ emoji }) => onPick(emoji)} locale="zh-hant" resolveEmojiData={resolveEmojiData} columns={9} className="icon-picker__root">
       <EmojiPicker.Search className="icon-picker__search" placeholder="搜尋表情符號…" autoFocus />

@@ -2,7 +2,7 @@
 
 每個里程碑記錄實際執行的命令、結果、限制與人工測試方式。
 
-最新結果（2026-11-08）：M2／M3 三項待驗證、M4 搜尋與 M5 資料庫已完成。最終 `npm run check` 全通過（76 tests／12 個測試檔），Docker healthy、`/healthz` 200。以下保留各次紀錄，末段為 M5。
+最新結果（2026-11-08）：M0–M5／M7 與後續追加功能完成；文字選取面板、留言與表情反應已驗證。最終 `npm run check` 全通過（97 tests／17 個測試檔），Docker healthy、`/healthz` 200，`test:app` 25 項 PASS。以下保留各次實際紀錄，最新內容在末段。
 
 ## M0 骨架與容器（2026-11-08）
 
@@ -108,3 +108,39 @@
 變更：`useTableBleed.ts` 量測文字欄右緣到頁面區域右緣的距離（扣 24px 留白），寫入 `--table-bleed`；桌面（≥768px）CSS 讓表格區塊寬度為 `100% + --table-bleed`，一般文字維持閱讀寬度。視窗縮放、側邊欄收合、全寬切換由 ResizeObserver 重新計算；手機為 0，維持原本行為；表格仍比可用空間寬時在表格內橫捲。
 
 驗證（隔離 Chrome，合成 7 欄表格頁，驗完已永久刪除）：1529px 視窗段落寬 654px 不變，表格外框延伸到距右緣 23px，7 欄全部可見、無橫捲；全寬頁面延伸 72px；1000px 視窗延伸 72px；390px 手機延伸 0，整頁無橫向捲軸。`tests/client/tableBleed.test.ts` 覆蓋計算。typecheck、lint、14 檔／87 tests、build 通過。
+
+## 文字選取面板、留言與表情反應（2026-11-08 稍後）
+
+- 依使用者截圖改成緊湊面板：段落類型向右展開、顏色／粗斜體／底線／刪除線／行內程式碼／連結／清除格式、留言與表情反應。不加入 Skills／AI。段落選單只列目前 schema 支援的類型，包含一至六級標題、可摺疊標題、清單、引用與程式碼；不放無法執行的假選項。檔案區塊保留原有格式工具。
+- `tests/server/annotations.test.ts`（5 項）：原文摘要與純文字留言保存、回覆、完整 emoji（含 ZWJ）往返／切換、解決／重開；未登入 401、他人 GET／POST／PATCH 404、缺 CSRF／跨來源 403、垃圾桶禁止操作與還原、永久刪頁級聯清除；過期 If-Match 409／缺少 428 且先前回覆不遺失；輸入上限與無效 emoji 拒絕；複製頁面保留文字格式但不帶原頁討論標記。
+- 客戶端測試（5 項）：重疊範圍標記在正式 JSON 中保留、文字編輯／序列化後仍在；加反應不清掉未送出的回覆、409 顯示錯誤並保留草稿；同一段完整標記文字再次操作時重用討論；編輯器掛載後點原文可開啟討論、桌面選取右鍵攔截與 Shift+右鍵原生行為。
+- 內建瀏覽器以既有合成帳號新增「選取面板驗收」頁：輸入文字、選取顯示面板、段落轉為檢查清單，再改二級標題；粗體操作成功且原文標記仍在；對選取文字右鍵可開啟面板與右側類型子選單。留言送出、加 👍、重載後摘要／留言／反應與標記均在。另從完整本機 emoji 網格選 🥰 成功；同範圍再次加反應時開啟既有討論。回覆草稿中先加 🎉 再送出，文字仍保留且成功保存；標示解決／重新開啟成功；直接點擊標記文字能開啟討論。
+- 實測修正：段落子選單放在 toolbar 的 DOM 內，避免 Portal 失焦使整個面板關閉；標記點擊使用 DOM 已折疊的選取狀態，並在 editor mount 後綁定捕獲事件。自動化對多行 inline span 的 bounding-box 中央可能點到行間空白，改以畫面上實際文字位置驗證。客戶端測試補齊 jsdom 的 `document.fonts` 替身。
+- 檢查：`npm run check` 實際依序通過 typecheck、lint、17 檔／97 tests、client＋server build；`docker compose up -d --build --wait` 成功且 healthy；`(Invoke-WebRequest -Uri http://127.0.0.1:8081/healthz).StatusCode` 為 200；`npm run test:app -- http://127.0.0.1:8081` 25 項 PASS；`git diff --check` 通過。沒有新增或升級依賴。
+- 限制：本輪是桌面驗收，未重新做實體手機、真實 IME、HTTPS 或完整備份還原；SQLite experimental、Vite 大 bundle 提示仍在。瀏覽器沒有 error，仍有既有 BlockNote viewport meta 缺少 `interactive-widget=resizes-content` 的手機相容性 warning。討論與頁面內容分別保存、分別版本控制；頁面歷史不回退留言或反應。只有自己的頁面可留言，沒有新增分享或多人協作。
+- 截圖：`.local/validation/selection-panel-types.png`、`selection-comments.png`（gitignored）。合成驗收頁保留供使用者查看，測試分頁已關閉。
+
+## 資料庫直接編輯與表格／清單／看板（2026-11-08 稍後）
+
+- 依使用者追加授權實作三種視圖的新增、切換、重新命名、設定與確認刪除；上限 20 個且最後一個不可刪除。共用資料列，各自保存排序、AND 篩選、顯示欄位與看板分組；網址保存視圖 ID，分頁支援鍵盤方向鍵與 Home／End。沒有新增其他視圖類型或依賴。
+- 空表格顯示兩列空白輸入位置，空白位置不寫入正式資料；可從名稱或屬性開始輸入。名稱／文字／數字／網址在格內編輯，Enter／失焦儲存、Escape 取消，中文組字不誤送；核取方塊直接切換。底部「新增頁面」與工具列「新增」直接輸入，失敗保留名稱或草稿並可重試，409 保留原版本與草稿、不靜默覆寫。
+- 看板依單選欄位分組，沒有時自動建立「狀態」與三個繁中選項；既有資料留在「未設定」，不自動改值。支援群組內新增、拖曳把手移組與卡片選單移組。拖曳保留開始時的列版本，不在成功前搬移資料。清單可直接編輯名稱／屬性。清單與看板仍分批載入，每批 100 列，群組計數為已載入數量，介面明示未載入完整資料；未實作卡片手動排序。
+- migration `0006_database_views` 在交易中保留舊視圖所有欄位並放寬類型 CHECK；測試既有 ID／config／順序／時間保留、重跑冪等、刪頁級聯及外鍵完整性。新 API 繼續驗證 user_id、CSRF、Origin 與 If-Match，測試他人 404、缺 CSRF／外站 403、缺 If-Match 428、舊版 409；分組只接受本資料庫單選欄位，刪欄或變更型別清除失效分組。
+- 客戶端測試覆蓋：兩列空白不預建紀錄、先填屬性建列、Enter＋blur 不重複送出、IME Enter、Escape、未完成數字、409 保留草稿、核取方塊防重複、清單改名、看板選單帶原版本移組。整合測試使用真正 API hooks 與模擬 fetch，驗證三視圖共用資料、視圖新增／改名／刪除、各自欄位設定、看板 groupBy 不被 URL override 清掉及鍵盤切換。
+- 命令與結果：`npm run typecheck`、`npm run lint`、`npm test -- --reporter=dot`（19 檔／107 tests）、`npm run build` 全部通過；`git diff --check` 通過。沙箱內 Vitest／Vite 首次因 `spawn EPERM` 無法啟動，依批准在沙箱外重跑後通過。SQLite experimental 與 Vite 大 bundle 提示仍在。
+- 容器：先執行 `docker compose exec -T app node dist/server/cli.js backup` 線上備份，再執行 `docker compose up -d --build --wait`，最終 healthy。`(Invoke-WebRequest -Uri http://127.0.0.1:8081/healthz).StatusCode` 為 200；`npm run test:app -- http://127.0.0.1:8081` 25 項 PASS。
+- 實際 HTTP 冒煙：`node .local/database-smoke.mjs`（本機合成帳號、憑證不輸出）13 個主要請求通過，確認建立三種類型、正式空表沒有空白紀錄、自動狀態欄位、資料列直接改名／移組、過期版本拒絕、視圖改名保留類型、刪視圖不刪列；合成資料庫已清除並登出。第一次清理步驟將永久刪除的 204 誤判為 200，已修正驗收腳本並完整重跑通過，應用 API 本身正常。
+- 限制：瀏覽器 inventory 回報 access host unavailable；Windows CUA 隨後因無法可靠辨識當前瀏覽器網址而停止。本輪沒有實際瀏覽器目視／截圖驗收、拖曳手勢驗收、實體手機或真實輸入法測試，未改用 CDP 繞過工具限制。以上元件與 HTTP 測試不等同瀏覽器端到端驗收。
+
+## 桌面資料庫寬度修正（2026-11-08）
+
+- 使用者截圖顯示桌面看板仍被筆記的 900px 閱讀欄與左右留白壓縮，需要橫捲才能看到所有群組。資料庫頁新增專用 class，桌面（≥768px）使用主內容區寬度、左右留 32px，移除資料庫本身額外的水平 margin；封面負 margin 同步調整。一般筆記與列頁面維持原閱讀欄。
+- 桌面看板改用 grid，每欄在 220–280px 之間分配可用空間；空間足夠時完整呈現群組，群組太多或視窗太窄時才橫捲。手機保留原本 280px 固定欄寬與橫向捲動。
+- `npm run typecheck`、`npm run lint`、`npm test -- --reporter=dot`（19 檔／107 tests）、`npm run build` 全過；`docker compose up -d --build --wait` healthy，`/healthz` 200；`git diff --check` 通過。這次是版面修正，沒有新增對應 CSS 的實作鏡像測試。
+- 瀏覽器工具再次回報 access host unavailable，已停止 UI 驗收；本輪未取得修正後的實際瀏覽器截圖或量測結果。
+
+## 1.0.2 發布前檢查（2026-11-08）
+
+- `package.json` 與 `package-lock.json` 根套件版本同步更新為 1.0.2，沒有調整任何依賴版本。
+- 再次執行 `npm run typecheck`、`npm run lint`、`npm test -- --reporter=dot`（19 檔／107 tests）、`npm run build`：全部通過。`docker compose up -d --build --wait` 成功、容器 healthy，`/healthz` 200；`GET /api/version` 實測回 `{ "version": "1.0.2" }`。
+- `npm run test:app -- http://127.0.0.1:8081` 25 項 PASS。瀏覽器驗收限制沿用前述紀錄；發布說明包含線上備份、自動 migration、回退需還原備份及已知限制。

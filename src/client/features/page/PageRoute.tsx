@@ -122,7 +122,7 @@ function PageView({ initial }: { initial: PageResponse }) {
       </Group>
     </Alert>}
     {refreshError && <Alert color="red" title="無法載入最新內容">{refreshError}</Alert>}
-    <div ref={bodyRef} className={`page-body${meta.fullWidth ? ' page-body--full' : ''}${smallText ? ' page-body--small' : ''}`}>
+    <div ref={bodyRef} className={`page-body${initial.page.kind === 'database' ? ' page-body--database' : ''}${meta.fullWidth ? ' page-body--full' : ''}${smallText ? ' page-body--small' : ''}`}>
       <PageHeader title={meta.title} icon={meta.icon} coverUrl={meta.coverUrl} coverPosition={meta.coverPosition}
         onTitle={saveTitle} onIcon={saveIcon} onCover={saveCover} onCoverPosition={saveCoverPosition} onEnter={focusEditor} />
       {initial.page.kind === 'database'

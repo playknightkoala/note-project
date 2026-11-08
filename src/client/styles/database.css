@@ -1,6 +1,8 @@
 .database-view { margin: 20px 32px 40px; }
-.database-toolbar { margin-bottom: 12px; }
-.database-grid-scroll { position: relative; overflow: auto; max-height: 65vh; min-height: 160px; border: 1px solid var(--app-border); border-radius: var(--app-radius); }
+.database-toolbar { margin-bottom: 12px; align-items: flex-start; }
+.database-view-tabs { flex: 1; min-width: 180px; }
+.database-view-tab { border-radius: 18px; }
+.database-grid-scroll { position: relative; overflow: auto; max-height: 65vh; min-height: 140px; border-block: 1px solid var(--app-border); }
 .database-grid-header, .database-grid-row { display: grid; min-width: max-content; width: 100%; height: 34px; align-items: center; }
 .database-grid-header { position: sticky; top: 0; z-index: 2; background: var(--app-sidebar-bg); border-bottom: 1px solid var(--app-border); }
 .database-grid-body { position: relative; min-width: max-content; }
@@ -16,6 +18,31 @@
 .database-cell:focus-visible { outline: 2px solid var(--app-accent); outline-offset: -2px; }
 .database-grid-slot:first-child .database-cell { padding-right: 28px; }
 .database-open-row { position: absolute; right: 4px; top: 8px; }
+.database-draft-row { position: relative; }
+.database-inline-editor { position: relative; min-width: 0; width: 100%; }
+.database-cell-input { outline: 2px solid var(--app-accent); outline-offset: -2px; background: var(--app-bg); overflow: visible; border-radius: 3px; }
+.database-cell-error { position: absolute; top: 100%; left: 0; z-index: 5; min-width: 280px; padding: 12px; white-space: normal; background: var(--app-bg); color: var(--app-fg); border: 1px solid var(--app-border); box-shadow: 0 4px 12px #0003; }
+.database-grid-slot:focus-within { z-index: 4; }
+.database-new-row { min-width: 180px; max-width: 420px; padding: 4px; }
+.database-add-row { justify-content: flex-start; font-weight: 400; margin-block: 4px; }
+.database-list-row { display: flex; align-items: center; min-height: 42px; gap: 6px; border-bottom: 1px solid var(--app-border); }
+.database-list-row:hover { background: var(--app-hover); }
+.database-list-icon { flex: 0 0 auto; color: var(--app-fg-muted); }
+.database-list-title { flex: 1; min-width: 140px; }
+.database-list-properties { display: flex; flex: 1; overflow-x: auto; min-width: 0; }
+.database-list-property { flex: 0 0 140px; }
+.database-board { display: flex; align-items: flex-start; gap: 12px; overflow-x: auto; padding: 4px 2px 16px; }
+.database-board-column { flex: 0 0 280px; padding: 8px; border: 1px solid transparent; border-radius: 10px; background: var(--app-hover); }
+.database-board-column--over { border-color: var(--app-accent); }
+.database-board-heading { padding: 0 4px 8px; }
+.database-board-cards { display: flex; flex-direction: column; gap: 8px; max-height: 60vh; min-height: 52px; overflow-y: auto; padding: 2px; }
+.database-board-card { padding: 4px; border: 1px solid var(--app-border); border-radius: 8px; background: var(--app-bg); }
+.database-board-card--dragging { opacity: .35; }
+.database-board-card-title { display: flex; align-items: center; }
+.database-drag-handle { display: flex; align-items: center; flex-shrink: 0; border: 0; padding: 4px 0; background: transparent; color: var(--app-fg-muted); cursor: grab; touch-action: none; }
+.database-board-overlay { width: 260px; padding: 12px; box-shadow: 0 8px 20px #0003; }
+.database-board-property { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 12px; font-size: 12px; }
+.database-board-property > span:first-child { color: var(--app-fg-muted); }
 .cell-empty { color: var(--app-fg-muted); font-size: 12px; }
 .choice-tags { display: inline-flex; gap: 4px; }
 .choice-tag { display: inline-block; max-width: 220px; overflow: hidden; text-overflow: ellipsis; vertical-align: middle; padding: 1px 6px; border-radius: 4px; font-size: 12px; color: var(--app-fg); background: color-mix(in srgb, var(--choice-color, #888) 20%, var(--app-bg)); }
@@ -32,4 +59,11 @@
 .row-properties { margin: 12px auto 24px; padding: 0 72px; max-width: 900px; }
 .row-property { display: grid; grid-template-columns: minmax(100px, 180px) minmax(120px, 1fr); align-items: center; border-bottom: 1px solid var(--app-border); }
 .row-property__name { overflow-wrap: anywhere; padding: 6px 0; }
+@media (min-width: 768px) {
+  .page-body--database { max-width: none; min-width: 0; padding-inline: 32px; }
+  .page-body--database .page-cover { margin-inline: -32px; }
+  .page-body--database > .database-view { margin-inline: 0; min-width: 0; }
+  .database-board { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(220px, 280px); align-items: start; }
+  .database-board-column { min-width: 0; }
+}
 @media (max-width: 767px) { .database-view { margin: 16px; } .row-properties { padding-inline: 24px; } }

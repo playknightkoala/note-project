@@ -4,6 +4,7 @@ import type { DatabaseProperty, ViewConfig } from '@shared/database';
 export function readViewParams(params: URLSearchParams, fallback: ViewConfig, properties: DatabaseProperty[]): { config: ViewConfig; error: string | null } {
   try {
     const config = viewConfigSchema.parse({
+      ...fallback,
       sorts: params.has('sort') ? JSON.parse(params.get('sort')!) : fallback.sorts,
       filters: params.has('filter') ? JSON.parse(params.get('filter')!) : fallback.filters,
       ...(params.has('columns') ? { columns: JSON.parse(params.get('columns')!) } : fallback.columns ? { columns: fallback.columns } : {}),
