@@ -1,5 +1,6 @@
 // Minimal structural model of BlockNote block JSON. The server stores blocks as-is; it only validates shape and size.
 import { z } from 'zod';
+import { newId } from './ids.ts';
 
 export interface Block {
   id: string;
@@ -38,4 +39,4 @@ export function parseBlocks(value: unknown): { blocks: Block[]; json: string } |
   return { blocks: result.data, json };
 }
 
-export const emptyParagraph = (): Block => ({ id: crypto.randomUUID(), type: 'paragraph', props: {}, content: [], children: [] });
+export const emptyParagraph = (): Block => ({ id: newId(), type: 'paragraph', props: {}, content: [], children: [] });

@@ -5,7 +5,7 @@ services:
       context: .
       target: runtime
     ports:
-      - "127.0.0.1:${NOTES_PORT:-8080}:8080"
+      - "${NOTES_BIND:-127.0.0.1}:${NOTES_PORT:-8080}:8080"
     environment:
       TRUST_PROXY: "${NOTES_TRUST_PROXY:-0}"
       MAX_UPLOAD_MB: "${NOTES_MAX_UPLOAD_MB:-20}"

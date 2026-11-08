@@ -5,6 +5,7 @@ import { CHOICE_COLORS, PROPERTY_TYPES, propertyLabels } from '@shared/database'
 import type { DatabaseDto, DatabaseProperty, PropertyChoice, PropertyType } from '@shared/database';
 import { useDatabaseSchema } from '../../api/databases.ts';
 import { errorText, isApiError } from '../../api/client.ts';
+import { newId } from '@shared/ids';
 
 const colors = ['灰', '棕', '橙', '黃', '綠', '藍', '紫', '粉紅', '紅'];
 export function PropertyDialog({ meta, property, onClose, onReload }: { meta: DatabaseDto; property: DatabaseProperty | null; onClose: () => void; onReload: () => void }) {
@@ -28,7 +29,7 @@ export function PropertyDialog({ meta, property, onClose, onReload }: { meta: Da
         <TextInput aria-label={`選項 ${index + 1} 名稱`} value={choice.label} required maxLength={80} onChange={e => { const label = e.currentTarget.value; setChoices(current => current.map(item => item.id === choice.id ? { ...item, label } : item)); }} style={{ flex: 1 }} />
         <Select aria-label={`選項 ${index + 1} 顏色`} data={CHOICE_COLORS.map((value, i) => ({ value, label: colors[i]! }))} value={choice.color} w={92} allowDeselect={false} onChange={color => { if (color) setChoices(current => current.map(item => item.id === choice.id ? { ...item, color: color as PropertyChoice['color'] } : item)); }} />
         <ActionIcon aria-label={`移除選項 ${index + 1}`} color="red" variant="subtle" onClick={() => setChoices(current => current.filter(item => item.id !== choice.id))}><Trash2 size={16} /></ActionIcon>
-      </Group>)}<Button size="compact-xs" variant="subtle" leftSection={<Plus size={14} />} onClick={() => setChoices(current => [...current, { id: crypto.randomUUID(), label: '', color: 'gray' }])} disabled={choices.length >= 100}>新增選項</Button></Stack>}
+      </Group>)}<Button size="compact-xs" variant="subtle" leftSection={<Plus size={14} />} onClick={() => setChoices(current => [...current, { id: newId(), label: '', color: 'gray' }])} disabled={choices.length >= 100}>新增選項</Button></Stack>}
       {mutation.error && <Alert color="red">{errorText(mutation.error)}{isApiError(mutation.error, 409) && <Button size="compact-xs" mt="xs" variant="white" onClick={() => { onClose(); onReload(); }}>重新載入資料</Button>}</Alert>}
       {confirmDelete && property && <Alert color="red" title="刪除欄位？"><Text size="sm">所有資料列的「{property.name}」資料與相關排序、篩選會一併移除，無法還原。</Text><Group mt="sm"><Button color="red" size="xs" loading={mutation.isPending} onClick={() => mutation.mutate({ action: 'delete', id: property.id, version: baseVersion }, { onSuccess: onClose })}>確認刪除此欄位</Button><Button size="xs" variant="default" onClick={() => setConfirmDelete(false)}>保留欄位</Button></Group></Alert>}
       <Group justify="space-between">{property ? <Button color="red" variant="subtle" onClick={() => setConfirmDelete(true)}>刪除欄位</Button> : <span />}
