@@ -9,6 +9,7 @@ export function staticRoutes(clientDir: string): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
   const index = readFileSync(join(clientDir, 'index.html'), 'utf8');
   app.use('/assets/*', async (c, next) => { c.header('Cache-Control', 'public, max-age=31536000, immutable'); await next(); });
+  app.use('/sw.js', async (c, next) => { c.header('Cache-Control', 'no-cache'); c.header('Service-Worker-Allowed', '/'); await next(); });
   app.use('*', serveStatic({ root: clientDir, index: '__none__' }));
   app.get('*', c => {
     if (c.req.path.startsWith('/api/')) return c.notFound();

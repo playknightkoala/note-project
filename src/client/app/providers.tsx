@@ -8,6 +8,7 @@ import { isApiError } from '../api/client.ts';
 
 export const queryClient = new QueryClient({
   defaultOptions: {
+    mutations: { networkMode: 'always' },
     queries: {
       retry: (count, error) => !(isApiError(error) && error.status > 0 && error.status < 500) && count < 2,
       refetchOnWindowFocus: false,

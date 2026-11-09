@@ -23,9 +23,11 @@ export interface BlockEditorProps {
   onCompositionSettled: () => void;
   uploadFile?: (file: File) => Promise<string>;
   fullWidth?: boolean;
+  editable?: boolean;
+  annotationsEnabled?: boolean;
 }
 
-export function BlockEditor({ pageId, initialContent, onReady, onChange, onCompositionSettled, uploadFile, fullWidth }: BlockEditorProps) {
+export function BlockEditor({ pageId, initialContent, onReady, onChange, onCompositionSettled, uploadFile, fullWidth, editable = true, annotationsEnabled = true }: BlockEditorProps) {
   const scheme = useComputedColorScheme('light');
   const navigate = useNavigate();
   const ime = useImeGuard(onCompositionSettled);
@@ -45,13 +47,13 @@ export function BlockEditor({ pageId, initialContent, onReady, onChange, onCompo
   useEffect(() => { onReady(editor, () => ime.composing.current); }, [editor, onReady, ime.composing]);
   const mentionItems = usePageMentionItems(editor, pageId);
   return <div className={`block-editor${fullWidth ? ' block-editor--full' : ''}`} {...ime.wrapperProps}>
-    <BlockNoteView editor={editor} theme={scheme} slashMenu={false} emojiPicker={false} formattingToolbar={false}
+    <BlockNoteView editor={editor} editable={editable} theme={scheme} slashMenu={false} emojiPicker={false} formattingToolbar={false}
       onChange={() => { if (!ime.composing.current) onChange(); }}>
       <SuggestionMenuController triggerCharacter="/" shouldOpen={ime.notComposing}
         getItems={async query => filterSuggestionItems([...slashItems(editor, pageId, navigate), ...getDefaultReactSlashMenuItems(editor)], query)} />
       <SuggestionMenuController triggerCharacter="@" shouldOpen={ime.notComposing} minQueryLength={0} getItems={mentionItems} />
       <EmojiPickerController triggerCharacter=":" shouldOpen={ime.notComposing} minQueryLength={2} />
-      <SelectionTools editor={editor} pageId={pageId} composing={ime.isComposing} />
+      <SelectionTools editor={editor} pageId={pageId} composing={ime.isComposing} annotationsEnabled={annotationsEnabled} />
     </BlockNoteView>
   </div>;
 }

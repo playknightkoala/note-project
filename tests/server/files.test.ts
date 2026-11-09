@@ -48,7 +48,8 @@ describe('files', () => {
     expect(served.status).toBe(200);
     expect(served.headers.get('content-type')).toBe('image/png');
     expect(served.headers.get('content-disposition')).toMatch(/^inline; filename\*=UTF-8''/);
-    expect(served.headers.get('cache-control')).toContain('immutable');
+    expect(served.headers.get('cache-control')).toBe('private, no-cache');
+    expect(served.headers.get('x-notes-user')).toBeTruthy();
     expect(served.headers.get('content-security-policy')).toBeNull();
     expect(new Uint8Array(await served.arrayBuffer())).toEqual(png);
     const cached = await c.request('GET', dto.url, { headers: { 'if-none-match': served.headers.get('etag')! } });

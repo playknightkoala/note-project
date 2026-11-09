@@ -76,7 +76,7 @@ function positionAt(db: Db, userId: string, parentId: string | null, index: numb
 
 export interface CreatePageInput { parentId: string | null; kind: 'page' | 'database'; title: string; afterId: string | null; icon: string | null }
 
-export function createPage(db: Db, userId: string, input: CreatePageInput, now: number): PageRow {
+export function createPage(db: Db, userId: string, input: CreatePageInput, now: number, pageId?: string): PageRow {
   return db.transaction(() => {
     if (input.parentId) {
       const parent = loadPage(db, userId, input.parentId);
@@ -89,10 +89,11 @@ export function createPage(db: Db, userId: string, input: CreatePageInput, now: 
       if (at >= 0) index = at + 1;
     }
     const position = positionAt(db, userId, input.parentId, index);
-    const id = crypto.randomUUID();
+    const id = pageId ?? crypto.randomUUID();
     const content = JSON.stringify([emptyParagraph()]);
-    db.run(`INSERT INTO pages (id, user_id, parent_id, kind, position, title, icon, content, content_text, created_at, updated_at)
+    const inserted = db.run(`INSERT ${pageId ? 'OR IGNORE ' : ''}INTO pages (id, user_id, parent_id, kind, position, title, icon, content, content_text, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?)`, id, userId, input.parentId, input.kind, position, input.title, input.icon, content, now, now);
+    if (inserted.changes !== 1) throw new AppError('not_found');
     if (input.kind === 'database') {
       db.run('INSERT INTO db_views (id, database_id, name, type, config, position, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
         crypto.randomUUID(), id, '表格', 'table', '{}', GAP, now);

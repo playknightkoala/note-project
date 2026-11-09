@@ -3,9 +3,11 @@ import type { PartialBlock } from '@blocknote/core';
 import { Alert, Button, Center, Group, Loader, Text } from '@mantine/core';
 import { useQueryClient } from '@tanstack/react-query';
 import { useParams } from 'react-router';
-import type { PageResponse } from '@shared/api';
 import { pageKeys, usePage, usePatchPage } from '../../api/pages.ts';
-import { api, errorText, isApiError } from '../../api/client.ts';
+import { errorText, isApiError } from '../../api/client.ts';
+import { loadNote } from '../../offline/notes.ts';
+import type { LocalPageResponse } from '../../offline/notes.ts';
+import { useOnline } from '../../offline/useOnline.ts';
 import { useUiState } from '../../app/uiState.tsx';
 import { BlockEditor } from '../editor/BlockEditor.tsx';
 import type { AppEditor } from '../editor/schema.ts';
@@ -28,13 +30,14 @@ export function PageRoute() {
   const page = usePage(pageId);
   if (page.isPending) return <Center h="60vh"><Loader size="sm" /></Center>;
   if (page.error || !page.data) {
-    return <Center h="60vh"><Text c="dimmed">{isApiError(page.error, 404) ? '找不到這個頁面，可能已被刪除。' : '無法載入頁面。'}</Text></Center>;
+    return <Center h="60vh"><Text c="dimmed">{isApiError(page.error, 404) ? '找不到這個頁面，可能已被刪除。' : errorText(page.error)}</Text></Center>;
   }
   return <PageView key={pageId} initial={page.data} />;
 }
 
-function PageView({ initial }: { initial: PageResponse }) {
+function PageView({ initial }: { initial: LocalPageResponse }) {
   const pageId = initial.page.id;
+  const online = useOnline();
   const queryClient = useQueryClient();
   const patch = usePatchPage();
   const { rememberPage, expandMany } = useUiState();
@@ -64,18 +67,18 @@ function PageView({ initial }: { initial: PageResponse }) {
   }, []);
 
   const autosave = useAutosave({
-    pageId, initialVersion: initial.page.version,
+    pageId, initialVersion: initial.page.version, initialLocalRevision: initial.localRevision,
     getContent: () => (composingRef.current() || !editorRef.current) ? null : editorRef.current.document as unknown[],
     onRemoteUpdate: () => {
       const revision = localRevisionRef.current;
       setRefreshError(null);
-      void queryClient.fetchQuery({ queryKey: pageKeys.page(pageId), staleTime: 0, queryFn: () => api<PageResponse>('GET', `/api/pages/${pageId}`) })
+      void queryClient.fetchQuery({ queryKey: pageKeys.page(pageId), staleTime: 0, networkMode: 'always', queryFn: () => loadNote(pageId) })
         .then(fresh => {
           // Typing while this GET was pending must keep the local draft and its old If-Match.
           if (localRevisionRef.current !== revision) return;
           replaceContent(fresh.page.content);
           setMeta({ title: fresh.page.title, icon: fresh.page.icon, fullWidth: fresh.page.fullWidth, coverUrl: fresh.page.coverUrl, coverPosition: fresh.page.coverPosition });
-          autosave.setVersion(fresh.page.version);
+          autosave.setVersion(fresh.page.version, fresh.localRevision);
         }).catch(error => setRefreshError(errorText(error)));
     },
   });
@@ -88,7 +91,7 @@ function PageView({ initial }: { initial: PageResponse }) {
     autosave.markDirty();
   }, [autosave]);
   const onCompositionSettled = useCallback(() => { localRevisionRef.current++; autosave.markDirty(); }, [autosave]);
-  const saveTitle = useCallback((title: string) => { setMeta(m => ({ ...m, title })); patch.mutate({ id: pageId, title }); }, [patch, pageId]);
+  const saveTitle = useCallback((title: string) => { localRevisionRef.current++; setMeta(m => ({ ...m, title })); patch.mutate({ id: pageId, title, localRevision: autosave.localRevision() }); }, [patch, pageId, autosave]);
   const saveIcon = useCallback((icon: string | null) => { setMeta(m => ({ ...m, icon })); patch.mutate({ id: pageId, icon }); }, [patch, pageId]);
   const saveCover = useCallback((cover: string | null) => {
     if (cover === null) { setMeta(m => ({ ...m, coverUrl: null })); patch.mutate({ id: pageId, coverFileId: null, coverPreset: null }); return; }
@@ -122,14 +125,15 @@ function PageView({ initial }: { initial: PageResponse }) {
       </Group>
     </Alert>}
     {refreshError && <Alert color="red" title="無法載入最新內容">{refreshError}</Alert>}
+    {patch.error && <Alert color="red" title="頁面設定尚未儲存">{errorText(patch.error)}</Alert>}
     <div ref={bodyRef} className={`page-body${initial.page.kind === 'database' ? ' page-body--database' : ''}${meta.fullWidth ? ' page-body--full' : ''}${smallText ? ' page-body--small' : ''}`}>
       <PageHeader title={meta.title} icon={meta.icon} coverUrl={meta.coverUrl} coverPosition={meta.coverPosition}
         onTitle={saveTitle} onIcon={saveIcon} onCover={saveCover} onCoverPosition={saveCoverPosition} onEnter={focusEditor} />
       {initial.page.kind === 'database'
-        ? <DatabaseView databaseId={pageId} />
+        ? online ? <DatabaseView databaseId={pageId} /> : <Alert title="資料庫需要連線">一般筆記仍可離線編輯，資料庫視圖請恢復連線後開啟。</Alert>
         : <>
-          {initial.page.kind === 'row' && initial.page.databaseId && <RowPropertiesPanel rowId={pageId} databaseId={initial.page.databaseId} />}
-          <BlockEditor pageId={pageId} initialContent={initialContent} onReady={onReady} onChange={onChange} onCompositionSettled={onCompositionSettled} fullWidth={meta.fullWidth} uploadFile={upload} />
+          {initial.page.kind === 'row' && initial.page.databaseId && (online ? <RowPropertiesPanel rowId={pageId} databaseId={initial.page.databaseId} /> : <Alert title="資料列需要連線">已下載的內文可閱讀，編輯請恢復連線後進行。</Alert>)}
+          <BlockEditor pageId={pageId} initialContent={initialContent} onReady={onReady} onChange={onChange} onCompositionSettled={onCompositionSettled} fullWidth={meta.fullWidth} uploadFile={upload} editable={online || initial.page.kind === 'page'} annotationsEnabled={online && autosave.state.version > 0} />
         </>}
     </div>
   </div>}

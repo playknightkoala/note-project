@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { PageDto, PageHeadDto, PageNode, PageResponse, TrashItemDto, TreeDto, VersionDto } from '@shared/api';
+import type { PageDto, PageHeadDto, PageNode, PageResponse, TrashItemDto, VersionDto } from '@shared/api';
 import { api } from './client.ts';
+import { cachePage, createLocalNote, loadNote, loadTree, offlineNote, offlineStorageError, saveLocalContent, saveLocalTitle } from '../offline/notes.ts';
 import { applyFavorite, applyMove, applyRename, applyTrash } from '../features/shell/treeIndex.ts';
 
 export const pageKeys = {
@@ -11,14 +12,14 @@ export const pageKeys = {
 };
 
 export function useTree() {
-  return useQuery({ queryKey: pageKeys.tree, queryFn: async () => (await api<TreeDto>('GET', '/api/pages/tree')).pages, staleTime: 30_000 });
+  return useQuery({ queryKey: pageKeys.tree, queryFn: loadTree, networkMode: 'always', staleTime: 30_000 });
 }
 
 /** The full page (content included). gcTime 0 so re-entering a page always refetches; the editor owns the content while mounted. */
 export function usePage(id: string | undefined) {
   return useQuery({
     queryKey: pageKeys.page(id ?? ''),
-    queryFn: () => api<PageResponse>('GET', `/api/pages/${id}`),
+    queryFn: () => loadNote(id!), networkMode: 'always',
     enabled: !!id, staleTime: Infinity, gcTime: 0, retry: false,
   });
 }
@@ -44,7 +45,11 @@ export interface CreatePageInput { parentId?: string | null; kind?: 'page' | 'da
 export function useCreatePage() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (input: CreatePageInput) => api<PageResponse>('POST', '/api/pages', { json: input }),
+    networkMode: 'always',
+    mutationFn: async (input: CreatePageInput) => {
+      if (input.kind !== 'database' && !input.icon && !offlineStorageError) return createLocalNote(input);
+      return cachePage(await api<PageResponse>('POST', '/api/pages', { json: input }));
+    },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: pageKeys.tree }),
   });
 }
@@ -68,8 +73,10 @@ export const useTrashPage = () => useTreeMutation(
 export function usePatchPage() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (input: { id: string; title?: string; icon?: string | null; coverFileId?: string | null; coverPreset?: string | null; coverPosition?: number; fullWidth?: boolean }) => {
-      const { id, ...body } = input;
+    networkMode: 'always',
+    mutationFn: async (input: { id: string; title?: string; localRevision?: string; icon?: string | null; coverFileId?: string | null; coverPreset?: string | null; coverPosition?: number; fullWidth?: boolean }) => {
+      const { id, localRevision, ...body } = input;
+      if (body.title !== undefined && (await offlineNote(id).catch(() => undefined))?.local.page.kind === 'page') return saveLocalTitle(id, body.title, localRevision);
       return api<PageResponse>('PATCH', `/api/pages/${id}`, { json: body });
     },
     onMutate: async input => {
@@ -96,8 +103,11 @@ export function useDuplicatePage() {
   });
 }
 
-export const saveContent = (id: string, version: number, content: unknown[], { overwrite = false, ...options }: { keepalive?: boolean; signal?: AbortSignal; overwrite?: boolean } = {}) =>
-  api<PageHeadDto>('PUT', `/api/pages/${id}/content`, { json: { content, overwrite }, headers: { 'if-match': `"${version}"` }, ...options });
+export async function saveContent(id: string, version: number, content: unknown[], { overwrite = false, localRevision, ...options }: { keepalive?: boolean; signal?: AbortSignal; overwrite?: boolean; localRevision?: string } = {}) {
+  const note = await offlineNote(id).catch(() => undefined);
+  if (note?.local.page.kind === 'page') return saveLocalContent(id, content, localRevision);
+  return api<PageHeadDto>('PUT', `/api/pages/${id}/content`, { json: { content, overwrite }, headers: { 'if-match': `"${version}"` }, ...options });
+}
 
 export const fetchHead = (id: string) => api<PageHeadDto>('GET', `/api/pages/${id}/head`);
 

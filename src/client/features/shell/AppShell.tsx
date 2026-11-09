@@ -11,6 +11,7 @@ import { PageTreeItem } from './PageTreeItem.tsx';
 import { buildTreeIndex } from './treeIndex.ts';
 import type { FlatRow } from './treeDrag.ts';
 import { CommandPalette } from '../search/CommandPalette.tsx';
+import { OfflineStatus } from '../../offline/OfflineStatus.tsx';
 
 export const SIDEBAR_BREAKPOINT = 768;
 interface ShellContext { sidebarOpen: boolean; toggleSidebar: () => void; closeSidebar: () => void }
@@ -100,6 +101,8 @@ export function AppShell() {
         </div>
       </MantineAppShell.Navbar>
       <MantineAppShell.Main className="app-main">
+        <OfflineStatus />
+        {create.error && <Alert color="red" m="sm" title="無法新增頁面">{errorText(create.error)}</Alert>}
         {logoutError && <Alert color="red" variant="light" m="md" withCloseButton onClose={() => setLogoutError(null)} title="登出失敗">{logoutError}</Alert>}
         <Outlet />
       </MantineAppShell.Main>

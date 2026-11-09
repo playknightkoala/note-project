@@ -1,5 +1,36 @@
 # 驗證紀錄
 
+## 1.0.4 發布前檢查（2026-11-09）
+
+- package.json 與 package-lock.json 根套件版本同步為 1.0.4；本版新增的測試依賴 `fake-indexeddb` 固定為 6.2.8，其餘依賴版本未變更。
+- 以 Node 22.23.1／npm 10.9.8 執行 `npm run check`：`npm run typecheck`、`npm run lint`、`npm test`（24 檔／129 tests）、`npm run build` 全過。
+- 升級前執行 `docker compose exec -T app node dist/server/cli.js backup`，SQLite 線上備份成功；沒有直接複製使用中的資料庫。
+- `docker compose up --build --wait`：1.0.4 建置成功、容器 healthy。`npm run test:app -- http://127.0.0.1:8080` 30 項 PASS，包含 `/healthz` 200。`curl -fsS http://127.0.0.1:8080/api/version` 實測回報 `{"version":"1.0.4"}`。
+- 本輪功能與真正瀏覽器驗收結果見下方 M8 及桌面選單段落；版本更新只調整套件版本與文件，未把先前沒有執行的手機實機驗收記為通過。發布說明見 [releases/1.0.4.md](releases/1.0.4.md)。
+
+## 桌面側欄「…」選單移入後消失修正（2026-11-09）
+
+- 重現：在真實 Chrome 的桌面視口，對一列一般筆記點「…」，再將滑鼠移入「加入最愛」。`scripts/check-sidebar-menu.mjs` 在修正前穩定失敗，訊息為「滑鼠從『…』移入選單後，選單必須保持開啟」。右鍵選單沒有相同定位按鈕問題。
+- 原因：側欄按鈕原本只在頁面列 hover／focus-within 時顯示。選單透過 Portal 顯示於列外，滑鼠與焦點移入後，按鈕父容器變成 `display: none`；Menu 的 `aria-expanded` 仍為 true，但 Mantine 的 hideDetached 將選單也隱藏。僅在測試瀏覽器暫時固定按鈕顯示，即可讓移入檢查通過，確認是定位按鈕的可見性問題。
+- 修正：`PageTreeItem` 明確追蹤目前選單開啟狀態，列上加入 `data-menu-open`；CSS 在開啟期間保留動作按鈕。保留正常的定位／關閉機制，不把整個側欄按鈕永久顯示。
+- 保留真實瀏覽器迴歸腳本 `scripts/check-sidebar-menu.mjs`，只對一次性測試容器執行；合成帳號隨機產生，憑證僅留暫存檔，不輸出或提交。驗證滑鼠移入後持續可見、加入最愛確實送達伺服器、右鍵選單、Escape、鍵盤 Enter 開啟及點外關閉。修正後結果：`PASS 桌面「…」移入選單、選單操作、右鍵、Escape、鍵盤開啟與點外關閉`。測試會等待選單關閉動畫及 API 回應，避免把動畫中的兩個選單誤判為重複元素。
+- 本輪命令：以 Node 22.23.1／npm 10.9.8 執行 `npm run check`，其中 `npm run typecheck`、`npm run lint`、`npm test`（24 檔／129 tests）與 `npm run build` 全通過；瀏覽器腳本最後調整後再跑 `npm run lint` 通過。`docker compose up --build --wait` healthy；`npm run test:app -- http://127.0.0.1:8080`（含 `/healthz` 200）30 項 PASS。
+- 瀏覽器執行方式（需先啟動資料可拋棄的測試實例）：`NOTES_PLAYWRIGHT_MODULE=/tmp/notes-offline-browser/node_modules/playwright/index.mjs NOTES_CHROME_PATH='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' node scripts/check-sidebar-menu.mjs http://127.0.0.1:18082`。也可在已安裝 Playwright／Chromium 的環境省略這兩個環境變數。Playwright 沒有加入正式依賴。
+- 預防：使用 hover 顯示的按鈕作為 Portal 選單定位點時，開啟狀態也必須維持定位點可見。這類 CSS 與浮動定位交互作用需用真實瀏覽器驗證；jsdom 的 Mantine test 環境會略過 hideDetached，不能單獨涵蓋本次症狀。暫時 CSS／除錯輸出均已移除，沒有更動資料庫或同步協定。
+
+## M8 離線筆記（2026-11-09）
+
+- 環境：macOS；最終檢查使用暫存安裝的 Node **22.23.1**、npm **10.9.8**，符合專案 engines。正式容器也使用鎖定的 Node 22.23.1 映像。最初本機預設 Node 24 的試跑不作為唯一驗收依據。
+- `PATH=/tmp/notes-node22/node_modules/node/bin:/tmp/notes-node22/node_modules/.bin:$PATH npm run check`：依序執行 `npm run typecheck`、`npm run lint`、`npm test`、`npm run build`，全數通過；**24 檔／129 tests**。最後補上 PWA 靜態檢查後再執行 `npm run lint`，通過。建置仍有既有主 bundle 超過 500 kB 提示；Node 22 的 node:sqlite experimental 提示保留，沒有隱藏測試失敗。
+- 新增 `tests/server/offline.test.ts`：同操作重送不重複建頁／增版；內文與標題基準衝突；明確覆蓋保存快照；登入、CSRF、If-Match、跨帳號 404、無效內容交易回退、拒絕資料庫離線同步。既有 migration 測試確認新 migration 只跑一次；搜尋 migration 的預期清單加入 0007。
+- 新增 `tests/client/offline.test.ts`，使用 exact `fake-indexeddb@6.2.8`：持久草稿與新頁、重新載入模組後從 IndexedDB 讀回、未持久保存 CSRF、回應遺失時固定 operationId、送出期間繼續輸入不被舊回應清除、409 保留草稿與明確覆蓋、另一分頁草稿比較、404 不回退、不同登入不重播、失效登入保留草稿、登出清除及父頁先於子頁同步。
+- 新增 `tests/client/offlineAutosave.test.ts`：真正 autosave hook 與 IndexedDB 整合，驗證本機保存後顯示待同步；載入另一分頁草稿不會刪掉該分頁尚未同步的內容。新增 `tests/server/offlineShell.test.ts`：以 Service Worker 事件模擬器確認離線深連結回介面、JSON／寫入不攔截、附件帳號隔離、401 不回退快取及下載／sandbox 標頭保留。這些模擬不等同手機實機。
+- `docker compose up --build --wait`：最終映像建置成功，`notes-app-1` healthy。`curl -fsS http://127.0.0.1:8080/healthz` 回 `ok`、HTTP 200。`npm run test:app -- http://127.0.0.1:8080`：**30 項 PASS**，含新增 manifest、Service Worker JavaScript／重新驗證標頭、已替換的離線資源清單與圖示。
+- 真正 Chrome（無頭模式，390×844、觸控手機視口）對最終 production 映像的隔離容器實測：① 連線建立筆記後切斷網路，編輯並確認 IndexedDB 寫入，離線重新載入仍有標題與內文；② 離線新增另一篇，完成保存後重新載入仍有內容；③ 恢復連線後自動同步，直接從伺服器 API 回讀兩篇內容均正確；④ 手機離線修改，同時透過另一 HTTP 請求修改伺服器，再連線會顯示衝突並保留手機草稿；點選明確覆蓋後，手機內容同步成功，遠端被覆蓋內容可從歷史 API 回讀。四組流程全部通過。
+- 瀏覽器使用本機 `.local/validation/offline-smoke.mjs`，Playwright **1.65.0** 裝在 `/tmp/notes-offline-browser`，未加入正式依賴；合成帳號與密碼皆隨機產生，不輸出到紀錄。測試使用 `notes-offline-smoke` 一次性容器與 `/data` tmpfs，沒有把合成帳號寫進正式 volume。手機版截圖存於 gitignored `.local/validation/offline-mobile.png`。
+- 瀏覽器腳本初版曾在新頁面導向前輸入舊頁面，及以未完成的 UI 狀態作為保存完成依據；已修正為等待新 URL，並核對當前頁面的 IndexedDB 內容後才重載，最終重跑通過。另補強標題編輯期間不被背景載入清除、按 Enter／失焦完成標題保存。
+- 限制：尚未用 iPhone Safari、Android 實體手機、真實 IME／鍵盤、手機 HTTPS、OS 背景終止／空間回收驗收。本次 Chrome 使用 localhost 的安全環境例外，不能把它當成手機明文 HTTP 也支援。PWA 附件有 20 MB／檔及最近 100 檔限制；資料庫、留言、新附件上傳與其他頁面設定不納入離線修改。操作說明見 [OFFLINE.md](OFFLINE.md)。
+
 每個里程碑記錄實際執行的命令、結果、限制與人工測試方式。
 
 最新結果（2026-11-08）：M0–M5／M7 與後續追加功能完成；文字選取面板、留言與表情反應已驗證。最終 `npm run check` 全通過（97 tests／17 個測試檔），Docker healthy、`/healthz` 200，`test:app` 25 項 PASS。以下保留各次實際紀錄，最新內容在末段。

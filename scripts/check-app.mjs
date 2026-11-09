@@ -31,6 +31,15 @@ async function main() {
   check('SPA fallback', spa.response.status === 200 && spa.text.includes('<div id="root">'));
   check('SPA fallback no-cache', (spa.response.headers.get('cache-control') ?? '').includes('no-cache'));
 
+  const manifest = await fetchText('/manifest.webmanifest');
+  check('PWA manifest', manifest.response.status === 200 && JSON.parse(manifest.text).display === 'standalone');
+  const worker = await fetchText('/sw.js');
+  check('service worker JavaScript', worker.response.status === 200 && (worker.response.headers.get('content-type') ?? '').includes('javascript'));
+  check('service worker revalidates', worker.response.headers.get('cache-control') === 'no-cache' && worker.response.headers.get('service-worker-allowed') === '/');
+  check('offline asset list built', worker.text.includes('notes-shell-') && worker.text.includes('/assets/') && !worker.text.includes('__NOTES_SHELL__'));
+  const icon = await fetchText('/notes-icon.svg');
+  check('PWA icon', icon.response.status === 200 && icon.text.startsWith('<svg'));
+
   for (const route of ['/api/pages/tree', '/api/search?q=x', '/api/auth/me', '/api/admin/users', '/api/trash']) {
     const { response } = await fetchText(route);
     check(`${route} needs login`, response.status === 401);

@@ -2,9 +2,21 @@
 
 更新：2026-11-09。動手前讀本文件、[AGENTS.md](../AGENTS.md)、[ARCHITECTURE.md](ARCHITECTURE.md)、[DEPLOY.md](DEPLOY.md)。
 
+桌面側欄「…」選單滑鼠移入即消失已修正：Portal 選單離開頁面列的 hover／focus 區域後，原本會讓定位按鈕 display:none，Mantine 因此隱藏選單。現在以 `menuOpened`／`data-menu-open` 在開啟期間保留按鈕可見。`scripts/check-sidebar-menu.mjs` 已先重現失敗再驗證通過，包含滑鼠、實際選單動作、右鍵、Escape、鍵盤與點外關閉；129 tests、typecheck、lint、build、容器及 30 項靜態檢查通過。詳見 VALIDATION 對應段落。
+
+## 本輪追加：M8 離線筆記（2026-11-09）
+
+使用者已授權實作 iOS／Android 共用的 PWA 離線筆記。一般筆記支援離線開啟、新增（含已下載父頁底下的子頁）、標題與 BlockNote 內文編輯、IndexedDB 持久保存、前景自動同步、版本衝突及草稿匯出／捨棄。手機需 HTTPS；不承諾關閉後背景同步。資料庫、列屬性、留言、新附件上傳與其他頁面設定維持連線操作。完整操作與限制見 [OFFLINE.md](OFFLINE.md)，協定見 ARCHITECTURE 的 M8 段落。
+
+新增 migration `0007_offline_operations`，同步交易保存最後一次操作回應，支援回應遺失後安全重試。所有筆記依帳號隔離；不將 session／CSRF／密碼持久保存。附件改為重新授權的 HTTP 快取，Service Worker 的帳號獨立快取保留原下載／sandbox 標頭，最多 20 MB／檔、最近 100 檔。
+
+本輪以 Node 22.23.1／npm 10.9.8 執行 typecheck、lint、24 檔／129 tests、build，全部通過；容器以同版本 Node 建置且 healthy，`/healthz` 200，`test:app` 新增 PWA 檢查後共 30 項 PASS。Chrome 手機視口實測離線重載、離線新增後重載、恢復連線自動同步、衝突保留草稿與明確覆蓋歷史均通過。沒有 iOS／Android 實體手機、Safari 引擎、真實鍵盤／IME 或手機 HTTPS 的實機驗收。
+
+本輪工作環境為 macOS，正式 compose 在 `http://127.0.0.1:8080/`；以下舊紀錄的 Windows／8081 為先前環境。瀏覽器測試使用另一個一次性容器與記憶體資料目錄，合成帳號沒有寫入正式 volume。測試依賴只新增 exact `fake-indexeddb@6.2.8`；Playwright 與 Node 22 驗證工具放暫存目錄，沒有加到正式依賴。M8 與側欄選單修正整併至 1.0.4，發布說明見 [releases/1.0.4.md](releases/1.0.4.md)。
+
 ## 目前狀態
 
-目前套件版本為 **1.0.3**，本機容器 `/api/version` 已實測回報同版本；發布前重跑的檢查皆通過，詳見 VALIDATION 的 1.0.3 段落。
+目前套件版本為 **1.0.4**，包含 M8 離線筆記與桌面側欄選單修正；本機容器 `/api/version` 已回報同版本。發布前已完成線上備份、129 tests 與全部靜態／建置檢查，容器 healthy、30 項冒煙檢查通過。詳見 VALIDATION 的 1.0.4 段落。以下保留 1.0.3 與更早版本的歷史紀錄。
 
 2026-11-09 手機格式面板修正納入 1.0.3，已套用本機容器：手機保留原生長按選單，主動點「格式與段落」才開底部面板；段落類型在面板內切換，桌面第一項子選單也補上焦點保護。保存並映射原選取範圍，支援連續格式操作、留言切換與鍵盤避讓；中文組字期間隱藏入口。最新 typecheck、lint、20 檔／116 tests、build 全過，容器 healthy、healthz 200、靜態檢查 25 項 PASS。依使用者指示略過瀏覽器測試，未做實體手機／真實 IME 驗收。
 

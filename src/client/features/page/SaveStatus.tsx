@@ -1,10 +1,10 @@
 import { Button, Group, Text } from '@mantine/core';
 import type { SaveState } from './useAutosave.ts';
 
-const labels: Record<SaveState, string> = { clean: '已儲存', dirty: '編輯中', saving: '儲存中…', conflict: '有衝突', error: '儲存失敗', offline: '離線，稍後重試' };
+const labels: Record<SaveState, string> = { clean: '已同步', dirty: '編輯中', saving: '儲存中…', conflict: '有衝突', error: '儲存失敗', offline: '尚未儲存，請勿關閉', local: '已存此裝置，待同步' };
 
 export function SaveStatus({ status, error, onRetry }: { status: SaveState; error: string | null; onRetry?: () => void }) {
-  const tone = status === 'conflict' || status === 'error' ? 'red' : status === 'offline' ? 'orange' : 'dimmed';
+  const tone = status === 'conflict' || status === 'error' ? 'red' : status === 'offline' || status === 'local' ? 'orange' : 'dimmed';
   return <Group gap={6} wrap="nowrap" className="save-status" data-status={status} title={error ?? undefined}>
     <span className="save-status__dot" />
     <Text size="xs" c={tone}>{labels[status]}</Text>

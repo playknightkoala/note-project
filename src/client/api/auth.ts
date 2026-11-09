@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { AdminUserDto, AuthStatusDto, InviteDto, LoginInput, RegisterInput, SessionDto, UserDto } from '@shared/api';
 import { api, isApiError, setCsrfToken } from './client.ts';
+import { cachedUser, forgetOfflineData, offlineNotes, rememberUser, revokeOfflineEntry, transient } from '../offline/notes.ts';
 
 export const authKeys = { me: ['me'] as const, status: ['auth', 'status'] as const, users: ['admin', 'users'] as const, invites: ['admin', 'invites'] as const };
 
@@ -8,15 +9,17 @@ async function fetchMe(): Promise<UserDto | null> {
   try {
     const session = await api<SessionDto>('GET', '/api/auth/me');
     setCsrfToken(session.csrfToken);
+    await rememberUser(session.user);
     return session.user;
   } catch (error) {
-    if (isApiError(error, 401)) { setCsrfToken(null); return null; }
+    if (isApiError(error, 401)) { setCsrfToken(null); await revokeOfflineEntry(); return null; }
+    if (transient(error)) { const cached = await cachedUser(); if (cached) return cached; }
     throw error;
   }
 }
 
 export function useMe() {
-  return useQuery({ queryKey: authKeys.me, queryFn: fetchMe, staleTime: 5 * 60 * 1000, retry: false });
+  return useQuery({ queryKey: authKeys.me, queryFn: fetchMe, networkMode: 'always', staleTime: 5 * 60 * 1000, retry: false });
 }
 
 export function useAuthStatus() {
@@ -27,8 +30,10 @@ function useSessionMutation<TInput>(path: string) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (input: TInput) => api<SessionDto>('POST', path, { json: input }),
-    onSuccess: session => {
+    onSuccess: async session => {
       setCsrfToken(session.csrfToken);
+      queryClient.clear();
+      await rememberUser(session.user);
       queryClient.setQueryData(authKeys.me, session.user);
       void queryClient.invalidateQueries({ queryKey: authKeys.status });
     },
@@ -41,7 +46,11 @@ export const useRegister = () => useSessionMutation<RegisterInput>('/api/auth/re
 export function useLogout() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: () => api<void>('POST', '/api/auth/logout'),
+    mutationFn: async () => {
+      if ((await offlineNotes()).some(note => note.pending)) throw new Error('此裝置仍有尚未同步的筆記，請先同步或匯出草稿，再登出。');
+      await api<void>('POST', '/api/auth/logout');
+      await forgetOfflineData();
+    },
     onSuccess: () => { setCsrfToken(null); queryClient.clear(); },
   });
 }

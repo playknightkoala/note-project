@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { ActionIcon, Menu } from '@mantine/core';
@@ -14,6 +15,7 @@ interface Props { row: FlatRow; depth: number; active: boolean; dragging: boolea
 
 export function PageTreeItem({ row, depth, active, dragging, dragEnabled }: Props) {
   const { expanded, setExpanded } = useUiState();
+  const [menuOpened, setMenuOpened] = useState(false);
   const navigate = useNavigate();
   const create = useCreatePage();
   const favorite = useToggleFavorite();
@@ -35,7 +37,7 @@ export function PageTreeItem({ row, depth, active, dragging, dragEnabled }: Prop
     <Menu.Item color="red" leftSection={<Trash2 size={14} />} onClick={() => trash.mutate({ id: node.id }, { onSuccess: () => { if (active) navigate('/'); } })}>移至垃圾桶</Menu.Item>
   </>;
   return <ContextMenu label="側欄頁面右鍵選單" items={items}>{handlers => <div ref={sortable.setNodeRef} style={style} className={`tree-row${active ? ' tree-row--active' : ''}`} data-id={node.id}
-    {...sortable.attributes} {...sortable.listeners} onClick={() => navigate(`/p/${node.id}`)} {...handlers} role="treeitem" aria-expanded={node.hasChildren ? open : undefined} aria-level={depth + 1}>
+    {...sortable.attributes} {...sortable.listeners} onClick={() => navigate(`/p/${node.id}`)} {...handlers} data-menu-open={menuOpened || undefined} role="treeitem" aria-expanded={node.hasChildren ? open : undefined} aria-level={depth + 1}>
     <button type="button" className={`tree-row__chevron${node.hasChildren ? '' : ' tree-row__chevron--empty'}`} aria-label={open ? '收合' : '展開'} tabIndex={-1}
       onClick={event => { event.stopPropagation(); if (node.hasChildren) setExpanded(node.id, !open); }} onPointerDown={event => event.stopPropagation()}>
       <ChevronRight size={14} style={{ transform: open ? 'rotate(90deg)' : undefined, transition: 'transform 120ms' }} />
@@ -43,7 +45,7 @@ export function PageTreeItem({ row, depth, active, dragging, dragEnabled }: Prop
     <span className="tree-row__icon">{node.icon ?? (node.kind === 'database' ? <Database size={15} /> : <FileText size={15} />)}</span>
     <span className="tree-row__title">{node.title || '無標題'}</span>
     <span className="tree-row__actions" onClick={event => event.stopPropagation()} onPointerDown={event => event.stopPropagation()}>
-      <Menu position="bottom-start" shadow="md" width={200} withinPortal>
+      <Menu opened={menuOpened} onChange={setMenuOpened} position="bottom-start" shadow="md" width={200} withinPortal>
         <Menu.Target><ActionIcon variant="subtle" color="gray" size="sm" aria-label="頁面選項"><MoreHorizontal size={14} /></ActionIcon></Menu.Target>
         <Menu.Dropdown>{items}</Menu.Dropdown>
       </Menu>

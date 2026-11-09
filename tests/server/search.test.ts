@@ -93,7 +93,7 @@ it('migrates an existing index without losing notes and rebuilds external conten
     migrate(db, migrations.slice(0, 2));
     db.run("INSERT INTO users (id, email, display_name, password_hash, role, created_at, updated_at) VALUES ('u', 'migration@example.test', '遷移測試', 'synthetic', 'admin', 1, 1)");
     db.run("INSERT INTO pages (id,user_id,title,content_text,created_at,updated_at) VALUES ('p','u','既有筆記','完整搜尋功能',1,1)");
-    expect(migrate(db)).toEqual(['0003_search_content', '0004_database_versions', '0005_annotations', '0006_database_views']);
+    expect(migrate(db)).toEqual(['0003_search_content', '0004_database_versions', '0005_annotations', '0006_database_views', '0007_offline_operations']);
     expect(db.get<{ content_text: string }>('SELECT content_text FROM page_fts WHERE page_fts MATCH ?', '搜尋功能')?.content_text).toBe('完整搜尋功能');
     expect(migrate(db)).toEqual([]);
     expect(db.get<{ n: number }>('SELECT COUNT(*) AS n FROM pages')?.n).toBe(1);

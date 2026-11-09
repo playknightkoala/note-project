@@ -7,18 +7,19 @@ export function PageTitle({ value, onChange, onEnter }: { value: string; onChang
   const ref = useRef<HTMLTextAreaElement>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastSent = useRef(value);
-  useEffect(() => { if (value !== lastSent.current) { setDraft(value); lastSent.current = value; } }, [value]);
+  useEffect(() => { if (!timer.current && value !== lastSent.current) { setDraft(value); lastSent.current = value; } }, [value]);
   useEffect(() => { const el = ref.current; if (el) { el.style.height = '0px'; el.style.height = `${el.scrollHeight}px`; } }, [draft]);
   useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
   const update = (next: string) => {
     setDraft(next);
     if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(() => { lastSent.current = next; onChange(next); }, 400);
+    timer.current = setTimeout(() => { timer.current = null; lastSent.current = next; onChange(next); }, 400);
   };
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.nativeEvent.isComposing) return;
-    if (event.key === 'Enter' || event.key === 'ArrowDown') { event.preventDefault(); if (timer.current) { clearTimeout(timer.current); lastSent.current = draft; onChange(draft); } onEnter(); }
+    if (event.key === 'Enter' || event.key === 'ArrowDown') { event.preventDefault(); if (timer.current) { clearTimeout(timer.current); timer.current = null; lastSent.current = draft; onChange(draft); } onEnter(); }
   };
-  return <textarea ref={ref} className="page-title" value={draft} placeholder="無標題" rows={1} spellCheck={false} aria-label="頁面標題"
-    onChange={event => update(event.currentTarget.value.replace(/\r?\n/g, ' '))} onKeyDown={onKeyDown} />;
+  const flush = () => { if (timer.current) { clearTimeout(timer.current); timer.current = null; lastSent.current = draft; onChange(draft); } };
+  return <textarea ref={ref} className="page-title" value={draft} placeholder="無標題" rows={1} maxLength={500} spellCheck={false} aria-label="頁面標題"
+    onChange={event => update(event.currentTarget.value.replace(/\r?\n/g, ' '))} onKeyDown={onKeyDown} onBlur={flush} />;
 }

@@ -31,14 +31,14 @@ export function fileRoutes(): Hono<AppEnv> {
     const deps = c.get('deps');
     const row = loadFile(deps.db, c.get('auth')!.user.id, c.req.param('id'));
     const etag = `"${row.sha256}"`;
-    if (c.req.header('if-none-match') === etag) return c.body(null, 304, { ETag: etag, 'Cache-Control': 'private, max-age=31536000, immutable' });
+    if (c.req.header('if-none-match') === etag) return c.body(null, 304, { ETag: etag, 'Cache-Control': 'private, no-cache' });
     const path = blobPath(deps.config.dataDir, row.sha256);
     let size: number;
     try { size = statSync(path).size; } catch { throw new AppError('not_found', '檔案內容遺失。'); }
     const inline = servesInline(row.mime);
     const disposition = `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(row.original_name)}`;
     const headers: Record<string, string> = {
-      'Content-Type': row.mime, 'Content-Length': String(size), ETag: etag, 'Cache-Control': 'private, max-age=31536000, immutable',
+      'Content-Type': row.mime, 'Content-Length': String(size), ETag: etag, 'Cache-Control': 'private, no-cache', 'X-Notes-User': c.get('auth')!.user.id,
       'Content-Disposition': disposition, 'X-Content-Type-Options': 'nosniff', 'Cross-Origin-Resource-Policy': 'same-origin', 'Referrer-Policy': 'no-referrer',
     };
     if (!inline) headers['Content-Security-Policy'] = 'sandbox';

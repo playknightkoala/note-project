@@ -69,7 +69,8 @@
 .tree-row__icon { display: inline-flex; align-items: center; justify-content: center; width: 20px; flex: none; font-size: 15px; }
 .tree-row__title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tree-row__actions { display: none; align-items: center; gap: 0; flex: none; }
-.tree-row:hover .tree-row__actions, .tree-row:focus-within .tree-row__actions { display: inline-flex; }
+/* The portaled menu leaves the row's hover/focus area; keep its positioning target visible while open. */
+.tree-row:hover .tree-row__actions, .tree-row:focus-within .tree-row__actions, .tree-row[data-menu-open] .tree-row__actions { display: inline-flex; }
 
 /* BlockNote: map its variables to the app tokens so both colour schemes follow the shell. */
 .block-editor .bn-container { --bn-colors-editor-background: transparent; --bn-colors-editor-text: var(--app-fg); --bn-colors-menu-background: var(--app-bg);

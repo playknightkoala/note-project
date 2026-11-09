@@ -32,6 +32,8 @@ NOTES_BIND=0.0.0.0
 
 ## 公開到網際網路
 
+手機的離線筆記功能也需要 HTTPS；區網明文 HTTP 仍可一般連線使用，但不會啟用離線介面。部署及升級後，先連線開啟「離線與同步」完成介面準備與筆記下載，詳見 [OFFLINE.md](OFFLINE.md)。反向代理應讓 `/sw.js` 保持 `Cache-Control: no-cache`，不要另外長期快取 Service Worker 或登入 API。
+
 瀏覽器只在安全環境（HTTPS，或 `localhost`／`127.0.0.1`）允許本站需要的功能，而且密碼與 cookie 不能走明文，所以對外一定要 HTTPS。
 
 1. 準備真實主機名的憑證與私鑰（Let's Encrypt、Cloudflare Origin Certificate 等）。

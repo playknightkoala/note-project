@@ -1,6 +1,6 @@
 {
   "name": "notes",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "private": true,
   "description": "Notion 式筆記網站：自有帳號、BlockNote 區塊編輯、SQLite 單容器部署",
   "type": "module",
@@ -58,6 +58,7 @@
     "@vitejs/plugin-react": "6.2.1",
     "esbuild": "0.28.2",
     "eslint": "9.39.5",
+    "fake-indexeddb": "6.2.8",
     "globals": "17.14.0",
     "jsdom": "29.1.1",
     "typescript": "5.9.3",

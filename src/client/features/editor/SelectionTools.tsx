@@ -18,13 +18,13 @@ import { MobileSelectionTools } from './MobileSelectionTools.tsx';
 type Bookmark = ReturnType<AppEditor['prosemirrorState']['selection']['getBookmark']>;
 interface Pending { quote: string; blockIds: string[]; mode: 'comment' | 'reaction' }
 
-export function SelectionTools({ editor, pageId, composing = false }: { editor: AppEditor; pageId: string; composing?: boolean }) {
+export function SelectionTools({ editor, pageId, composing = false, annotationsEnabled = true }: { editor: AppEditor; pageId: string; composing?: boolean; annotationsEnabled?: boolean }) {
   const mobile = useMediaQuery('(max-width: 767px), (pointer: coarse)', undefined, { getInitialValueInEffect: false });
   const client = useQueryClient();
   const me = useMe();
   const path = `/api/pages/${pageId}/annotations`;
   const queryKey = ['annotations', me.data?.id, pageId];
-  const annotations = useQuery({ queryKey, queryFn: ({ signal }) => api<{ annotations: Annotation[] }>('GET', path, { signal }), enabled: !!me.data, refetchInterval: 15_000 });
+  const annotations = useQuery({ queryKey, queryFn: ({ signal }) => api<{ annotations: Annotation[] }>('GET', path, { signal }), enabled: !!me.data && annotationsEnabled, refetchInterval: 15_000 });
   const [opened, setOpened] = useState(false);
   const [pending, setPending] = useState<Pending | null>(null);
   const bookmark = useRef<Bookmark | null>(null);
@@ -85,8 +85,10 @@ export function SelectionTools({ editor, pageId, composing = false }: { editor: 
   }, [editor, annotations.data, mobile, composing]);
 
   const mutation = useMutation({
+    networkMode: 'always',
     onMutate: () => client.cancelQueries({ queryKey }),
     mutationFn: async ({ create, change }: { create?: CreateAnnotation; change?: { annotation: Annotation; input: ChangeAnnotation } }) => {
+      if (!annotationsEnabled) throw new Error('留言與反應需要連線，且筆記須先完成同步。');
       if (create) return api<{ annotation: Annotation }>('POST', path, { json: create });
       if (!change) throw new Error('請選擇討論。');
       return api<{ annotation: Annotation }>('PATCH', `${path}/${change.annotation.id}`, { json: change.input, headers: { 'If-Match': `"${change.annotation.version}"` } });
@@ -125,6 +127,7 @@ export function SelectionTools({ editor, pageId, composing = false }: { editor: 
     {mobile ? <MobileSelectionTools editor={editor} composing={composing} suspended={opened} onAnnotate={begin} /> : !composing && !opened && <DesktopFormattingToolbarController formattingToolbar={toolbar} />}
     <div className="selection-discussions"><Button variant="subtle" color="gray" size="compact-xs" leftSection={<MessageSquare size={14} />} onClick={() => { setPending(null); setSelectedId(null); setOpened(true); }}>留言與反應 {annotations.data?.annotations.filter(item => !item.resolved).length || ''}</Button></div>
     <Drawer opened={opened} onClose={close} title="留言與表情反應" position="right" size="sm" keepMounted={false} closeOnClickOutside={false} closeButtonProps={{ 'aria-label': '關閉留言' }}>
+      {!annotationsEnabled && <Alert color="orange">留言與反應需要連線，且筆記須先完成同步。內文格式仍可離線編輯。</Alert>}
       <Stack gap="sm">
         {annotations.isError && <Alert color="red">{errorText(annotations.error)}<Button variant="subtle" onClick={() => { void annotations.refetch(); }}>重新載入</Button></Alert>}
         {failure && <Alert color="red" role="alert">{failure}</Alert>}

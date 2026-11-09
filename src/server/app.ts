@@ -17,6 +17,7 @@ import { staticRoutes } from './static.ts';
 import { searchRoutes } from './routes/search.ts';
 import { databaseRoutes, rowRoutes } from './routes/databases.ts';
 import { annotationRoutes } from './routes/annotations.ts';
+import { offlineRoutes } from './routes/offline.ts';
 
 export interface AppDeps {
   db: Db;
@@ -72,6 +73,7 @@ export function createApp(input: Omit<AppDeps, 'now' | 'rateLimiter'> & Partial<
   app.route('/api/search', searchRoutes());
   app.route('/api/databases', databaseRoutes());
   app.route('/api/rows', rowRoutes());
+  app.route('/api/offline', offlineRoutes());
 
   app.notFound(c => c.req.path.startsWith('/api/')
     ? c.json(errorBody(new AppError('not_found')), 404)
