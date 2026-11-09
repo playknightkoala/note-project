@@ -1,5 +1,16 @@
 # 驗證紀錄
 
+## 1.0.5 自動下載、同步提示與附件容量（2026-11-09）
+
+- 版本更新為 1.0.5；沒有新增依賴、沒有資料庫 migration。新增 `/api/offline/manifest`，依帳號提供不含內文的版本與頁面資訊，支援一般筆記增量下載、遠端刪除標記、衝突草稿保留與同步完成時間。附件上傳預設改為 90 MB，離線附件預設 500 MB 總容量、可設定 100–10,000 MB。
+- `PATH=/tmp/notes-node22/node_modules/node/bin:/tmp/notes-node22/node_modules/.bin:$PATH npm run check`：Node 22.23.1／npm 10.9.8 下，`npm run typecheck`、`npm run lint`、`npm test`（**25 檔／142 tests**）、`npm run build` 通過。仍有既有 SQLite experimental 與主 bundle 超過 500 kB 提示。
+- 測試涵蓋：只下載新增或 metadata／版本變動的筆記；失敗退避與手動重試；部分下載失敗不宣稱完成；跨帳號 manifest／下載途中切換帳號；pending 衝突草稿不被下載覆蓋；刪除的乾淨副本不可離線開啟、後續本機救援草稿仍可讀；處理衝突時另一分頁改動草稿不被捨棄。伺服器驗證 ancestor 改名、搬移、刪除與帳號隔離，明確覆蓋仍核對 title baseline。Service Worker 驗證超過 20 MB、超過 100 個附件、依總容量淘汰、並行寫入與降低容量清理；狀態 UI 驗證傳輸中／失敗不冒稱完成，成功有完成提示與時間。
+- 升級前執行 `docker compose exec -T app node dist/server/cli.js backup`，SQLite 線上備份成功。`docker compose up --build --wait` 完成並 healthy；`docker compose exec -T app printenv MAX_UPLOAD_MB` 實際回報 90。沒有輸出其他環境設定，沒有直接複製使用中的 SQLite。
+- `npm run test:app -- http://127.0.0.1:8080`：**31 項 PASS**，包含 `/healthz` 200、PWA 資源、安全標頭與新增 manifest 的未登入 401。
+- 真實 Chrome 手機視口（390×844、觸控、localhost 安全環境例外），對 production 映像的獨立容器與 `/data` tmpfs 執行 `NOTES_PLAYWRIGHT_MODULE=/tmp/notes-offline-browser/node_modules/playwright/index.mjs NOTES_CHROME_PATH='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' /tmp/notes-node22/node_modules/node/bin/node scripts/check-offline-sync.mjs http://127.0.0.1:18083`：首次自動下載、切回前景下載遠端新增與修改、未造訪筆記離線開啟、本機草稿重載、恢復連線衝突保留／匯出、明確覆蓋及歷史保存、明確載入線上版本、**21 MB 真實附件上傳與 Service Worker 快取**、容量設定改為 700 MB，皆 PASS，沒有未捕捉的前端錯誤。合成帳密僅存在程序記憶體，沒有寫入正式 volume 或文件。
+- 驗收腳本初輪最後一項曾因全形「／」選取條件寫成半形而逾時；修正選取條件、使用全新測試實例後全數通過。新增腳本的瀏覽器 globals lint 問題已改為 globalThis 存取並重跑完整檢查。
+- 限制：沒有 iPhone Safari／Android 實體手機、手機 HTTPS、真實鍵盤／IME、OS 背景終止與儲存回收實測；也沒有從外部 Cloudflare Tunnel 實傳 90 MB 或測量瀏覽器可用的最大快取容量。大檔實測為本機 21 MB，Cloudflare 部署仍受其帳號與代理設定限制。手機關閉後不保證背景同步。升級後關閉所有舊分頁／網站 App 再連線開啟，讓新的 Service Worker 接手。
+
 ## 1.0.4 發布前檢查（2026-11-09）
 
 - package.json 與 package-lock.json 根套件版本同步為 1.0.4；本版新增的測試依賴 `fake-indexeddb` 固定為 6.2.8，其餘依賴版本未變更。

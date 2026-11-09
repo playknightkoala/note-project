@@ -1,5 +1,6 @@
 import type { PageHeadDto, PageNode, PageResponse, SessionDto, TreeDto, UserDto } from '@shared/api';
-import type { SyncNoteInput } from '@shared/offline';
+import { summarizePage } from '@shared/offline';
+import type { OfflineManifest, SyncNoteInput } from '@shared/offline';
 import { ApiError, api, isApiError, setCsrfToken } from '../api/client.ts';
 import { announceOfflineChange, clearLocal, listLocal, readLocal, updateLocal } from './storage.ts';
 
@@ -16,10 +17,30 @@ export interface OfflineNote {
   sending?: { input: SyncNoteInput; revision: string };
   problem?: string;
   conflict?: PageHeadDto;
+  removed?: boolean;
 }
 const writer = crypto.randomUUID();
 let user: UserDto | null = null;
 let syncing: Promise<void> | undefined;
+export const SYNC_EVENT = 'notes:sync-status';
+export const SYNC_TREE_EVENT = 'notes:tree-synced';
+export interface SyncStatus {
+  phase: 'idle' | 'syncing' | 'complete' | 'pending' | 'error';
+  completedAt: number | null;
+  error?: string;
+  maxUploadBytes?: number;
+}
+export let syncStatus: SyncStatus = { phase: 'idle', completedAt: null };
+let nextDownloadAt = 0, retryAt = 0, failures = 0;
+function setSyncStatus(status: SyncStatus): void {
+  syncStatus = status;
+  window.dispatchEvent(new Event(SYNC_EVENT));
+}
+async function restoreSyncStatus(owner: string): Promise<void> {
+  nextDownloadAt = 0; retryAt = 0; failures = 0;
+  const completedAt = await readLocal<number>(`synced:${owner}`).catch(() => undefined);
+  if (user?.id === owner) setSyncStatus({ phase: 'idle', completedAt: completedAt ?? null });
+}
 export let offlineStorageError: string | null = null;
 const pageKey = (userId: string, id: string) => `page:${userId}:${id}`;
 export const transient = (error: unknown) => isApiError(error) && (error.status === 0 || error.status >= 500);
@@ -30,20 +51,25 @@ function storageError(error: unknown): void {
 }
 
 export async function rememberUser(value: UserDto): Promise<void> {
+  const changed = user?.id !== value.id;
   user = value;
   try { await updateLocal<UserDto>('user', () => value); offlineStorageError = null; } catch (error) { storageError(error); }
+  if (changed) await restoreSyncStatus(value.id);
 }
 export async function cachedUser(): Promise<UserDto | null> {
-  try { user = await readLocal<UserDto>('user') ?? null; return user; } catch (error) { storageError(error); return null; }
+  try { user = await readLocal<UserDto>('user') ?? null; if (user) await restoreSyncStatus(user.id); return user; } catch (error) { storageError(error); return null; }
 }
 /** A known 401 revokes offline entry. Keep unsynced drafts for the same account's next login. */
 export async function revokeOfflineEntry(): Promise<void> {
   user = null;
+  setSyncStatus({ phase: 'idle', completedAt: null });
   setCsrfToken(null);
   await updateLocal('user', () => undefined).catch(storageError);
 }
 export async function forgetOfflineData(): Promise<void> {
   user = null;
+  nextDownloadAt = 0; retryAt = 0; failures = 0;
+  setSyncStatus({ phase: 'idle', completedAt: null });
   await clearLocal();
   if ('caches' in window) for (const name of await caches.keys()) if (name.startsWith('notes-files-')) await caches.delete(name);
 }
@@ -61,12 +87,13 @@ export async function cachePage(response: PageResponse, expectedUserId = user?.i
   if (!owner) return response;
   try {
     const note = await updateLocal<OfflineNote>(pageKey(owner.id, response.page.id), current => {
-      if (current?.pending) return current;
+      if (user?.id !== owner.id) throw new ApiError(401, 'unauthorized', '帳號已切換。');
+      if (current?.pending || (current && current.base.page.version > response.page.version)) return current;
       const changed = !current || JSON.stringify(current.base) !== JSON.stringify(response);
       return { userId: owner.id, base: response, local: response, revision: changed ? crypto.randomUUID() : current.revision, writer: changed ? '' : current.writer, isNew: false, pending: false };
     });
     return localResponse(note!);
-  } catch (error) { storageError(error); return response; }
+  } catch (error) { if (isApiError(error, 401)) throw error; storageError(error); return response; }
 }
 
 export async function loadNote(id: string): Promise<LocalPageResponse> {
@@ -78,6 +105,7 @@ export async function loadNote(id: string): Promise<LocalPageResponse> {
     if (!transient(error)) throw error;
     if (user?.id !== owner) throw error;
     const cached = await offlineNote(id);
+    if (cached?.removed && !cached.pending) throw new ApiError(404, 'not_found', '此筆記已在線上刪除，無法離線開啟。');
     if (cached) return localResponse(cached);
     throw new ApiError(0, 'internal', '此筆記尚未下載至此裝置，連線後開啟一次即可離線使用。');
   }
@@ -119,6 +147,7 @@ export async function createLocalNote(input: { title?: string; parentId?: string
   };
   const note: OfflineNote = { userId: user.id, base: response, local: response, revision: crypto.randomUUID(), writer, isNew: true, pending: true };
   await updateLocal<OfflineNote>(pageKey(user.id, id), () => note);
+  setSyncStatus({ ...syncStatus, phase: 'pending' });
   void syncNotes();
   return localResponse(note);
 }
@@ -132,6 +161,7 @@ async function editNote(id: string, change: { content?: unknown[]; title?: strin
     if (current.writer !== writer && current.revision !== expectedRevision) throw new ApiError(409, 'version_conflict', '另一個分頁已修改此裝置的草稿，請先重新載入。', { current: head(current), localConflict: true });
     return { ...current, local: { ...current.local, page: { ...current.local.page, ...change, updatedAt: Date.now() } }, revision: crypto.randomUUID(), writer, pending: true };
   });
+  setSyncStatus({ ...syncStatus, phase: 'pending' });
   void syncNotes();
   return note!;
 }
@@ -179,21 +209,80 @@ async function sendNote(owner: UserDto, id: string): Promise<void> {
   }
 }
 
-export function syncNotes(): Promise<void> {
+/** Download changed pages only; pending drafts always retain their original server baseline. */
+async function pullNotes(owner: UserDto): Promise<void> {
+  const manifest = await api<OfflineManifest>('GET', '/api/offline/manifest');
+  if (user?.id !== owner.id) return;
+  if (manifest.userId !== owner.id) throw new ApiError(401, 'unauthorized', '登入帳號已變更，請重新登入。');
+  await updateLocal<PageNode[]>(`tree:${owner.id}`, () => manifest.tree);
+  const known = await offlineNotes();
+  const active = new Set(manifest.pages.map(item => item.page.id));
+  for (const note of known) {
+    if (user?.id !== owner.id) return;
+    if (note.local.page.kind === 'page' && !active.has(note.local.page.id) && !note.isNew) {
+      await updateLocal<OfflineNote>(pageKey(owner.id, note.local.page.id), current => {
+        if (!current || user?.id !== owner.id || current.revision !== note.revision || current.pending) return current;
+        // Keep the baseline for an editor that has not flushed yet, but never offer a deleted page offline.
+        return { ...current, removed: true };
+      });
+    }
+  }
+  for (const summary of manifest.pages) {
+    if (user?.id !== owner.id) return;
+    const current = await offlineNote(summary.page.id);
+    if (current?.pending) continue;
+    if (current && !current.removed && JSON.stringify(summarizePage(current.base)) === JSON.stringify(summary)) continue;
+    const response = await api<PageResponse>('GET', `/api/pages/${summary.page.id}`);
+    if (response.page.trashedAt !== null) throw new ApiError(404, 'not_found', '筆記清單已變更，請重新同步。');
+    await cachePage(response, owner.id);
+    if (offlineStorageError) throw new Error(offlineStorageError);
+  }
+  if (user?.id === owner.id) {
+    setSyncStatus({ ...syncStatus, maxUploadBytes: manifest.maxUploadBytes });
+    window.dispatchEvent(new Event(SYNC_TREE_EVENT));
+  }
+}
+
+export function syncNotes({ force = false }: { force?: boolean } = {}): Promise<void> {
+  if (force) { nextDownloadAt = 0; retryAt = 0; }
   if (syncing) return syncing;
   syncing = (async () => {
     const owner = user;
-    if (!owner || navigator.onLine === false) return;
+    if (!owner || navigator.onLine === false || Date.now() < retryAt) return;
+    const pending = (await offlineNotes()).some(note => note.pending && !note.problem);
+    if (!pending && Date.now() < nextDownloadAt) return;
+    setSyncStatus({ ...syncStatus, phase: 'syncing', error: undefined });
     try {
       // Never replay one account's local queue under another account's cookies. CSRF is freshly fetched, not persisted.
       const session = await api<SessionDto>('GET', '/api/auth/me');
-      if (session.user.id !== owner.id || user?.id !== owner.id) return;
+      if (user?.id !== owner.id) return;
+      if (session.user.id !== owner.id) throw new ApiError(401, 'unauthorized', '登入帳號已變更，請重新登入。');
       setCsrfToken(session.csrfToken);
       for (const note of await offlineNotes()) {
         if (user?.id !== owner.id) break;
         await sendNote(owner, note.local.page.id);
       }
-    } catch (error) { if (!transient(error) && !isApiError(error, 401)) storageError(error); }
+      if (user?.id !== owner.id) return;
+      let downloaded = false;
+      if (Date.now() >= nextDownloadAt) {
+        await pullNotes(owner);
+        downloaded = true;
+        nextDownloadAt = Date.now() + 60_000;
+      }
+      if (user?.id !== owner.id) return;
+      if (offlineStorageError) throw new Error(offlineStorageError);
+      failures = 0; retryAt = 0;
+      const remaining = (await offlineNotes()).some(note => note.pending);
+      const completedAt = downloaded && !remaining ? Date.now() : syncStatus.completedAt;
+      if (downloaded && !remaining && !syncStatus.completedAt && navigator.storage?.persist) void navigator.storage.persist().catch(() => {});
+      if (downloaded && !remaining) await updateLocal<number>(`synced:${owner.id}`, () => completedAt!);
+      if (user?.id === owner.id) setSyncStatus({ ...syncStatus, phase: remaining ? 'pending' : completedAt ? 'complete' : 'idle', completedAt, error: undefined });
+    } catch (error) {
+      if (user?.id !== owner.id) return;
+      const retrySeconds = isApiError(error) ? Number(error.details?.retryAfterSeconds) || 0 : 0;
+      retryAt = Date.now() + Math.max(Math.min(15_000 * 2 ** failures++, 300_000), retrySeconds * 1000);
+      setSyncStatus({ ...syncStatus, phase: 'error', error: error instanceof Error ? error.message : '同步尚未完成，稍後自動重試。' });
+    }
   })().finally(() => { syncing = undefined; });
   return syncing;
 }
@@ -201,13 +290,18 @@ export function syncNotes(): Promise<void> {
 export async function resolveLocalNote(id: string, choice: 'reload' | 'overwrite', content?: unknown[]): Promise<LocalPageResponse> {
   const owner = user;
   if (!owner) throw new Error('請先登入。');
+  const original = await offlineNote(id);
   const fresh = await api<PageResponse>('GET', `/api/pages/${id}`);
+  if (user?.id !== owner.id) throw new Error('帳號已切換，請重新開啟筆記。');
   const note = await updateLocal<OfflineNote>(pageKey(owner.id, id), current => {
+    if (user?.id !== owner.id) throw new Error('帳號已切換，請重新開啟筆記。');
     if (!current) throw new Error('找不到本機草稿。');
-    if (choice === 'reload') return { ...current, base: fresh, local: fresh, revision: crypto.randomUUID(), writer, pending: false, isNew: false, sending: undefined, problem: undefined, conflict: undefined };
+    if (current.revision !== original?.revision) throw new ApiError(409, 'version_conflict', '處理衝突期間，另一個分頁已更新草稿，請重新檢查。');
+    if (fresh.page.trashedAt !== null) throw new ApiError(404, 'not_found', '此筆記已在線上刪除，請先匯出本機草稿。');
+    if (choice === 'reload') return { ...current, base: fresh, local: fresh, revision: crypto.randomUUID(), writer, pending: false, isNew: false, sending: undefined, problem: undefined, conflict: undefined, removed: undefined };
     const revision = crypto.randomUUID();
     const draft = content ?? current.local.page.content;
-    return { ...current, base: fresh, local: { ...fresh, page: { ...fresh.page, title: current.local.page.title, content: draft } }, revision, writer, pending: true, isNew: false, problem: undefined, conflict: undefined,
+    return { ...current, base: fresh, local: { ...fresh, page: { ...fresh.page, title: current.local.page.title, content: draft } }, revision, writer, pending: true, isNew: false, problem: undefined, conflict: undefined, removed: undefined,
       sending: { revision, input: { operationId: crypto.randomUUID(), baseVersion: fresh.page.version, baseTitle: fresh.page.title, parentId: fresh.page.parentId, title: current.local.page.title, content: draft, overwrite: true } } };
   });
   void syncNotes();
@@ -215,13 +309,7 @@ export async function resolveLocalNote(id: string, choice: 'reload' | 'overwrite
 }
 
 export async function downloadNotes(): Promise<void> {
-  const owner = user?.id;
-  const nodes = (await api<TreeDto>('GET', '/api/pages/tree')).pages;
-  if (!owner || user?.id !== owner) throw new Error('請先登入。');
-  await updateLocal<PageNode[]>(`tree:${owner}`, () => nodes);
-  for (const node of nodes) if (node.kind === 'page') {
-    await cachePage(await api<PageResponse>('GET', `/api/pages/${node.id}`), owner);
-    if (offlineStorageError) throw new Error(offlineStorageError);
-  }
+  await syncNotes({ force: true });
+  if (syncStatus.phase === 'error') throw new Error(syncStatus.error);
   if (navigator.storage?.persist) await navigator.storage.persist();
 }

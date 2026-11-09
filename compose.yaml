@@ -9,7 +9,7 @@ services:
     environment:
       TRUST_PROXY: "${NOTES_TRUST_PROXY:-0}"
       PUBLIC_ORIGIN: "${NOTES_PUBLIC_ORIGIN:-}"
-      MAX_UPLOAD_MB: "${NOTES_MAX_UPLOAD_MB:-20}"
+      MAX_UPLOAD_MB: "${NOTES_MAX_UPLOAD_MB:-90}"
       MAX_IMPORT_MB: "${NOTES_MAX_IMPORT_MB:-200}"
     volumes:
       - notes-data:/data

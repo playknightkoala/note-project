@@ -1,5 +1,18 @@
 import { z } from 'zod';
 import { pageIdSchema } from './api.ts';
+import type { PageResponse, PageNode } from './api.ts';
+
+/** Content versions plus all metadata (including ancestor names) used by an offline copy. */
+export function summarizePage(response: PageResponse) {
+  const { content: _content, ...page } = response.page;
+  return { page, breadcrumbs: response.breadcrumbs };
+}
+export interface OfflineManifest {
+  userId: string;
+  tree: PageNode[];
+  pages: ReturnType<typeof summarizePage>[];
+  maxUploadBytes: number;
+}
 
 /** A durable operation id makes retries safe even if the first response was lost. */
 export const syncNoteSchema = z.object({

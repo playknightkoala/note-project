@@ -2,7 +2,8 @@ import { afterEach, beforeEach, expect, it } from 'vitest';
 import { createTestApp } from '../helpers/app.ts';
 import type { TestApp, TestClient } from '../helpers/app.ts';
 import type { PageResponse } from '../../src/shared/api.ts';
-import type { SyncNoteInput } from '../../src/shared/offline.ts';
+import { summarizePage } from '../../src/shared/offline.ts';
+import type { OfflineManifest, SyncNoteInput } from '../../src/shared/offline.ts';
 
 let t: TestApp, client: TestClient;
 const block = (text: string) => [{ id: crypto.randomUUID(), type: 'paragraph', props: {}, content: [{ type: 'text', text, styles: {} }], children: [] }];
@@ -31,11 +32,44 @@ it('rejects outdated content and title baselines; explicit overwrite saves the o
   const input = operation({ baseVersion: initial.page.version, baseTitle: initial.page.title, title: '手機的新標題' });
   await client.request('PATCH', `/api/pages/${id}`, { json: { title: '電腦的新標題' } });
   expect((await save(id, input)).status).toBe(409);
-  const overwritten = await (await save(id, { ...input, overwrite: true })).json() as PageResponse;
+  const overwritten = await (await save(id, { ...input, baseTitle: '電腦的新標題', overwrite: true })).json() as PageResponse;
   expect(overwritten.page.title).toBe(input.title);
   const versions = await (await client.request('GET', `/api/pages/${id}/versions`)).json() as { versions: { title: string }[] };
   expect(versions.versions.some(v => v.title === '電腦的新標題')).toBe(true);
   expect((await save(id, operation({ baseVersion: initial.page.version, baseTitle: input.title }))).status).toBe(409);
+});
+
+it('requires a current title baseline even for an explicit overwrite', async () => {
+  const id = crypto.randomUUID();
+  const initial = await (await save(id, operation())).json() as PageResponse;
+  await client.request('PATCH', `/api/pages/${id}`, { json: { title: '處理衝突期間又改名' } });
+  expect((await save(id, operation({ baseVersion: initial.page.version, baseTitle: initial.page.title, overwrite: true }))).status).toBe(409);
+});
+
+it('provides an account-isolated manifest without content, tracking ancestor renames, moves and deletion', async () => {
+  expect((await t.client().request('GET', '/api/offline/manifest')).status).toBe(401);
+  const parent = await (await client.request('POST', '/api/pages', { json: { title: '上層' } })).json() as PageResponse;
+  const child = await (await client.request('POST', '/api/pages', { json: { title: '子頁', parentId: parent.page.id } })).json() as PageResponse;
+  await client.request('POST', '/api/pages', { json: { kind: 'database', title: '資料庫' } });
+  const get = async (who = client) => await (await who.request('GET', '/api/offline/manifest')).json() as OfflineManifest;
+  let manifest = await get();
+  expect(manifest.maxUploadBytes).toBe(90 * 1024 * 1024);
+  expect(manifest.pages).toHaveLength(2);
+  expect(manifest.pages.find(item => item.page.id === child.page.id)).toEqual(summarizePage(child));
+  expect(manifest.pages.every(item => !('content' in item.page))).toBe(true);
+  await client.request('PATCH', `/api/pages/${parent.page.id}`, { json: { title: '上層改名' } });
+  manifest = await get();
+  expect(manifest.pages.find(item => item.page.id === child.page.id)?.breadcrumbs[0]?.title).toBe('上層改名');
+  await client.request('POST', `/api/pages/${child.page.id}/move`, { json: { parentId: null, index: 0 } });
+  manifest = await get();
+  expect(manifest.pages.find(item => item.page.id === child.page.id)?.page.parentId).toBeNull();
+  await client.request('DELETE', `/api/pages/${parent.page.id}`);
+  expect((await get()).pages.map(item => item.page.id)).toEqual([child.page.id]);
+  const invitation = await (await client.request('POST', '/api/admin/invites', { json: { expiresInHours: 24 } })).json() as { code: string };
+  const other = t.client();
+  await other.register({ email: `${crypto.randomUUID()}@example.test`, displayName: '另一位', password: crypto.randomUUID(), inviteCode: invitation.code });
+  expect((await get(other)).pages).toEqual([]);
+  expect((await get(other)).tree).toEqual([]);
 });
 
 it('enforces authentication, CSRF, If-Match and account ownership even for receipt replay', async () => {

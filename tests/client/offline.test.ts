@@ -2,19 +2,27 @@
 import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { PageResponse, UserDto } from '../../src/shared/api.ts';
-import type { SyncNoteInput } from '../../src/shared/offline.ts';
-import { cachePage, cachedUser, createLocalNote, forgetOfflineData, loadNote, loadTree, offlineNote, rememberUser, resolveLocalNote, revokeOfflineEntry, saveLocalContent, saveLocalTitle, syncNotes } from '../../src/client/offline/notes.ts';
+import { summarizePage } from '../../src/shared/offline.ts';
+import type { OfflineManifest, SyncNoteInput } from '../../src/shared/offline.ts';
+import { cachePage, cachedUser, createLocalNote, forgetOfflineData, loadNote, loadTree, offlineNote, rememberUser, resolveLocalNote, revokeOfflineEntry, saveLocalContent, saveLocalTitle, syncNotes, syncStatus } from '../../src/client/offline/notes.ts';
 import type { OfflineNote } from '../../src/client/offline/notes.ts';
-import { clearLocal, readLocal, updateLocal } from '../../src/client/offline/storage.ts';
+import { readLocal, updateLocal } from '../../src/client/offline/storage.ts';
 
 const account: UserDto = { id: crypto.randomUUID(), email: 'synthetic@example.test', username: null, displayName: '合成使用者', role: 'user', createdAt: 0 };
 const response: PageResponse = { page: { id: crypto.randomUUID(), parentId: null, kind: 'page', databaseId: null, title: '原標題', icon: null, coverUrl: null, coverPosition: 50, fullWidth: false, content: [], version: 7, isFavorite: false, trashedAt: null, createdAt: 1, updatedAt: 1 }, breadcrumbs: [] };
 const reply = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 function connectivity(online: boolean) { Object.defineProperty(navigator, 'onLine', { configurable: true, value: online }); }
 function network(write: (input: SyncNoteInput) => Promise<Response> = async input => reply(200, { ...response, page: { ...response.page, title: input.title, content: input.content, version: (input.baseVersion ?? 0) + 1 } })) {
+  const pages = new Map([[response.page.id, response]]);
   return vi.fn(async (path: string, options?: RequestInit) => {
     if (path === '/api/auth/me') return reply(200, { user: account, csrfToken: crypto.randomUUID() });
-    if (path.startsWith('/api/offline/')) return write(JSON.parse(options!.body as string) as SyncNoteInput);
+    if (path === '/api/offline/manifest') return reply(200, { userId: account.id, tree: [], pages: [...pages.values()].map(summarizePage), maxUploadBytes: 90 * 1024 * 1024 });
+    if (path.startsWith('/api/offline/')) {
+      const result = await write(JSON.parse(options!.body as string) as SyncNoteInput);
+      if (result.ok) { const page = await result.clone().json() as PageResponse; pages.set(page.page.id, page); }
+      return result;
+    }
+    if (path.startsWith('/api/pages/')) return reply(200, pages.get(path.slice('/api/pages/'.length)) ?? response);
     return reply(200, response);
   });
 }
@@ -22,8 +30,119 @@ beforeEach(async () => {
   vi.stubGlobal('BroadcastChannel', undefined);
   connectivity(false);
   await syncNotes();
-  await clearLocal(); await rememberUser(account);
+  await forgetOfflineData(); await rememberUser(account);
   vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
+});
+
+function pullNetwork(pages: PageResponse[]) {
+  const manifest: OfflineManifest = { userId: account.id, tree: [], pages: pages.map(summarizePage), maxUploadBytes: 90 * 1024 * 1024 };
+  const fetcher = vi.fn(async (path: string) => {
+    if (path === '/api/auth/me') return reply(200, { user: account, csrfToken: crypto.randomUUID() });
+    if (path === '/api/offline/manifest') return reply(200, manifest);
+    const page = pages.find(item => path === `/api/pages/${item.page.id}`);
+    if (page) return reply(200, page);
+    return reply(404, { error: { code: 'not_found', message: '已刪除' } });
+  });
+  vi.stubGlobal('fetch', fetcher); connectivity(true);
+  return { manifest, fetcher };
+}
+
+it('automatically downloads new and changed notes, skips unchanged content, and reports completion only after storage', async () => {
+  await cachePage(response);
+  const changed = { ...response, page: { ...response.page, title: '另一裝置的新標題' } };
+  const added = { ...response, page: { ...response.page, id: crypto.randomUUID(), content: [{ new: true }] } };
+  const { fetcher } = pullNetwork([changed, added]);
+  await syncNotes({ force: true });
+  expect((await offlineNote(response.page.id))?.local.page.title).toBe(changed.page.title);
+  expect((await offlineNote(added.page.id))?.local.page.content).toEqual(added.page.content);
+  expect(syncStatus).toMatchObject({ phase: 'complete', completedAt: expect.any(Number) });
+  expect(await readLocal(`synced:${account.id}`)).toBe(syncStatus.completedAt);
+  const downloads = fetcher.mock.calls.filter(([path]) => path.startsWith('/api/pages/')).length;
+  await syncNotes({ force: true });
+  expect(fetcher.mock.calls.filter(([path]) => path.startsWith('/api/pages/'))).toHaveLength(downloads);
+});
+
+it('never downloads over a conflicted draft and marks remotely deleted clean notes unavailable offline', async () => {
+  const initial = await cachePage(response);
+  await saveLocalContent(response.page.id, [{ draft: true }], initial.localRevision);
+  const removed = { ...response, page: { ...response.page, id: crypto.randomUUID() } };
+  await cachePage(removed);
+  const { fetcher } = pullNetwork([{ ...response, page: { ...response.page, version: 8 } }]);
+  const baseFetch = fetcher.getMockImplementation()!;
+  fetcher.mockImplementation(async path => path.startsWith('/api/offline/pages/')
+    ? reply(409, { error: { code: 'version_conflict', message: '版本衝突', details: { current: { version: 8, title: '', updatedAt: 2 } } } }) : baseFetch(path));
+  await syncNotes({ force: true });
+  expect(syncStatus.phase).toBe('pending');
+  expect(await offlineNote(response.page.id)).toMatchObject({ pending: true, local: { page: { content: [{ draft: true }] } } });
+  expect(fetcher.mock.calls.some(([path]) => path === `/api/pages/${response.page.id}`)).toBe(false);
+  expect((await offlineNote(removed.page.id))?.removed).toBe(true);
+  connectivity(false);
+  vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
+  await expect(loadNote(removed.page.id)).rejects.toMatchObject({ status: 404 });
+  const removedNote = await offlineNote(removed.page.id);
+  await saveLocalContent(removed.page.id, [{ rescued: true }], removedNote?.revision);
+  expect((await loadNote(removed.page.id)).page.content).toEqual([{ rescued: true }]);
+});
+
+it('backs off failed downloads, retains the last successful timestamp, and allows an explicit retry', async () => {
+  const { fetcher } = pullNetwork([response]);
+  await syncNotes({ force: true });
+  const completedAt = syncStatus.completedAt;
+  fetcher.mockImplementation(async () => { throw new TypeError('network unavailable'); });
+  await syncNotes({ force: true });
+  expect(syncStatus).toMatchObject({ phase: 'error', completedAt });
+  const calls = fetcher.mock.calls.length;
+  await syncNotes();
+  expect(fetcher.mock.calls).toHaveLength(calls);
+  await syncNotes({ force: true });
+  expect(fetcher.mock.calls.length).toBeGreaterThan(calls);
+});
+
+it('does not cache a response under a different account after switching while a download is pending', async () => {
+  let release!: (response: Response) => void;
+  const { fetcher } = pullNetwork([response]);
+  const baseFetch = fetcher.getMockImplementation()!;
+  fetcher.mockImplementation(async path => path === `/api/pages/${response.page.id}` ? new Promise<Response>(resolve => { release = resolve; }) : baseFetch(path));
+  const running = syncNotes({ force: true });
+  await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+  const other = { ...account, id: crypto.randomUUID() };
+  await rememberUser(other);
+  release(reply(200, response)); await running;
+  expect(await readLocal(`page:${other.id}:${response.page.id}`)).toBeUndefined();
+  expect(syncStatus.phase).toBe('idle');
+});
+
+it('rejects a manifest belonging to another login even if cookies change after the session check', async () => {
+  const { manifest, fetcher } = pullNetwork([response]);
+  manifest.userId = crypto.randomUUID();
+  await syncNotes({ force: true });
+  expect(syncStatus.phase).toBe('error');
+  expect(await offlineNote(response.page.id)).toBeUndefined();
+  expect(fetcher.mock.calls.some(([path]) => path.startsWith('/api/pages/'))).toBe(false);
+});
+
+it('does not announce success when a full download only partially completes', async () => {
+  const added = { ...response, page: { ...response.page, id: crypto.randomUUID() } };
+  const { fetcher } = pullNetwork([response, added]);
+  const baseFetch = fetcher.getMockImplementation()!;
+  fetcher.mockImplementation(async path => path === `/api/pages/${added.page.id}` ? reply(503, {}) : baseFetch(path));
+  await syncNotes({ force: true });
+  expect(syncStatus).toMatchObject({ phase: 'error', completedAt: null });
+  expect(await offlineNote(response.page.id)).toBeDefined();
+  expect(await readLocal(`synced:${account.id}`)).toBeUndefined();
+});
+
+it('preserves a competing tab edit made while a conflict resolution fetch is pending', async () => {
+  const initial = await cachePage(response);
+  await saveLocalContent(response.page.id, [{ originalDraft: true }], initial.localRevision);
+  let release!: (response: Response) => void;
+  vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(resolve => { release = resolve; })));
+  const resolution = resolveLocalNote(response.page.id, 'reload');
+  await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+  await updateLocal<OfflineNote>(`page:${account.id}:${response.page.id}`, current => ({ ...current!, revision: crypto.randomUUID(), local: { ...current!.local, page: { ...current!.local.page, content: [{ competingDraft: true }] } } }));
+  release(reply(200, response));
+  await expect(resolution).rejects.toMatchObject({ status: 409 });
+  expect((await offlineNote(response.page.id))?.local.page.content).toEqual([{ competingDraft: true }]);
 });
 afterEach(async () => { await syncNotes(); vi.unstubAllGlobals(); });
 
@@ -54,7 +173,7 @@ it('retries an uncertain write with the same operation id, preserving edits made
   await syncNotes();
   connectivity(false);
   await saveLocalContent(response.page.id, [{ draft: 2 }]);
-  connectivity(true); await syncNotes();
+  connectivity(true); await syncNotes({ force: true });
   expect(sent[0]?.operationId).toBe(sent[1]?.operationId);
   const pending = await offlineNote(response.page.id);
   expect(pending).toMatchObject({ pending: true, base: { page: { version: 8 } }, local: { page: { content: [{ draft: 2 }] } } });

@@ -2,6 +2,13 @@
 const SHELL = '__NOTES_SHELL__';
 const ASSETS = /* __NOTES_ASSETS__ */ [];
 const FILE_PREFIX = 'notes-files-';
+const DEFAULT_FILE_BUDGET = 500 * 1024 * 1024;
+let fileCacheTask = Promise.resolve();
+function serializeFileCache(task) {
+  const result = fileCacheTask.then(task);
+  fileCacheTask = result.catch(() => {});
+  return result;
+}
 
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(SHELL).then(cache => cache.addAll(ASSETS)));
@@ -14,7 +21,7 @@ self.addEventListener('activate', event => {
   })());
 });
 
-async function currentUser() {
+async function localRecord(key) {
   return new Promise(resolve => {
     const request = indexedDB.open('notes-offline-v1', 1);
     request.onupgradeneeded = () => request.transaction.abort();
@@ -22,22 +29,55 @@ async function currentUser() {
     request.onsuccess = () => {
       const db = request.result;
       if (!db.objectStoreNames.contains('records')) { db.close(); resolve(null); return; }
-      const read = db.transaction('records').objectStore('records').get('user');
-      read.onsuccess = () => { db.close(); resolve(read.result?.id ?? null); };
+      const read = db.transaction('records').objectStore('records').get(key);
+      read.onsuccess = () => { db.close(); resolve(read.result ?? null); };
       read.onerror = () => { db.close(); resolve(null); };
     };
   });
 }
+async function currentUser() { return (await localRecord('user'))?.id ?? null; }
+async function fileBudget(owner) {
+  const value = (await localRecord(`attachments:${owner}`))?.limitBytes;
+  return Number.isSafeInteger(value) && value >= 100 * 1024 * 1024 && value <= 10_000 * 1024 * 1024 ? value : DEFAULT_FILE_BUDGET;
+}
+async function trimFiles(cache, budget) {
+  const entries = [];
+  let total = 0;
+  for (const key of await cache.keys()) {
+    const response = await cache.match(key);
+    const size = Number(response?.headers.get('content-length'));
+    if (!response?.headers.has('content-length') || !Number.isFinite(size) || size < 0) { await cache.delete(key); continue; }
+    total += size;
+    entries.push({ key, size });
+  }
+  for (const { key, size } of entries) {
+    if (total <= budget) break;
+    await cache.delete(key); total -= size;
+  }
+}
+self.addEventListener('message', event => {
+  if (event.data?.type !== 'notes:trim-files') return;
+  event.waitUntil(serializeFileCache(async () => {
+    const owner = await currentUser();
+    if (owner) await trimFiles(await caches.open(FILE_PREFIX + owner), await fileBudget(owner));
+    for (const client of await self.clients.matchAll()) client.postMessage({ type: 'notes:files-updated' });
+  }));
+});
 
 async function fileResponse(request) {
   const owner = await currentUser();
   try {
     const response = await fetch(request, { cache: 'no-store' });
-    if (owner && response.ok && response.headers.get('x-notes-user') === owner && await currentUser() === owner && Number(response.headers.get('content-length')) <= 20 * 1024 * 1024) {
-      const cache = await caches.open(FILE_PREFIX + owner);
-      await cache.put(request, response.clone()).catch(() => {});
-      const keys = await cache.keys();
-      for (const key of keys.slice(0, Math.max(0, keys.length - 100))) await cache.delete(key);
+    if (owner && response.ok && response.status === 200 && response.headers.get('x-notes-user') === owner && response.headers.has('content-length')) {
+      await serializeFileCache(async () => {
+        if (await currentUser() !== owner) return;
+        const budget = await fileBudget(owner), size = Number(response.headers.get('content-length'));
+        if (!Number.isFinite(size) || size < 0 || size > budget) return;
+        const cache = await caches.open(FILE_PREFIX + owner);
+        await cache.delete(request);
+        await trimFiles(cache, budget - size);
+        await cache.put(request, response.clone());
+      }).catch(() => {});
     }
     // An explicit 401/404 must never fall back to a cached private file.
     return response;

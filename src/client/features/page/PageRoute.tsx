@@ -7,6 +7,7 @@ import { pageKeys, usePage, usePatchPage } from '../../api/pages.ts';
 import { errorText, isApiError } from '../../api/client.ts';
 import { loadNote } from '../../offline/notes.ts';
 import type { LocalPageResponse } from '../../offline/notes.ts';
+import { exportPageDraft } from '../../offline/exportDraft.ts';
 import { useOnline } from '../../offline/useOnline.ts';
 import { useUiState } from '../../app/uiState.tsx';
 import { BlockEditor } from '../editor/BlockEditor.tsx';
@@ -119,9 +120,13 @@ function PageView({ initial }: { initial: LocalPageResponse }) {
       onRestored={() => { void autosave.resolveConflict('reload'); }} />
     {autosave.state.status === 'conflict' && <Alert color="red" variant="light" className="conflict-bar" title="此頁面已在其他地方更新">
       <Group gap="sm">
-        <Text size="sm">你可以載入最新版本（會捨棄這裡尚未儲存的修改），或以這裡的內容覆蓋（被覆蓋的版本會留在頁面歷史）。</Text>
-        <Button size="xs" onClick={() => { void autosave.resolveConflict('reload'); }}>載入最新版本</Button>
-        <Button size="xs" variant="default" onClick={() => { void autosave.resolveConflict('overwrite'); }}>以我的內容覆蓋</Button>
+        <Text size="sm">本機草稿已保留，系統不會自動合併或覆蓋。建議先匯出草稿，再選擇載入最新版本（捨棄這裡的修改），或以這裡的內容覆蓋（被覆蓋的線上版本會留在頁面歷史）。</Text>
+        <Button size="xs" variant="subtle" onClick={() => {
+          const content = composingRef.current() ? null : editorRef.current?.document;
+          if (content) exportPageDraft({ ...initial, page: { ...initial.page, title: meta.title, content } });
+        }}>匯出此處草稿</Button>
+        <Button size="xs" onClick={() => { if (window.confirm('載入最新版本會捨棄這裡的修改。請先確認已匯出需要保留的草稿，確定繼續？')) void autosave.resolveConflict('reload'); }}>載入最新版本</Button>
+        <Button size="xs" variant="default" onClick={() => { if (window.confirm('以這裡的內容覆蓋線上版本？被覆蓋的內容會保存在頁面歷史。')) void autosave.resolveConflict('overwrite'); }}>以我的內容覆蓋</Button>
       </Group>
     </Alert>}
     {refreshError && <Alert color="red" title="無法載入最新內容">{refreshError}</Alert>}

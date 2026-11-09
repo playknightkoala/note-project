@@ -3,7 +3,7 @@ import { runInNewContext } from 'node:vm';
 import { IDBFactory } from 'fake-indexeddb';
 import { expect, it, vi } from 'vitest';
 
-async function worker(owner: string | null = 'user-a') {
+async function worker(owner: string | null = 'user-a', limitMB?: number) {
   const indexedDB = new IDBFactory();
   await new Promise<void>((resolve, reject) => {
     const request = indexedDB.open('notes-offline-v1', 1);
@@ -12,6 +12,7 @@ async function worker(owner: string | null = 'user-a') {
     request.onsuccess = () => {
       const db = request.result, tx = db.transaction('records', 'readwrite');
       if (owner) tx.objectStore('records').put({ id: owner }, 'user');
+      if (owner && limitMB) tx.objectStore('records').put({ limitBytes: limitMB * 1024 * 1024 }, `attachments:${owner}`);
       tx.oncomplete = () => { db.close(); resolve(); };
     };
   });
@@ -35,7 +36,7 @@ async function worker(owner: string | null = 'user-a') {
   };
   const fetcher = vi.fn(async (_request: unknown, _options?: unknown): Promise<Response> => { throw new TypeError('offline'); });
   runInNewContext(readFileSync('src/client/offline/service-worker.js', 'utf8'), {
-    self: { location: { origin: 'https://notes.example.test' }, addEventListener: (name: string, listener: (event: unknown) => void) => listeners.set(name, listener) },
+    self: { clients: { matchAll: async () => [] }, location: { origin: 'https://notes.example.test' }, addEventListener: (name: string, listener: (event: unknown) => void) => listeners.set(name, listener) },
     indexedDB, caches: cacheApi, fetch: fetcher, URL, Response,
   });
   const request = async (path: string, mode = 'cors', method = 'GET'): Promise<Response | undefined> => {
@@ -43,7 +44,20 @@ async function worker(owner: string | null = 'user-a') {
     listeners.get('fetch')!({ request: { url: `https://notes.example.test${path}`, method, mode }, respondWith: (response: Promise<Response>) => { result = response; } });
     return result;
   };
-  return { request, fetcher, stores, cacheApi };
+  const setLimit = async (limitMB: number) => {
+    await new Promise<void>(resolve => {
+      const r = indexedDB.open('notes-offline-v1', 1);
+      r.onsuccess = () => {
+        const tx = r.result.transaction('records', 'readwrite');
+        tx.objectStore('records').put({ limitBytes: limitMB * 1024 * 1024 }, `attachments:${owner}`);
+        tx.oncomplete = () => { r.result.close(); resolve(); };
+      };
+    });
+    let work: Promise<void> | undefined;
+    listeners.get('message')!({ data: { type: 'notes:trim-files' }, waitUntil: (promise: Promise<void>) => { work = promise; } });
+    await work;
+  };
+  return { request, fetcher, stores, cacheApi, setLimit };
 }
 
 it('serves cached shell on offline deep-link navigation but never intercepts JSON or writes', async () => {
@@ -53,6 +67,35 @@ it('serves cached shell on offline deep-link navigation but never intercepts JSO
   expect(await w.request('/api/auth/me')).toBeUndefined();
   expect(await w.request('/api/pages/some-id', 'navigate')).toBeUndefined();
   expect(await w.request('/api/files/file-id', 'cors', 'DELETE')).toBeUndefined();
+});
+
+it('caches attachments larger than 20 MB and evicts by total bytes rather than a file count', async () => {
+  const w = await worker('user-a', 100);
+  const file = (mb: number) => new Response('synthetic', { headers: { 'x-notes-user': 'user-a', 'content-length': String(mb * 1024 * 1024) } });
+  w.fetcher.mockResolvedValueOnce(file(60));
+  await w.request('/api/files/older.pdf');
+  w.fetcher.mockResolvedValueOnce(file(60));
+  await w.request('/api/files/newer.pdf');
+  expect((await w.request('/api/files/older.pdf'))?.status).toBe(503);
+  expect((await w.request('/api/files/newer.pdf'))?.status).toBe(200);
+  w.fetcher.mockResolvedValueOnce(file(101));
+  expect((await w.request('/api/files/too-large.pdf'))?.status).toBe(200);
+  expect((await w.request('/api/files/too-large.pdf'))?.status).toBe(503);
+  // Small attachments are limited by bytes, so more than 100 fit.
+  for (let index = 0; index < 102; index++) {
+    w.fetcher.mockResolvedValueOnce(new Response('x', { headers: { 'x-notes-user': 'user-a', 'content-length': '1' } }));
+    await w.request(`/api/files/small-${index}`);
+  }
+  expect(w.stores.get('notes-files-user-a')?.size).toBe(103);
+});
+
+it('serializes concurrent cache writes and trims immediately after lowering the budget', async () => {
+  const w = await worker('user-a', 500);
+  w.fetcher.mockImplementation(async () => new Response('synthetic', { headers: { 'x-notes-user': 'user-a', 'content-length': String(60 * 1024 * 1024) } }));
+  await Promise.all([w.request('/api/files/one'), w.request('/api/files/two'), w.request('/api/files/three')]);
+  expect(w.stores.get('notes-files-user-a')?.size).toBe(3);
+  await w.setLimit(100);
+  expect(w.stores.get('notes-files-user-a')?.size).toBe(1);
 });
 
 it('isolates attachment caches by account and preserves sandbox/download headers', async () => {

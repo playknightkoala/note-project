@@ -1,7 +1,8 @@
 import { Hono } from 'hono';
-import type { PageResponse } from '../../shared/api.ts';
+import type { Breadcrumb, PageResponse } from '../../shared/api.ts';
 import { pageIdSchema } from '../../shared/api.ts';
-import { syncNoteSchema } from '../../shared/offline.ts';
+import { summarizePage, syncNoteSchema } from '../../shared/offline.ts';
+import type { OfflineManifest } from '../../shared/offline.ts';
 import { AppError } from '../../shared/errors.ts';
 import type { AppEnv } from '../app.ts';
 import { requireAuth, requireCsrf } from '../auth/middleware.ts';
@@ -12,6 +13,28 @@ import * as pages from '../services/pages.ts';
 export function offlineRoutes(): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
   app.use('*', requireAuth, requireCsrf);
+  app.get('/manifest', c => {
+    const { db, config } = c.get('deps');
+    const userId = c.get('auth')!.user.id;
+    const tree = pages.listTree(db, userId);
+    const nodes = new Map(tree.map(node => [node.id, node]));
+    // Do not load or transfer BlockNote content just to check for changes.
+    const rows = db.all<pages.PageRow>(`SELECT id, parent_id, kind, database_id, title, icon,
+      cover_file_id, cover_preset, cover_position, full_width, version, is_favorite,
+      trashed_at, created_at, updated_at, '[]' AS content
+      FROM pages WHERE user_id = ? AND kind = 'page' AND trashed_at IS NULL`, userId);
+    const summaries = rows.map(row => {
+      const breadcrumbs: Breadcrumb[] = [], seen = new Set<string>();
+      let node = nodes.get(row.id);
+      while (node && !seen.has(node.id)) {
+        seen.add(node.id);
+        breadcrumbs.unshift({ id: node.id, title: node.title, icon: node.icon, kind: node.kind });
+        node = node.parentId ? nodes.get(node.parentId) : undefined;
+      }
+      return summarizePage({ page: pages.toPageDto(row), breadcrumbs });
+    });
+    return c.json<OfflineManifest>({ userId, tree, pages: summaries, maxUploadBytes: config.maxUploadBytes });
+  });
   app.put('/pages/:id', async c => {
     const { db, now } = c.get('deps');
     const userId = c.get('auth')!.user.id;
@@ -32,7 +55,7 @@ export function offlineRoutes(): Hono<AppEnv> {
       } else {
         row = pages.loadPage(db, userId, id);
         if (row.kind !== 'page') throw new AppError('bad_request', '離線同步目前只支援一般筆記。');
-        if (row.version !== input.baseVersion || (!input.overwrite && row.title !== input.baseTitle)) {
+        if (row.version !== input.baseVersion || row.title !== input.baseTitle) {
           throw new AppError('version_conflict', undefined, { current: pages.headOf(row) });
         }
       }

@@ -40,7 +40,7 @@ async function main() {
   const icon = await fetchText('/notes-icon.svg');
   check('PWA icon', icon.response.status === 200 && icon.text.startsWith('<svg'));
 
-  for (const route of ['/api/pages/tree', '/api/search?q=x', '/api/auth/me', '/api/admin/users', '/api/trash']) {
+  for (const route of ['/api/pages/tree', '/api/offline/manifest', '/api/search?q=x', '/api/auth/me', '/api/admin/users', '/api/trash']) {
     const { response } = await fetchText(route);
     check(`${route} needs login`, response.status === 401);
   }

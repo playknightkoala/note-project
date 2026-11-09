@@ -8,7 +8,7 @@ const schema = z.object({
   TRUST_PROXY: z.enum(['0', '1']).default('0'),
   COOKIE_SECURE: z.enum(['auto', 'true', 'false']).default('auto'),
   PUBLIC_ORIGIN: z.preprocess(value => (typeof value === 'string' && value.trim() === '' ? undefined : value), z.string().url().optional()),
-  MAX_UPLOAD_MB: z.coerce.number().int().min(1).max(1024).default(20),
+  MAX_UPLOAD_MB: z.coerce.number().int().min(1).max(1024).default(90),
   MAX_IMPORT_MB: z.coerce.number().int().min(1).max(4096).default(200),
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
 });

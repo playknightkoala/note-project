@@ -139,6 +139,7 @@ export function useAutosave({ pageId, initialVersion, initialLocalRevision, getC
     const refresh = () => { void offlineNote(pageId).then(note => {
       const r = ref.current;
       if (!active || !note || r.inFlight) return;
+      if (note.removed && !note.pending) { dispatch({ type: 'error', message: '此筆記已在線上刪除；若有本機修改，請先保存或匯出草稿。', offline: false }); return; }
       if (note.problem) {
         if (note.conflict) { localConflict.current = false; dispatch({ type: 'conflict', head: note.conflict }); }
         else dispatch({ type: 'error', message: note.problem, offline: false });
