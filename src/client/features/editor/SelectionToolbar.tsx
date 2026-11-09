@@ -2,6 +2,11 @@ import { BasicTextStyleButton, blockTypeSelectItems, ColorStyleButton, CreateLin
 import { ActionIcon, Button, Divider, Group, Menu, Tooltip } from '@mantine/core';
 import { Check, ChevronRight, Code2, MessageSquare, RemoveFormatting, SmilePlus } from 'lucide-react';
 import type { AppEditor } from './schema.ts';
+import { useSavedSelection } from './useSavedSelection.ts';
+
+export function selectionBlockTypes(editor: AppEditor) {
+  return [...blockTypeSelectItems(editor), { name: '程式碼', type: 'codeBlock', props: {}, icon: () => <Code2 size={16} /> }];
+}
 
 export function SelectionToolbar({ onAnnotate }: { onAnnotate: (mode: 'comment' | 'reaction') => void }) {
   const editor = useBlockNoteEditor() as AppEditor;
@@ -30,15 +35,19 @@ export function SelectionToolbar({ onAnnotate }: { onAnnotate: (mode: 'comment' 
 }
 
 function SelectionBlockType({ editor }: { editor: AppEditor }) {
+  const saved = useSavedSelection(editor);
   const blocks = useEditorState({ editor, selector: ({ editor }) => editor.getSelection()?.blocks ?? [editor.getTextCursorPosition().block] });
-  const items = [...blockTypeSelectItems(editor), { name: '程式碼', type: 'codeBlock', props: {}, icon: () => <Code2 size={16} /> }];
+  const items = selectionBlockTypes(editor);
   const matches = (item: typeof items[number]) => blocks[0]?.type === item.type && Object.entries(item.props ?? {}).every(([key, value]) => (blocks[0]?.props as Record<string, unknown>)[key] === value);
   const current = items.find(matches); const Icon = current?.icon;
-  return <Menu position="right-start" shadow="md" width={220} withinPortal={false}>
-    <Menu.Target><Button className="selection-panel__type" fullWidth size="compact-sm" variant="subtle" color="gray" leftSection={Icon ? <Icon size={16} /> : undefined} rightSection={<ChevronRight size={14} />} aria-label="轉換段落類型">{current?.name ?? '轉換段落類型'}</Button></Menu.Target>
+  return <Menu position="right-start" shadow="md" width={220} withinPortal={false} trapFocus={false} returnFocus={false} onChange={opened => { if (opened) saved.capture(); }}>
+    <Menu.Target><Button className="selection-panel__type" fullWidth size="compact-sm" variant="subtle" color="gray" leftSection={Icon ? <Icon size={16} /> : undefined} rightSection={<ChevronRight size={14} />} aria-label="轉換段落類型" onPointerDown={event => { saved.capture(); if (event.pointerType === 'touch' || event.pointerType === 'pen') event.preventDefault(); }}> {current?.name ?? '轉換段落類型'}</Button></Menu.Target>
     <Menu.Dropdown style={{ maxHeight: 'min(480px, calc(100vh - 32px))', overflowY: 'auto' }} onMouseDown={event => event.preventDefault()}>
       {items.map(item => <Menu.Item key={`${item.type}-${item.name}`} leftSection={<item.icon size={16} />} rightSection={matches(item) ? <Check size={14} /> : undefined} onClick={() => {
-        editor.focus(); editor.transact(() => { for (const block of blocks) editor.updateBlock(block, { type: item.type, props: item.props } as Parameters<AppEditor['updateBlock']>[1]); });
+        if (!saved.restore()) return;
+        const selected = editor.getSelection()?.blocks ?? [editor.getTextCursorPosition().block];
+        editor.focus(); editor.transact(() => { for (const block of selected) editor.updateBlock(block, { type: item.type, props: item.props } as Parameters<AppEditor['updateBlock']>[1]); });
+        saved.clear();
       }}>{item.name}</Menu.Item>)}
     </Menu.Dropdown>
   </Menu>;

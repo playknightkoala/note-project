@@ -144,3 +144,19 @@
 - `package.json` 與 `package-lock.json` 根套件版本同步更新為 1.0.2，沒有調整任何依賴版本。
 - 再次執行 `npm run typecheck`、`npm run lint`、`npm test -- --reporter=dot`（19 檔／107 tests）、`npm run build`：全部通過。`docker compose up -d --build --wait` 成功、容器 healthy，`/healthz` 200；`GET /api/version` 實測回 `{ "version": "1.0.2" }`。
 - `npm run test:app -- http://127.0.0.1:8081` 25 項 PASS。瀏覽器驗收限制沿用前述紀錄；發布說明包含線上備份、自動 migration、回退需還原備份及已知限制。
+
+## 手機選取面板、鍵盤遮擋與段落類型選單修正（2026-11-09）
+
+- 問題：BlockNote 的 FormattingToolbarController 在觸控裝置鍵盤開啟／編輯器聚焦時，即使沒有文字選取也會顯示手機工具列；自訂的桌面縱向面板因此遮擋輸入，並與原生選取選單同時出現。自訂段落類型 Menu 沒有關閉焦點攔截，點第一項展開時可能讓外層工具列消失。
+- 修正：手機／粗指標裝置不掛載自動工具列，保留原生 contextmenu，只顯示主動操作的「格式與段落」入口；中文組字期間隱藏入口。點擊後開獨立的底部 Drawer，段落類型改在面板內切換，保留格式、顏色、連結、留言／反應及既有檔案工具。桌面使用專用控制器，段落 Menu 關閉 trapFocus／returnFocus 並保存原選取範圍。
+- 選取保存：useSavedSelection 將 bookmark 隨文件變更映射，格式或留言操作前還原；不因焦點轉移改到其他段落。原範圍已刪除時顯示錯誤；相同 selection 不重設，避免粗體後切斜體把 stored marks 清掉。面板關閉後還原原位置與焦點。
+- 鍵盤避讓：工具入口／底部面板依 VisualViewport 的 top／left／width／height 定位，兼顧鍵盤、畫面方向與安全區域，編輯器預留底部高度並捲動游標到入口上方。HTML viewport 加入 interactive-widget=resizes-content；容器回傳 HTML 已確認包含該設定。
+- 新增 `tests/client/mobileSelection.test.tsx` 9 項，使用真正的 BlockNoteView、手機面板、桌面工具列及 Mantine 選單，只模擬網路與裝置／視口能力：輸入／選取／鍵盤縮放不自動開啟面板、原生 contextmenu 未攔截、鍵盤與焦點變化不關閉段落頁、對原選取的多段落轉換後繼續加粗、留言摘要保留範圍、游標處多重樣式與關閉後恢復、組字時隱藏入口、鍵盤高度與位移下的游標避讓、顏色／連結與清除格式保留 annotation、插入文件後範圍映射、刪除範圍後拒絕格式化鄰段，以及桌面第一項子選單真實點擊流程（部分情境合併於同一測試）。既有留言測試更新為模擬桌面專用控制器。
+- 實際命令：`npm run typecheck`、`npm run lint`、`npm test -- --reporter=dot`（20 檔／116 tests）、`npm run build` 全部通過；`docker compose up -d --build --wait` 成功且 healthy；`(Invoke-WebRequest -Uri http://127.0.0.1:8081/healthz).StatusCode` 為 200；`npm run test:app -- http://127.0.0.1:8081` 25 項 PASS；`git diff --check` 通過。Vitest／Vite 子程序及 Docker API 因沙箱限制，依批准在沙箱外執行。未新增依賴、未改資料庫或認證協定。
+- 限制：瀏覽器工具回報 access host unavailable，隨後使用者明確指示可略過瀏覽器測試，因此未繼續 UI 自動化。以上為 jsdom 元件／整合與 HTTP 檢查，沒有實際瀏覽器版面量測、手機原生選取選單、軟鍵盤或真實輸入法的實機驗收；不將模擬測試當成實機已驗證。
+
+## 1.0.3 發布前檢查（2026-11-09）
+
+- package.json 與 package-lock.json 根套件版本同步更新為 1.0.3，依賴版本維持不變。
+- `npm run typecheck`、`npm run lint`、`npm test -- --reporter=dot`（20 檔／116 tests）、`npm run build` 全部通過；`docker compose up -d --build --wait` 成功且 healthy，`/healthz` 200；`GET /api/version` 實測回 `{ "version": "1.0.3" }`。
+- `npm run test:app -- http://127.0.0.1:8081` 25 項 PASS。發布說明列出手機格式面板、段落類型與選取範圍修正，並明示依使用者指示略過瀏覽器／實體手機驗收。

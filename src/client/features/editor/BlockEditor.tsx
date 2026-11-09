@@ -51,7 +51,7 @@ export function BlockEditor({ pageId, initialContent, onReady, onChange, onCompo
         getItems={async query => filterSuggestionItems([...slashItems(editor, pageId, navigate), ...getDefaultReactSlashMenuItems(editor)], query)} />
       <SuggestionMenuController triggerCharacter="@" shouldOpen={ime.notComposing} minQueryLength={0} getItems={mentionItems} />
       <EmojiPickerController triggerCharacter=":" shouldOpen={ime.notComposing} minQueryLength={2} />
-      <SelectionTools editor={editor} pageId={pageId} />
+      <SelectionTools editor={editor} pageId={pageId} composing={ime.isComposing} />
     </BlockNoteView>
   </div>;
 }

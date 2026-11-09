@@ -85,6 +85,19 @@
 .selection-panel__type .mantine-Button-section[data-position="right"] { margin-left: auto; }
 .selection-panel__formats > * { flex-shrink: 0; }
 .selection-panel .mantine-ActionIcon-root { width: 30px; height: 30px; }
+.mobile-selection-dock { position: fixed; z-index: 25; top: calc(var(--selection-vv-top) + var(--selection-vv-height)); left: var(--selection-vv-left); width: var(--selection-vv-width); transform: translateY(-100%); display: flex; justify-content: center; padding: 6px 12px max(6px, env(safe-area-inset-bottom)); box-sizing: border-box; border-top: 1px solid var(--app-border); background: var(--app-bg); }
+.mobile-selection-dock button { min-height: 40px; }
+.mobile-format-sheet-inner { top: var(--selection-vv-top); left: var(--selection-vv-left); bottom: auto; right: auto; width: var(--selection-vv-width); height: var(--selection-vv-height); }
+.mobile-format-sheet-content { display: flex; flex-direction: column; height: auto; max-height: min(70dvh, calc(var(--selection-vv-height) - 16px)); border-radius: 14px 14px 0 0; }
+.mobile-format-sheet-content .mantine-Drawer-header { flex-shrink: 0; }
+.mobile-format-sheet-body { min-height: 0; overflow-y: auto; padding-bottom: max(16px, env(safe-area-inset-bottom)); }
+.mobile-format-sheet-body button { min-height: 40px; }
+.mobile-format-sheet-body .bn-formatting-toolbar { flex-wrap: wrap; }
+.mobile-block-types { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; }
+@media (max-width: 767px), (pointer: coarse) {
+  .block-editor { padding-bottom: calc(64px + env(safe-area-inset-bottom)); }
+  .block-editor .bn-block-outer { scroll-margin-block: 64px; }
+}
 .selection-annotation { background: light-dark(#fff0b5, #655323); border-bottom: 2px solid light-dark(#dfb644, #be9532); cursor: pointer; }
 .selection-discussions { display: flex; justify-content: flex-end; padding-top: 12px; }
 .annotation-quote { margin: 0; padding: 8px 12px; border-left: 3px solid var(--app-border); color: var(--app-fg-muted); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 160px; overflow-y: auto; }

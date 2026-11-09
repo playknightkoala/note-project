@@ -1,10 +1,12 @@
 # 交接紀錄
 
-更新：2026-11-08。動手前讀本文件、[AGENTS.md](../AGENTS.md)、[ARCHITECTURE.md](ARCHITECTURE.md)、[DEPLOY.md](DEPLOY.md)。
+更新：2026-11-09。動手前讀本文件、[AGENTS.md](../AGENTS.md)、[ARCHITECTURE.md](ARCHITECTURE.md)、[DEPLOY.md](DEPLOY.md)。
 
 ## 目前狀態
 
-目前套件版本為 **1.0.2**，本機容器 `/api/version` 已實測回報同版本；發布前重跑的檢查皆通過，詳見 VALIDATION 的 1.0.2 段落。
+目前套件版本為 **1.0.3**，本機容器 `/api/version` 已實測回報同版本；發布前重跑的檢查皆通過，詳見 VALIDATION 的 1.0.3 段落。
+
+2026-11-09 手機格式面板修正納入 1.0.3，已套用本機容器：手機保留原生長按選單，主動點「格式與段落」才開底部面板；段落類型在面板內切換，桌面第一項子選單也補上焦點保護。保存並映射原選取範圍，支援連續格式操作、留言切換與鍵盤避讓；中文組字期間隱藏入口。最新 typecheck、lint、20 檔／116 tests、build 全過，容器 healthy、healthz 200、靜態檢查 25 項 PASS。依使用者指示略過瀏覽器測試，未做實體手機／真實 IME 驗收。
 
 **M0–M5 與 M7 完成並驗證；M6 Joplin 匯入已取消。** 之後追加：右鍵選單、登入頁記住帳號、反向代理 CSRF／登出修正、桌面表格延伸寬度、參考 Notion 的文字選取面板（段落類型右側子選單、文字格式、範圍留言、表情反應；無 Skills／AI），以及資料庫直接編輯與表格／清單／看板多視圖。最新個別命令 `npm run typecheck`、`npm run lint`、`npm test -- --reporter=dot`（19 檔／107 tests）、`npm run build` 全過；`docker compose up -d --build --wait` healthy、`/healthz` 200；`npm run test:app -- http://127.0.0.1:8081` 25 項 PASS。功能範圍見 README，各次驗證與限制見 [VALIDATION.md](VALIDATION.md)。
 

@@ -1,6 +1,6 @@
 # 架構與里程碑
 
-更新：2026-11-08。接手請先讀 [HANDOFF.md](HANDOFF.md)。
+更新：2026-11-09。接手請先讀 [HANDOFF.md](HANDOFF.md)。
 
 ## 決策
 
@@ -38,7 +38,10 @@
 
 ## 選取範圍留言與反應（追加功能）
 
-- 選取面板提供段落類型的右側子選單、文字格式、留言與表情反應，不包含 Skills 或 AI。清除格式不移除留言標記；圖片／附件保留原本的格式工具。
+- 桌面選取面板提供段落類型的右側子選單、文字格式、留言與表情反應，不包含 Skills 或 AI。自訂段落選單關閉焦點攔截與返回焦點，並保存選取範圍，避免點第一項時連同外層面板關閉。清除格式不移除留言標記；圖片／附件保留原本的格式工具。
+- 手機／粗指標裝置（寬度小於 768px 或 pointer: coarse）不掛載會自動顯示的 FormattingToolbarController，桌面改用 DesktopFormattingToolbarController。手機只在編輯器聚焦時顯示小型「格式與段落」入口；組字、開啟格式面板或留言時隱藏入口。原生長按／選取選單不攔截，只有主動點擊才開啟獨立控制的底部 Drawer，並在此時保存範圍、讓編輯器失焦與清除原生 DOM 選取。
+- 手機底部面板內切換段落、格式、顏色、連結與留言，不依鍵盤開關或編輯器焦點決定存續。useSavedSelection 將 bookmark 映射到後續文件變更，套用前還原原範圍；原選取內容已被刪除時拒絕誤改相鄰文字。相同選取不重設 selection，以保留游標處尚待輸入的粗體／斜體等 stored marks。
+- 手機工具入口及面板以 VisualViewport 的可見矩形定位，預留工具入口高度並在游標移動／鍵盤縮放時捲動避讓；未提供 VisualViewport 的環境使用視窗尺寸。viewport meta 加入 interactive-widget=resizes-content。真正手機的鍵盤、長按選單與組字行為仍需實機驗收。
 - migration `0005_annotations` 新增 `page_annotations`。留言與反應屬於頁面擁有者，所有查詢同時驗證 `page_id` 與 `user_id`，垃圾桶頁面不開放操作，永久刪頁時外鍵級聯清除。
 - `GET|POST /api/pages/:pageId/annotations` 讀取／建立討論；`PATCH /api/pages/:pageId/annotations/:id` 以討論自己的 `version` 與 `If-Match` 新增回覆、切換反應或設定解決狀態，過期版本回 409。上限每頁 500 則討論、每則 100 個留言、留言 4,000 字、原文摘要 8,000 字。
 - 正式 BlockNote JSON 的自訂 `annotation` 字串樣式記錄討論 ID，可同時記錄多個重疊範圍；標記隨文字編輯移動，走既有自動保存與頁面版本衝突流程。討論先獨立保存，標記再隨內文保存；即使標記尚未保存、原文被刪或版本還原後找不到標記，討論與原文摘要仍可由列表開啟。

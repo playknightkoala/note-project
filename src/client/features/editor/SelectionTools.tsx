@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { FormattingToolbarController } from '@blocknote/react';
+import { DesktopFormattingToolbarController } from '@blocknote/react';
 import { FormattingToolbarExtension } from '@blocknote/core/extensions';
 import { Alert, Badge, Button, Drawer, Group, Popover, Stack, Text, Textarea } from '@mantine/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { MessageSquare } from 'lucide-react';
+import { useMediaQuery } from '@mantine/hooks';
 import type { Annotation, ChangeAnnotation, CreateAnnotation } from '@shared/annotations';
 import { REACTION_EMOJIS } from '@shared/annotations';
 import { api, errorText } from '../../api/client.ts';
@@ -12,11 +13,13 @@ import { IconPicker } from '../page/PageHeader.tsx';
 import { markAnnotation } from './annotationStyle.ts';
 import type { AppEditor } from './schema.ts';
 import { SelectionToolbar } from './SelectionToolbar.tsx';
+import { MobileSelectionTools } from './MobileSelectionTools.tsx';
 
 type Bookmark = ReturnType<AppEditor['prosemirrorState']['selection']['getBookmark']>;
 interface Pending { quote: string; blockIds: string[]; mode: 'comment' | 'reaction' }
 
-export function SelectionTools({ editor, pageId }: { editor: AppEditor; pageId: string }) {
+export function SelectionTools({ editor, pageId, composing = false }: { editor: AppEditor; pageId: string; composing?: boolean }) {
+  const mobile = useMediaQuery('(max-width: 767px), (pointer: coarse)', undefined, { getInitialValueInEffect: false });
   const client = useQueryClient();
   const me = useMe();
   const path = `/api/pages/${pageId}/annotations`;
@@ -65,7 +68,7 @@ export function SelectionTools({ editor, pageId }: { editor: AppEditor; pageId: 
       if (id) { setPending(null); setSelectedId(id); setFailure(null); setDraft(''); setOpened(true); }
     };
     const context = (event: MouseEvent) => {
-      if (event.shiftKey || editor.prosemirrorView.composing || editor.prosemirrorState.selection.empty
+      if (mobile || composing || event.shiftKey || editor.prosemirrorView.composing || editor.prosemirrorState.selection.empty
         || (event.target as Element).closest('a, input, textarea, select') || !window.matchMedia('(hover: hover) and (pointer: fine)').matches) return;
       event.preventDefault(); event.stopPropagation();
       editor.getExtension(FormattingToolbarExtension)?.store.setState(true);
@@ -79,7 +82,7 @@ export function SelectionTools({ editor, pageId }: { editor: AppEditor; pageId: 
     };
     const stop = editor.onMount(attach); attach();
     return () => { stop(); detach(); };
-  }, [editor, annotations.data]);
+  }, [editor, annotations.data, mobile, composing]);
 
   const mutation = useMutation({
     onMutate: () => client.cancelQueries({ queryKey }),
@@ -119,7 +122,7 @@ export function SelectionTools({ editor, pageId }: { editor: AppEditor; pageId: 
   };
   const active = annotations.data?.annotations.filter(item => showResolved || !item.resolved) ?? [];
   return <>
-    <FormattingToolbarController formattingToolbar={toolbar} />
+    {mobile ? <MobileSelectionTools editor={editor} composing={composing} suspended={opened} onAnnotate={begin} /> : !composing && !opened && <DesktopFormattingToolbarController formattingToolbar={toolbar} />}
     <div className="selection-discussions"><Button variant="subtle" color="gray" size="compact-xs" leftSection={<MessageSquare size={14} />} onClick={() => { setPending(null); setSelectedId(null); setOpened(true); }}>留言與反應 {annotations.data?.annotations.filter(item => !item.resolved).length || ''}</Button></div>
     <Drawer opened={opened} onClose={close} title="留言與表情反應" position="right" size="sm" keepMounted={false} closeOnClickOutside={false} closeButtonProps={{ 'aria-label': '關閉留言' }}>
       <Stack gap="sm">

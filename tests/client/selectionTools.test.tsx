@@ -12,7 +12,7 @@ import { SelectionTools } from '../../src/client/features/editor/SelectionTools.
 
 vi.mock('../../src/client/api/client.ts', async importOriginal => ({ ...await importOriginal<object>(), api: vi.fn() }));
 vi.mock('../../src/client/api/auth.ts', () => ({ useMe: () => ({ data: { id: 'owner' } }) }));
-vi.mock('@blocknote/react', async importOriginal => ({ ...await importOriginal<object>(), FormattingToolbarController: ({ formattingToolbar: Toolbar }: { formattingToolbar: ComponentType }) => <Toolbar /> }));
+vi.mock('@blocknote/react', async importOriginal => ({ ...await importOriginal<object>(), DesktopFormattingToolbarController: ({ formattingToolbar: Toolbar }: { formattingToolbar: ComponentType }) => <Toolbar /> }));
 vi.mock('../../src/client/features/editor/SelectionToolbar.tsx', () => ({ SelectionToolbar: ({ onAnnotate }: { onAnnotate: (mode: 'reaction') => void }) => <button onClick={() => onAnnotate('reaction')}>加表情反應</button> }));
 let editor: typeof schema.BlockNoteEditor; let client: QueryClient;
 const annotation: Annotation = { id: 'annotation-example', quote: '原文', blockIds: ['b'], messages: [{ id: 'm', text: '原留言', createdAt: 1 }], reactions: [], resolved: false, version: 1, createdAt: 1, updatedAt: 1 };
