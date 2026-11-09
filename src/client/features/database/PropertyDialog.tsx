@@ -6,6 +6,7 @@ import type { DatabaseDto, DatabaseProperty, PropertyChoice, PropertyType } from
 import { useDatabaseSchema } from '../../api/databases.ts';
 import { errorText, isApiError } from '../../api/client.ts';
 import { newId } from '@shared/ids';
+import { useUpdateGuard } from '../../updates/guards.ts';
 
 const colors = ['灰', '棕', '橙', '黃', '綠', '藍', '紫', '粉紅', '紅'];
 export function PropertyDialog({ meta, property, onClose, onReload }: { meta: DatabaseDto; property: DatabaseProperty | null; onClose: () => void; onReload: () => void }) {
@@ -15,6 +16,7 @@ export function PropertyDialog({ meta, property, onClose, onReload }: { meta: Da
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [baseVersion] = useState(meta.version);
   const mutation = useDatabaseSchema(meta.id);
+  useUpdateGuard(() => { throw new Error('請先儲存或關閉欄位設定，再更新。'); });
   const select = type === 'select' || type === 'multi_select';
   const save = () => {
     const input = { name, type, choices: select ? choices : [] };

@@ -18,6 +18,7 @@ import { searchRoutes } from './routes/search.ts';
 import { databaseRoutes, rowRoutes } from './routes/databases.ts';
 import { annotationRoutes } from './routes/annotations.ts';
 import { offlineRoutes } from './routes/offline.ts';
+import { versionInfo } from './releases.ts';
 
 export interface AppDeps {
   db: Db;
@@ -63,7 +64,7 @@ export function createApp(input: Omit<AppDeps, 'now' | 'rateLimiter'> & Partial<
   app.use('/api/*', async (c, next) => { c.header('Cache-Control', 'no-store'); await next(); });
 
   app.route('/', healthRoutes());
-  app.get('/api/version', c => c.json({ version: deps.config.version }));
+  app.get('/api/version', c => c.json(versionInfo(deps.config.version)));
   app.route('/api/auth', authRoutes());
   app.route('/api/admin', adminRoutes());
   app.route('/api/pages', pageRoutes());

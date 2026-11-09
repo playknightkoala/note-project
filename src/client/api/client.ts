@@ -11,7 +11,7 @@ export const getCsrfToken = (): string | null => csrfToken;
 
 export const AUTH_LOST_EVENT = 'notes:auth-lost';
 
-interface RequestOptions { json?: unknown; form?: FormData; signal?: AbortSignal; keepalive?: boolean; headers?: Record<string, string> }
+interface RequestOptions { json?: unknown; form?: FormData; signal?: AbortSignal; keepalive?: boolean; headers?: Record<string, string>; cache?: RequestCache }
 
 /** Same-origin JSON client: cookies for auth, CSRF header on mutations, typed errors, 401 → global event. */
 export async function api<T>(method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE', path: string, options: RequestOptions = {}): Promise<T> {
@@ -23,6 +23,7 @@ export async function api<T>(method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
   else if (options.form) init.body = options.form;
   if (options.signal) init.signal = options.signal;
   if (options.keepalive) init.keepalive = true;
+  if (options.cache) init.cache = options.cache;
   let response: Response;
   try { response = await fetch(path, init); } catch (error) { throw new ApiError(0, 'internal', '無法連線到伺服器，請檢查網路。', { cause: String(error) }); }
   if (response.status === 204) return undefined as T;

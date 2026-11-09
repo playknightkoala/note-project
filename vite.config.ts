@@ -4,16 +4,21 @@ import { fileURLToPath } from 'node:url';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 
+const appVersion = (JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as { version: string }).version;
+
 export default defineConfig({
+  define: { 'import.meta.env.VITE_APP_VERSION': JSON.stringify(appVersion) },
   plugins: [react(), {
     name: 'notes-offline-shell',
     apply: 'build',
     enforce: 'post',
     generateBundle(_options, bundle) {
       const assets = ['/', ...Object.keys(bundle).filter(name => name.startsWith('assets/')).map(name => `/${name}`)];
-      const version = createHash('sha256').update(JSON.stringify(assets)).digest('hex').slice(0, 16);
+      const workerSource = readFileSync(new URL('./src/client/offline/service-worker.js', import.meta.url), 'utf8');
+      const version = createHash('sha256').update(JSON.stringify(assets) + workerSource + appVersion).digest('hex').slice(0, 16);
       const source = readFileSync(new URL('./src/client/offline/service-worker.js', import.meta.url), 'utf8')
         .replace('__NOTES_SHELL__', `notes-shell-${version}`)
+        .replace('__NOTES_VERSION__', appVersion)
         .replace('/* __NOTES_ASSETS__ */ []', JSON.stringify(assets));
       this.emitFile({ type: 'asset', fileName: 'sw.js', source });
       this.emitFile({ type: 'asset', fileName: 'manifest.webmanifest', source: JSON.stringify({ name: 'Notes 筆記', short_name: 'Notes', lang: 'zh-Hant', id: '/', start_url: '/', scope: '/', display: 'standalone', background_color: '#ffffff', theme_color: '#ffffff', icons: [{ src: '/notes-icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any' }] }) });

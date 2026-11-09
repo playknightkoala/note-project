@@ -44,6 +44,36 @@ it('keeps a reply draft when adding an emoji reaction', async () => {
   expect((screen.getByLabelText('回覆留言') as HTMLTextAreaElement).value).toBe('未送出的草稿');
 });
 
+it('lets the user cancel and then confirm deletion of a saved discussion', async () => {
+  await openReply();
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+  fireEvent.click(screen.getByRole('button', { name: '刪除整則討論' }));
+  expect(vi.mocked(api).mock.calls.some(([method]) => method === 'DELETE')).toBe(false);
+  confirm.mockReturnValue(true);
+  vi.mocked(api).mockImplementation(async method => method === 'DELETE' ? undefined as never : { annotations: [annotation] } as never);
+  fireEvent.click(screen.getByRole('button', { name: '刪除整則討論' }));
+  await waitFor(() => expect(vi.mocked(api).mock.calls.some(([method, path, options]) => method === 'DELETE' && path.endsWith(`/${annotation.id}`) && options?.headers?.['If-Match'] === '"1"')).toBe(true));
+  await waitFor(() => expect(screen.queryByText('原留言')).toBeNull());
+  confirm.mockRestore();
+});
+
+it('retains comments and the reply draft when deletion conflicts with another tab', async () => {
+  editor.replaceBlocks(editor.document, [{ id: 'b', type: 'paragraph', content: [{ type: 'text', text: '原文', styles: { annotation: annotation.id } }] }]);
+  const content = JSON.stringify(editor.document);
+  await openReply();
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+  vi.mocked(api).mockImplementation(async method => {
+    if (method === 'GET') return { annotations: [{ ...annotation, version: 2 }] } as never;
+    throw new ApiError(409, 'version_conflict', '留言已在其他分頁更新，請重新載入後再試。');
+  });
+  fireEvent.click(screen.getByRole('button', { name: '刪除整則討論' }));
+  await screen.findByRole('alert');
+  expect(screen.getByText('原留言')).toBeTruthy();
+  expect((screen.getByLabelText('回覆留言') as HTMLTextAreaElement).value).toBe('未送出的草稿');
+  expect(JSON.stringify(editor.document)).toBe(content);
+  confirm.mockRestore();
+});
+
 it('keeps a rejected reply draft and reports a version conflict', async () => {
   await openReply();
   vi.mocked(api).mockImplementation(async method => {

@@ -2,6 +2,7 @@ import { useRef, useState } from 'react';
 import { Alert, Button, Group } from '@mantine/core';
 import { Plus } from 'lucide-react';
 import { errorText } from '../../api/client.ts';
+import { useUpdateGuard } from '../../updates/guards.ts';
 
 export function NewRowInput({ onCreate, opened = false, onClose }: { onCreate: (title: string) => Promise<unknown>; opened?: boolean; onClose?: () => void }) {
   const [editing, setEditing] = useState(opened);
@@ -10,6 +11,7 @@ export function NewRowInput({ onCreate, opened = false, onClose }: { onCreate: (
   const [pending, setPending] = useState(false);
   const busy = useRef(false);
   const composing = useRef(false);
+  useUpdateGuard(() => { if (editing && title.trim()) throw new Error('請先建立或取消新資料列，再更新。'); });
   const submit = async () => {
     if (busy.current || composing.current) return;
     if (!title.trim()) { setEditing(false); onClose?.(); return; }

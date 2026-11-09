@@ -50,6 +50,15 @@
 - Vite 建置輸出 manifest 與版本化 Service Worker，預快取主介面及所有本機動態資源。API JSON 不進共用 Cache Storage。附件只在成功授權且擁有者一致時寫入帳號獨立快取，改採每裝置／每帳號 500 MB 預設總容量，可調 100–10,000 MB（IndexedDB `attachments:<userId>`），不限制 20 MB／檔或 100 檔。Service Worker 序列化寫入，依 Content-Length 加總並清除較早快取，降低設定容量後以 message 觸發清理；單檔大於預算只在線上提供。401／404 不回退快取，下載與 sandbox 標頭保持原樣。檔案 HTTP 快取為 `private, no-cache`，避免不同登入共用未重新授權的瀏覽器快取。上傳預設 90 MB，與裝置快取設定獨立。
 - 一般筆記以外的頁面操作、資料庫、列屬性、搜尋、留言與新附件上傳仍需伺服器，不納入離線修改佇列。手機正式使用必須 HTTPS；私人瀏覽、手動清除網站資料與裝置空間不足可能導致本機內容不可用。更多操作限制見 [OFFLINE.md](OFFLINE.md)。
 
+## 介面版號與更新協定（1.0.6）
+
+- 左下角版號由 Vite 在建置時從 package.json 注入，代表目前執行的前端版本；不以 `/api/version` 的伺服器版號冒充目前介面版本。公開 `/api/version` 回 `{ version, releases: [{ version, title, changes }] }`，維持 no-store，只回已部署版本及以前的更新資訊，沒有使用者資料。
+- `src/client/updates` 每分鐘於前景檢查版本，並於開啟、恢復連線、切回前景與收到 controllerchange 通知時重查；只有數值比較較新的版本會彈出 Modal，同版／回滾不重複提示。中文組字期間延後開啟。可稍後更新，該分頁對同一新版只自動提示一次，仍可從左下角重新開啟。
+- 點「立即更新」先執行元件註冊的 update guards，保存筆記標題／內文，阻止未保存、衝突中的可見修改、未送出留言與表單資料被重新載入丟棄，並等候進行中的 Query mutations；附件上傳亦會阻止更新。已成功持久保存的 pending 草稿不必先上傳，更新不清除 IndexedDB、cookie 或附件快取。
+- 呼叫 registration.update 下載新版後，以 MessageChannel 核對 worker 版號，只有目標版本才接受 `notes:activate-update` 並 skipWaiting；等 controllerchange 並再次核對版號後，只重新載入發起更新的分頁。無 Service Worker 支援時使用帶更新識別的同源重新載入；下載／安裝／接手失敗顯示錯誤供重試。
+- Worker 版號與離線資源列表由 Vite 注入；shell hash 包含資源、worker source 與版號。所有分頁回報各自的 build version，未知或舊分頁仍存在時保留舊 shell，靜態資源請求可從舊 shell 找到自己的 hashed assets。所有分頁回報新版後才清理舊 shell，附件快取不受影響。其他分頁收到通知後自行決定更新，沒有全域無條件 reload。
+- 發布新版時同步調整 package.json／lockfile 根版本與 `src/server/releases.ts` 的繁體中文更新資訊，再建置部署。偵測對象是已部署伺服器，沒有依賴 GitHub Release 或外部更新服務。1.0.5 及以前的前端需手動連線重載一次才能取得此機制。
+
 ## 選取範圍留言與反應（追加功能）
 
 - 桌面選取面板提供段落類型的右側子選單、文字格式、留言與表情反應，不包含 Skills 或 AI。自訂段落選單關閉焦點攔截與返回焦點，並保存選取範圍，避免點第一項時連同外層面板關閉。清除格式不移除留言標記；圖片／附件保留原本的格式工具。
@@ -58,6 +67,8 @@
 - 手機工具入口及面板以 VisualViewport 的可見矩形定位，預留工具入口高度並在游標移動／鍵盤縮放時捲動避讓；未提供 VisualViewport 的環境使用視窗尺寸。viewport meta 加入 interactive-widget=resizes-content。真正手機的鍵盤、長按選單與組字行為仍需實機驗收。
 - migration `0005_annotations` 新增 `page_annotations`。留言與反應屬於頁面擁有者，所有查詢同時驗證 `page_id` 與 `user_id`，垃圾桶頁面不開放操作，永久刪頁時外鍵級聯清除。
 - `GET|POST /api/pages/:pageId/annotations` 讀取／建立討論；`PATCH /api/pages/:pageId/annotations/:id` 以討論自己的 `version` 與 `If-Match` 新增回覆、切換反應或設定解決狀態，過期版本回 409。上限每頁 500 則討論、每則 100 個留言、留言 4,000 字、原文摘要 8,000 字。
+- `DELETE /api/pages/:pageId/annotations/:id` 需要登入、同源 CSRF 與目前討論版本的 `If-Match`，在交易內檢查擁有者及版本後刪除整則討論。介面先確認，成功後只移除目前內文中該討論的 anchor，透過既有自動保存與頁面版本協定保存；保留文字、其他格式及重疊討論，409 保留討論與未送出的草稿。
+- 黃色由 `annotationHighlights` 的 ProseMirror decorations 表示，只標出未解決且仍有留言或反應的討論；已解決、已刪除及移除最後反應後的空討論不顯示黃色。背景刷新討論狀態不改寫 BlockNote JSON；重新開啟討論可恢復標記。最後讀取過的 active IDs 依帳號／頁面快取至 IndexedDB，離線重開沿用該裝置已知狀態；不把討論內容改成離線可寫。`@tiptap/pm` 宣告為直接依賴並固定 3.33.0，沿用既有間接依賴版本。
 - 正式 BlockNote JSON 的自訂 `annotation` 字串樣式記錄討論 ID，可同時記錄多個重疊範圍；標記隨文字編輯移動，走既有自動保存與頁面版本衝突流程。討論先獨立保存，標記再隨內文保存；即使標記尚未保存、原文被刪或版本還原後找不到標記，討論與原文摘要仍可由列表開啟。
 - 討論內容／反應／解決狀態獨立於頁面歷史；還原內文不回退討論。複製頁面保留文字格式，但不複製原頁討論及其標記。備份 CLI 的 SQLite 線上備份自然包含討論資料表。
 - 表情符號共用本機 frimousse 資料，不連外部 CDN；內文反應不插入文字。客戶端快取按帳號及頁面隔離，每 15 秒刷新，409 保留草稿並重新取得目前版本；沒有即時多人協作或對外分享留言。

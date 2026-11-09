@@ -3,7 +3,7 @@ import { runInNewContext } from 'node:vm';
 import { IDBFactory } from 'fake-indexeddb';
 import { expect, it, vi } from 'vitest';
 
-async function worker(owner: string | null = 'user-a', limitMB?: number) {
+async function worker(owner: string | null = 'user-a', limitMB?: number, clients: { id: string; postMessage: ReturnType<typeof vi.fn> }[] = []) {
   const indexedDB = new IDBFactory();
   await new Promise<void>((resolve, reject) => {
     const request = indexedDB.open('notes-offline-v1', 1);
@@ -35,8 +35,9 @@ async function worker(owner: string | null = 'user-a', limitMB?: number) {
     },
   };
   const fetcher = vi.fn(async (_request: unknown, _options?: unknown): Promise<Response> => { throw new TypeError('offline'); });
+  const skipWaiting = vi.fn().mockResolvedValue(undefined);
   runInNewContext(readFileSync('src/client/offline/service-worker.js', 'utf8'), {
-    self: { clients: { matchAll: async () => [] }, location: { origin: 'https://notes.example.test' }, addEventListener: (name: string, listener: (event: unknown) => void) => listeners.set(name, listener) },
+    self: { skipWaiting, clients: { claim: async () => {}, matchAll: async () => clients }, location: { origin: 'https://notes.example.test' }, addEventListener: (name: string, listener: (event: unknown) => void) => listeners.set(name, listener) },
     indexedDB, caches: cacheApi, fetch: fetcher, URL, Response,
   });
   const request = async (path: string, mode = 'cors', method = 'GET'): Promise<Response | undefined> => {
@@ -57,8 +58,43 @@ async function worker(owner: string | null = 'user-a', limitMB?: number) {
     listeners.get('message')!({ data: { type: 'notes:trim-files' }, waitUntil: (promise: Promise<void>) => { work = promise; } });
     await work;
   };
-  return { request, fetcher, stores, cacheApi, setLimit };
+  const message = async (data: unknown, source?: { id: string }, ports?: { postMessage: ReturnType<typeof vi.fn> }[]) => {
+    let work: Promise<void> | undefined;
+    listeners.get('message')!({ data, source, ports, waitUntil: (promise: Promise<void>) => { work = promise; } });
+    await work;
+  };
+  return { request, fetcher, stores, cacheApi, setLimit, message, skipWaiting };
 }
+
+it('reports its version and activates only for an explicit request targeting that version', async () => {
+  const w = await worker(), port = { postMessage: vi.fn() };
+  await w.message({ type: 'notes:get-version' }, undefined, [port]);
+  expect(port.postMessage).toHaveBeenCalledWith({ version: '__NOTES_VERSION__' });
+  await w.message({ type: 'notes:activate-update', version: 'wrong-version' });
+  expect(w.skipWaiting).not.toHaveBeenCalled();
+  await w.message({ type: 'notes:activate-update', version: '__NOTES_VERSION__' });
+  expect(w.skipWaiting).toHaveBeenCalledOnce();
+});
+
+it('keeps old assets until every open tab reports the new version', async () => {
+  const clients = [{ id: 'old-tab', postMessage: vi.fn() }, { id: 'new-tab', postMessage: vi.fn() }];
+  const w = await worker('user-a', undefined, clients);
+  await w.cacheApi.open('notes-shell-old'); await w.cacheApi.open('notes-files-user-a');
+  await w.message({ type: 'notes:client-version', version: '__NOTES_VERSION__' }, clients[1]);
+  expect(w.stores.has('notes-shell-old')).toBe(true);
+  await w.message({ type: 'notes:client-version', version: '1.0.0' }, clients[0]);
+  expect(w.stores.has('notes-shell-old')).toBe(true);
+  await w.message({ type: 'notes:client-version', version: '__NOTES_VERSION__' }, clients[0]);
+  expect(w.stores.has('notes-shell-old')).toBe(false);
+  expect(w.stores.has('notes-files-user-a')).toBe(true);
+});
+
+it('serves an older tab’s cached assets after the new worker takes control', async () => {
+  const w = await worker();
+  await (await w.cacheApi.open('notes-shell-previous')).put('https://notes.example.test/assets/previous.js', new Response('previous module'));
+  expect(await (await w.request('/assets/previous.js'))?.text()).toBe('previous module');
+  expect(w.fetcher).not.toHaveBeenCalled();
+});
 
 it('serves cached shell on offline deep-link navigation but never intercepts JSON or writes', async () => {
   const w = await worker();

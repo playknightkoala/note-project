@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DesktopFormattingToolbarController } from '@blocknote/react';
 import { FormattingToolbarExtension } from '@blocknote/core/extensions';
 import { Alert, Badge, Button, Drawer, Group, Popover, Stack, Text, Textarea } from '@mantine/core';
@@ -6,14 +6,16 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { MessageSquare } from 'lucide-react';
 import { useMediaQuery } from '@mantine/hooks';
 import type { Annotation, ChangeAnnotation, CreateAnnotation } from '@shared/annotations';
-import { REACTION_EMOJIS } from '@shared/annotations';
+import { isActiveAnnotation, REACTION_EMOJIS } from '@shared/annotations';
 import { api, errorText } from '../../api/client.ts';
 import { useMe } from '../../api/auth.ts';
 import { IconPicker } from '../page/PageHeader.tsx';
-import { markAnnotation } from './annotationStyle.ts';
+import { markAnnotation, removeAnnotation, updateAnnotationHighlights } from './annotationStyle.ts';
+import { readLocal, updateLocal } from '../../offline/storage.ts';
 import type { AppEditor } from './schema.ts';
 import { SelectionToolbar } from './SelectionToolbar.tsx';
 import { MobileSelectionTools } from './MobileSelectionTools.tsx';
+import { useUpdateGuard } from '../../updates/guards.ts';
 
 type Bookmark = ReturnType<AppEditor['prosemirrorState']['selection']['getBookmark']>;
 interface Pending { quote: string; blockIds: string[]; mode: 'comment' | 'reaction' }
@@ -25,11 +27,32 @@ export function SelectionTools({ editor, pageId, composing = false, annotationsE
   const path = `/api/pages/${pageId}/annotations`;
   const queryKey = ['annotations', me.data?.id, pageId];
   const annotations = useQuery({ queryKey, queryFn: ({ signal }) => api<{ annotations: Annotation[] }>('GET', path, { signal }), enabled: !!me.data && annotationsEnabled, refetchInterval: 15_000 });
+  const highlightKey = me.data ? `annotation-highlights:${me.data.id}:${pageId}` : null;
+  const [cachedHighlights, setCachedHighlights] = useState<{ key: string; ids: string[] } | null>(null);
+  const highlightIds = useMemo(() => annotations.data
+    ? annotations.data.annotations.filter(isActiveAnnotation).map(item => item.id)
+    : cachedHighlights?.key === highlightKey ? cachedHighlights.ids : undefined, [annotations.data, cachedHighlights, highlightKey]);
+  // A small, account-isolated snapshot keeps resolved/deleted markers hidden after an offline reload.
+  useEffect(() => {
+    if (!highlightKey) return;
+    let active = true;
+    void readLocal<string[]>(highlightKey).then(ids => { if (active && ids) setCachedHighlights({ key: highlightKey, ids }); }).catch(() => {});
+    return () => { active = false; };
+  }, [highlightKey]);
+  useEffect(() => {
+    if (!highlightKey || !annotations.data) return;
+    const ids = annotations.data.annotations.filter(isActiveAnnotation).map(item => item.id);
+    void updateLocal<string[]>(highlightKey, () => ids).catch(() => {});
+  }, [highlightKey, annotations.data]);
+  useEffect(() => {
+    updateAnnotationHighlights(editor, highlightIds ? new Set(highlightIds) : undefined);
+  }, [editor, highlightIds]);
   const [opened, setOpened] = useState(false);
   const [pending, setPending] = useState<Pending | null>(null);
   const bookmark = useRef<Bookmark | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
+  useUpdateGuard(() => { if (draft.trim()) throw new Error('請先送出或取消尚未送出的留言，再更新。'); });
   const [failure, setFailure] = useState<string | null>(null);
   const [showResolved, setShowResolved] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -47,7 +70,7 @@ export function SelectionTools({ editor, pageId, composing = false, annotationsE
       const ids = String(node.marks.find(mark => mark.type.name === 'annotation')?.attrs.stringValue ?? '').split(' ');
       commonIds = new Set(commonIds ? [...commonIds].filter(id => ids.includes(id)) : ids);
     });
-    const existing = annotations.data?.annotations.find(item => !item.resolved && item.quote === quote && commonIds?.has(item.id));
+    const existing = annotations.data?.annotations.find(item => isActiveAnnotation(item) && item.quote === quote && commonIds?.has(item.id));
     if (existing) {
       bookmark.current = null; setPending(null); setSelectedId(existing.id);
     } else {
@@ -64,7 +87,7 @@ export function SelectionTools({ editor, pageId, composing = false, annotationsE
       const mark = (event.target as Element).closest<HTMLElement>('[data-annotation-ids]');
       // The native click collapses the DOM selection before ProseMirror updates its state.
       if (!mark || !window.getSelection()?.isCollapsed) return;
-      const id = mark.dataset.annotationIds?.split(' ').find(value => annotations.data?.annotations.some(item => item.id === value));
+      const id = mark.dataset.annotationIds?.split(' ').find(value => annotations.data?.annotations.some(item => item.id === value && isActiveAnnotation(item)));
       if (id) { setPending(null); setSelectedId(id); setFailure(null); setDraft(''); setOpened(true); }
     };
     const context = (event: MouseEvent) => {
@@ -87,13 +110,24 @@ export function SelectionTools({ editor, pageId, composing = false, annotationsE
   const mutation = useMutation({
     networkMode: 'always',
     onMutate: () => client.cancelQueries({ queryKey }),
-    mutationFn: async ({ create, change }: { create?: CreateAnnotation; change?: { annotation: Annotation; input: ChangeAnnotation } }) => {
+    mutationFn: async ({ create, change, remove }: { create?: CreateAnnotation; change?: { annotation: Annotation; input: ChangeAnnotation }; remove?: Annotation }): Promise<{ annotation?: Annotation; deletedId?: string }> => {
       if (!annotationsEnabled) throw new Error('留言與反應需要連線，且筆記須先完成同步。');
+      if (remove) {
+        await api<void>('DELETE', `${path}/${remove.id}`, { headers: { 'If-Match': `"${remove.version}"` } });
+        return { deletedId: remove.id };
+      }
       if (create) return api<{ annotation: Annotation }>('POST', path, { json: create });
       if (!change) throw new Error('請選擇討論。');
       return api<{ annotation: Annotation }>('PATCH', `${path}/${change.annotation.id}`, { json: change.input, headers: { 'If-Match': `"${change.annotation.version}"` } });
     },
-    onSuccess: ({ annotation }, variables) => {
+    onSuccess: ({ annotation, deletedId }, variables) => {
+      if (deletedId) {
+        client.setQueryData<{ annotations: Annotation[] }>(queryKey, current => ({ annotations: current?.annotations.filter(item => item.id !== deletedId) ?? [] }));
+        removeAnnotation(editor, deletedId);
+        setSelectedId(null); setDraft(''); setFailure(null); setPickerOpen(false);
+        return;
+      }
+      if (!annotation) return;
       client.setQueryData<{ annotations: Annotation[] }>(queryKey, current => ({ annotations: [...(current?.annotations.filter(item => item.id !== annotation.id) ?? []), annotation] }));
       if (variables.create && bookmark.current) {
         const selection = bookmark.current.resolve(editor.prosemirrorState.doc);
@@ -122,30 +156,34 @@ export function SelectionTools({ editor, pageId, composing = false, annotationsE
     if (draft.trim() && !window.confirm('放棄尚未送出的留言？')) return;
     setOpened(false); setPending(null); bookmark.current = null; setDraft(''); setFailure(null); setPickerOpen(false);
   };
-  const active = annotations.data?.annotations.filter(item => showResolved || !item.resolved) ?? [];
+  const active = annotations.data?.annotations.filter(item => showResolved || isActiveAnnotation(item)) ?? [];
   return <>
     {mobile ? <MobileSelectionTools editor={editor} composing={composing} suspended={opened} onAnnotate={begin} /> : !composing && !opened && <DesktopFormattingToolbarController formattingToolbar={toolbar} />}
-    <div className="selection-discussions"><Button variant="subtle" color="gray" size="compact-xs" leftSection={<MessageSquare size={14} />} onClick={() => { setPending(null); setSelectedId(null); setOpened(true); }}>留言與反應 {annotations.data?.annotations.filter(item => !item.resolved).length || ''}</Button></div>
+    <div className="selection-discussions"><Button variant="subtle" color="gray" size="compact-xs" leftSection={<MessageSquare size={14} />} onClick={() => { setPending(null); setSelectedId(null); setOpened(true); }}>留言與反應 {annotations.data?.annotations.filter(isActiveAnnotation).length || ''}</Button></div>
     <Drawer opened={opened} onClose={close} title="留言與表情反應" position="right" size="sm" keepMounted={false} closeOnClickOutside={false} closeButtonProps={{ 'aria-label': '關閉留言' }}>
       {!annotationsEnabled && <Alert color="orange">留言與反應需要連線，且筆記須先完成同步。內文格式仍可離線編輯。</Alert>}
       <Stack gap="sm">
         {annotations.isError && <Alert color="red">{errorText(annotations.error)}<Button variant="subtle" onClick={() => { void annotations.refetch(); }}>重新載入</Button></Alert>}
         {failure && <Alert color="red" role="alert">{failure}</Alert>}
-        {!pending && <Group><Button size="compact-xs" variant="subtle" onClick={() => { if (draft.trim() && !window.confirm('放棄尚未送出的留言？')) return; setDraft(''); setSelectedId(null); setShowResolved(value => !value); }}>{showResolved ? '只顯示未解決' : '包含已解決'}</Button></Group>}
+        {!pending && <Group><Button size="compact-xs" variant="subtle" onClick={() => { if (draft.trim() && !window.confirm('放棄尚未送出的留言？')) return; setDraft(''); setSelectedId(null); setShowResolved(value => !value); }}>{showResolved ? '只顯示未解決' : '包含已解決／已取消'}</Button></Group>}
         {!pending && !selected && <>
           {annotations.isPending && <Text c="dimmed">載入中…</Text>}
           {!annotations.isPending && active.length === 0 && <Text c="dimmed">選取內文後，使用選取工具加入留言或表情反應。</Text>}
-          {active.map(item => <Button key={item.id} variant="default" className="annotation-list-item" onClick={() => { setSelectedId(item.id); setDraft(''); setFailure(null); }}><span><q>{item.quote}</q><span>{item.messages.length} 則留言 {item.reactions.join(' ')} {item.resolved ? ' · 已解決' : ''}</span></span></Button>)}
+          {active.map(item => <Button key={item.id} variant="default" className="annotation-list-item" onClick={() => { setSelectedId(item.id); setDraft(''); setFailure(null); }}><span><q>{item.quote}</q><span>{item.messages.length} 則留言 {item.reactions.join(' ')} {item.resolved ? ' · 已解決' : !isActiveAnnotation(item) ? ' · 已取消' : ''}</span></span></Button>)}
         </>}
         {(pending || selected) && <>
           <blockquote className="annotation-quote">{pending?.quote ?? selected?.quote}</blockquote>
-          <Text size="xs" c="dimmed">原文摘要；點擊內文的標記可重新開啟。若原文已移除，討論仍保留於此。</Text>
+          <Text size="xs" c="dimmed">原文摘要；點擊黃色標記可查看討論。已解決或已取消的項目可從「包含已解決／已取消」查看。若原文已移除，討論仍保留於此。</Text>
           {selected && <>
             <Group justify="space-between"><Button size="compact-xs" variant="subtle" disabled={mutation.isPending} onClick={() => { if (draft.trim() && !window.confirm('放棄尚未送出的留言？')) return; setDraft(''); setSelectedId(null); }}>所有討論</Button>
               <Button size="compact-xs" variant="subtle" disabled={mutation.isPending} onClick={() => mutation.mutate({ change: { annotation: selected, input: { action: 'resolve', resolved: !selected.resolved } } })}>{selected.resolved ? '重新開啟討論' : '標示為已解決'}</Button></Group>
             {selected.resolved && <Badge color="gray">已解決</Badge>}
+            {!selected.resolved && !isActiveAnnotation(selected) && <Badge color="gray">已取消</Badge>}
             {selected.messages.map(message => <div className="annotation-message" key={message.id}><Text size="xs" c="dimmed">{new Date(message.createdAt).toLocaleString('zh-TW')}</Text><Text size="sm" style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{message.text}</Text></div>)}
             {selected.reactions.length > 0 && <Group gap={4}>{selected.reactions.map(emoji => <Button key={emoji} size="compact-sm" variant="light" aria-label={`移除反應 ${emoji}`} disabled={mutation.isPending} onClick={() => react(emoji)}>{emoji}</Button>)}</Group>}
+            <Button size="compact-xs" variant="subtle" color="red" disabled={mutation.isPending || !annotationsEnabled} onClick={() => {
+              if (window.confirm('刪除整則討論及其中所有留言、表情反應？尚未送出的留言也會捨棄。筆記文字會保留，此操作無法復原。')) mutation.mutate({ remove: selected });
+            }}>刪除整則討論</Button>
           </>}
           <Group gap={4} aria-label="常用表情反應">{REACTION_EMOJIS.map(emoji => <Button key={emoji} aria-label={`反應 ${emoji}`} size="compact-sm" variant="subtle" disabled={mutation.isPending} onClick={() => react(emoji)}>{emoji}</Button>)}</Group>
           <Popover opened={pickerOpen} onChange={setPickerOpen} withinPortal={false} position="bottom-start"><Popover.Target><Button size="compact-xs" variant="subtle" disabled={mutation.isPending} onClick={() => setPickerOpen(value => !value)}>更多表情符號…</Button></Popover.Target><Popover.Dropdown p={0}><IconPicker onPick={react} /></Popover.Dropdown></Popover>

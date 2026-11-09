@@ -4,12 +4,14 @@ import { Plus, Trash2 } from 'lucide-react';
 import { filterLabels, operatorsFor, validateView } from '@shared/database';
 import type { CellValue, DatabaseProperty, ViewConfig, FilterOperator } from '@shared/database';
 import { CellValueInput } from './CellValueInput.tsx';
+import { useUpdateGuard } from '../../updates/guards.ts';
 
 export function RulesDialog({ mode, properties, config, onApply, onClose }: {
   mode: 'sort' | 'filter'; properties: DatabaseProperty[]; config: ViewConfig; onApply: (config: ViewConfig) => void; onClose: () => void;
 }) {
   const [draft, setDraft] = useState(config);
   const [error, setError] = useState<string | null>(null);
+  useUpdateGuard(() => { if (JSON.stringify(draft) !== JSON.stringify(config)) throw new Error('請先套用或取消排序與篩選設定，再更新。'); });
   const fields = [{ value: 'title', label: '名稱' }, ...properties.map(p => ({ value: p.id, label: p.name }))];
   const changeFilter = (index: number, patch: Partial<ViewConfig['filters'][number]>) => setDraft(current => ({ ...current, filters: current.filters.map((rule, i) => i === index ? { ...rule, ...patch } : rule) }));
   return <Modal opened onClose={onClose} title={mode === 'sort' ? '排序設定' : '篩選設定'} size="lg" closeButtonProps={{ 'aria-label': '關閉條件設定' }}>

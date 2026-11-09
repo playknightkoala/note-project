@@ -76,6 +76,28 @@ it('validates text, anchor and emoji input and supports a reaction without a com
   expect(await response.json()).toMatchObject({ annotation: { messages: [], reactions: ['👍'] } });
 });
 
+it('deletes an owned discussion with its current version and leaves the note content intact', async () => {
+  const annotation = await create();
+  const before = await (await owner.request('GET', `/api/pages/${pageId}`)).json();
+  expect((await owner.request('DELETE', `${path}/${annotation.id}`, { headers: { 'If-Match': `"${annotation.version}"` } })).status).toBe(204);
+  expect(await (await owner.request('GET', path)).json()).toEqual({ annotations: [] });
+  expect(await (await owner.request('GET', `/api/pages/${pageId}`)).json()).toEqual(before);
+});
+
+it('refuses stale, unauthenticated, foreign and non-CSRF discussion deletions', async () => {
+  const annotation = await create(), url = `${path}/${annotation.id}`;
+  const headers = { 'If-Match': `"${annotation.version}"` };
+  expect((await t.client().request('DELETE', url, { headers })).status).toBe(401);
+  expect((await other.request('DELETE', url, { headers })).status).toBe(404);
+  expect((await owner.request('DELETE', url, { headers, csrf: false })).status).toBe(403);
+  expect((await owner.request('DELETE', url, { headers, origin: 'https://evil.example' })).status).toBe(403);
+  expect((await owner.request('DELETE', url)).status).toBe(428);
+  expect((await patch(annotation, { action: 'comment', text: '其他分頁的新留言' })).status).toBe(200);
+  expect((await owner.request('DELETE', url, { headers })).status).toBe(409);
+  const saved = await (await owner.request('GET', path)).json() as { annotations: Annotation[] };
+  expect(saved.annotations[0]?.messages).toHaveLength(2);
+});
+
 it('duplicates text formatting without carrying source discussion anchors', async () => {
   const annotation = await create();
   const content = [{ id: 'b', type: 'paragraph', props: {}, children: [], content: [{ type: 'text', text: '討論文字', styles: { bold: true, annotation: annotation.id } }] }];

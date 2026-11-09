@@ -1,6 +1,8 @@
 /* The build replaces these constants with a versioned shell and its complete asset list. */
 const SHELL = '__NOTES_SHELL__';
+const VERSION = '__NOTES_VERSION__';
 const ASSETS = /* __NOTES_ASSETS__ */ [];
+const clientVersions = new Map();
 const FILE_PREFIX = 'notes-files-';
 const DEFAULT_FILE_BUDGET = 500 * 1024 * 1024;
 let fileCacheTask = Promise.resolve();
@@ -12,14 +14,21 @@ function serializeFileCache(task) {
 
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(SHELL).then(cache => cache.addAll(ASSETS)));
-  // Keep the running editor on its current version. The new worker activates after its tabs close.
+  // Activate after old tabs close, or after the user explicitly requests an update.
 });
 self.addEventListener('activate', event => {
   event.waitUntil((async () => {
-    for (const key of await caches.keys()) if (key.startsWith('notes-shell-') && key !== SHELL) await caches.delete(key);
     await self.clients.claim();
+    for (const client of await self.clients.matchAll()) client.postMessage({ type: 'notes:report-version' });
   })());
 });
+
+async function cleanupShells() {
+  const clients = await self.clients.matchAll();
+  // Unknown/old tabs retain their assets so an update in another tab cannot break their editor.
+  if (clients.some(client => clientVersions.get(client.id) !== VERSION)) return;
+  for (const key of await caches.keys()) if (key.startsWith('notes-shell-') && key !== SHELL) await caches.delete(key);
+}
 
 async function localRecord(key) {
   return new Promise(resolve => {
@@ -56,6 +65,19 @@ async function trimFiles(cache, budget) {
   }
 }
 self.addEventListener('message', event => {
+  if (event.data?.type === 'notes:get-version') {
+    event.ports?.[0]?.postMessage({ version: VERSION });
+    return;
+  }
+  if (event.data?.type === 'notes:activate-update' && event.data.version === VERSION) {
+    event.waitUntil(self.skipWaiting());
+    return;
+  }
+  if (event.data?.type === 'notes:client-version' && event.source?.id) {
+    clientVersions.set(event.source.id, event.data.version);
+    event.waitUntil(cleanupShells());
+    return;
+  }
   if (event.data?.type !== 'notes:trim-files') return;
   event.waitUntil(serializeFileCache(async () => {
     const owner = await currentUser();
@@ -104,6 +126,11 @@ self.addEventListener('fetch', event => {
       const cache = await caches.open(SHELL);
       const cached = await cache.match(request);
       if (cached) return cached;
+      for (const name of await caches.keys()) {
+        if (!name.startsWith('notes-shell-') || name === SHELL) continue;
+        const previous = await (await caches.open(name)).match(request);
+        if (previous) return previous;
+      }
       const response = await fetch(request);
       if (response.ok) await cache.put(request, response.clone());
       return response;

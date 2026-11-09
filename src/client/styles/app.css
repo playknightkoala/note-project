@@ -9,6 +9,8 @@ body { background: var(--app-bg); color: var(--app-fg); -webkit-font-smoothing: 
 .sidebar-workspace { width: 100%; padding: 8px 10px; border-radius: var(--app-radius); }
 .sidebar-workspace:hover { background: var(--app-hover); }
 .sidebar-scroll { flex: 1; margin-top: 8px; }
+.app-version { display: flex; align-items: center; justify-content: space-between; width: 100%; padding: 8px 10px; border-radius: var(--app-radius); }
+.app-version:hover { background: var(--app-hover); }
 .sidebar-link { border-radius: var(--app-radius); font-size: 14px; min-height: 28px; padding-block: 2px; color: var(--app-fg-muted); }
 .sidebar-link:hover { background: var(--app-hover); }
 

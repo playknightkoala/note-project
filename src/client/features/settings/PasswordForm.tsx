@@ -3,10 +3,12 @@ import type { FormEvent } from 'react';
 import { Alert, Button, Group, PasswordInput, Stack } from '@mantine/core';
 import { useChangePassword } from '../../api/auth.ts';
 import { errorText } from '../../api/client.ts';
+import { useUpdateGuard } from '../../updates/guards.ts';
 
 export function PasswordForm() {
   const change = useChangePassword();
   const [form, setForm] = useState({ current: '', next: '', confirm: '' });
+  useUpdateGuard(() => { if (Object.values(form).some(Boolean)) throw new Error('請先完成或清除密碼修改表單，再更新。'); });
   const [message, setMessage] = useState<{ color: 'red' | 'green'; text: string } | null>(null);
   const submit = (event: FormEvent) => {
     event.preventDefault(); setMessage(null);

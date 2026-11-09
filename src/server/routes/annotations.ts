@@ -62,5 +62,16 @@ export function annotationRoutes(): Hono<AppEnv> {
       return c.json({ annotation: { ...annotation, version: version + 1, updatedAt: now } });
     });
   });
+  app.delete('/:pageId/annotations/:id', c => {
+    const { db, userId, pageId } = context(c);
+    const version = expectedVersion(c);
+    return db.transaction(() => {
+      const row = db.get<AnnotationRow>('SELECT * FROM page_annotations WHERE id = ? AND page_id = ? AND user_id = ?', c.req.param('id'), pageId, userId);
+      if (!row) throw new AppError('not_found');
+      if (version !== row.version) throw new AppError('version_conflict', '留言已在其他分頁更新，請重新載入後再試。');
+      db.run('DELETE FROM page_annotations WHERE id = ? AND page_id = ? AND user_id = ? AND version = ?', row.id, pageId, userId, version);
+      return c.body(null, 204);
+    });
+  });
   return app;
 }

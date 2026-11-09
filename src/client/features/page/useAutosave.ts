@@ -5,6 +5,7 @@ import { isApiError } from '../../api/client.ts';
 import { isLocalWriter, offlineNote, resolveLocalNote, syncNotes } from '../../offline/notes.ts';
 import type { LocalHead } from '../../offline/notes.ts';
 import { OFFLINE_EVENT } from '../../offline/storage.ts';
+import { useUpdateGuard } from '../../updates/guards.ts';
 
 export type SaveState = 'clean' | 'dirty' | 'saving' | 'conflict' | 'error' | 'offline' | 'local';
 export interface AutosaveState { status: SaveState; version: number; savedAt: number | null; error: string | null; conflictHead: PageHeadDto | null; attempts: number }
@@ -82,6 +83,13 @@ export function useAutosave({ pageId, initialVersion, initialLocalRevision, getC
     }
   }, [pageId]);
   const stateAttempts = useRef(0); stateAttempts.current = state.attempts;
+
+  useUpdateGuard(async () => {
+    const deadline = Date.now() + 10_000;
+    while (ref.current.inFlight && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 25));
+    if (ref.current.dirty && !ref.current.inFlight) await save();
+    if (ref.current.inFlight || ref.current.dirty) throw new Error('筆記仍有尚未保存的修改；請先完成儲存或處理衝突，再更新。');
+  });
 
   const schedule = useCallback((delay = DEBOUNCE_MS) => {
     const r = ref.current;

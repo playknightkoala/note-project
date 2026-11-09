@@ -99,7 +99,8 @@
   .block-editor { padding-bottom: calc(64px + env(safe-area-inset-bottom)); }
   .block-editor .bn-block-outer { scroll-margin-block: 64px; }
 }
-.selection-annotation { background: light-dark(#fff0b5, #655323); border-bottom: 2px solid light-dark(#dfb644, #be9532); cursor: pointer; }
+.selection-annotation { cursor: text; }
+.annotation-highlight { background: light-dark(#fff0b5, #655323); border-bottom: 2px solid light-dark(#dfb644, #be9532); cursor: pointer; }
 .selection-discussions { display: flex; justify-content: flex-end; padding-top: 12px; }
 .annotation-quote { margin: 0; padding: 8px 12px; border-left: 3px solid var(--app-border); color: var(--app-fg-muted); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 160px; overflow-y: auto; }
 .annotation-message { padding: 10px 12px; background: var(--app-hover); border-radius: 8px; }

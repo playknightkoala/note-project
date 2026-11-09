@@ -1,5 +1,32 @@
 # 驗證紀錄
 
+## 1.0.6 正式發布前檢查（2026-11-09）
+
+- 使用者指定發布 1.0.6，將未發布工作版 1.0.7 的版號／更新功能與留言修正整併為同一正式版本。package.json、lockfile 根版本、版本 API、更新說明與正式發布文件統一為 **1.0.6**；不建立 v1.0.7 Release。下方工作紀錄中的 1.0.7／1.0.8 保留為當時實測數據，不代表正式發布。
+- 在 Node 22.23.1／npm 10.9.8 下重新執行 `PATH=/tmp/notes-node22/node_modules/node/bin:/tmp/notes-node22/node_modules/.bin:$PATH npm run check`：`npm run typecheck`、`npm run lint`、`npm test`（**28 檔／167 tests**）、`npm run build` 全部通過。沒有資料庫 migration；`@tiptap/pm` 直接依賴 exact 3.33.0 與原間接版本一致，沒有升級 BlockNote。保留已知 SQLite experimental 與 Vite 大 bundle 提示。
+- `docker compose exec -T app node dist/server/cli.js backup` 成功產生 SQLite 線上備份；`docker compose up --build --wait` 最終容器 healthy。`npm run test:app -- http://127.0.0.1:8080`：**31 項 PASS**，含 `/healthz` 200。`curl -fsS http://127.0.0.1:8080/api/version` 回報 **1.0.6**，且該版本更新資訊同時包含留言修正與版號／更新功能。
+- 以最終 1.0.6 production 映像與兩個全新 `/data` tmpfs 容器，重新執行 `scripts/check-annotation-removal.mjs http://127.0.0.1:18084` 與 `scripts/check-app-update.mjs http://127.0.0.1:18085`（Node 22、`NOTES_PLAYWRIGHT_MODULE=/tmp/notes-offline-browser/node_modules/playwright/index.mjs`、`NOTES_CHROME_PATH='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'`）。涵蓋留言解決／刪除／最後反應取消、文字／粗體／重疊討論保留、離線重開，以及 1.0.6 → 暫存測試版 1.0.7 的實際兩版升級、失敗重試、待同步草稿／附件／登入保留、多分頁資源與手機側欄版號，全部 PASS。測試版只存在暫存資料，不會發布或修改正式版號；合成帳密未進版本控制或正式 volume。
+- `git diff --check` 通過。首次從 1.0.5 或更早版升級，及曾開啟未發布工作版 1.0.7 的本機分頁，均需手動連線重新載入一次，左下角應顯示 v1.0.6。尚未有手機實機、外部 Cloudflare Tunnel 部署切換或真實手機 HTTPS 驗收；詳細範圍沿用下方各功能紀錄。
+
+## 1.0.7 工作版：左下角版號與新版更新 Modal（2026-11-09，最終併入 1.0.6）
+
+- 左下角以 Vite 建置版號標示目前介面；`GET /api/version` 供應已部署版號與繁體中文更新說明，維持 no-store。新版比較採數值比較，同版、較舊版或無效版號不誤報。新版 Modal 自動開啟，中文組字期間延後；同一分頁對相同新版只自動提醒一次，仍可手動重新開啟或檢查。
+- 更新前透過 update guards 保存一般筆記標題／內文，阻止無法保存的輸入、未送出留言、資料格、設定表單與附件上傳被重載丟棄；待同步草稿可以持續保留。核對已安裝 worker 的目標版本後才 skipWaiting、等 controllerchange 並重新核對，再只重新載入發起更新的分頁。不清除 IndexedDB、cookie 或附件快取。其他舊分頁保留自己的資源，所有分頁完成更新後才清理舊 shell。
+- `PATH=/tmp/notes-node22/node_modules/node/bin:/tmp/notes-node22/node_modules/.bin:$PATH npm run check`：Node 22.23.1／npm 10.9.8 下，`npm run typecheck`、`npm run lint`、`npm test`（**28 檔／167 tests**）及 `npm run build` 全通過；驗收腳本最後補強手機動畫完成與可視範圍斷言後，再執行 `npm run lint` 通過。測試涵蓋版號數值比較、Modal 更新資訊、同版／回滾、稍後與重新開啟、IME、未送出內容阻止更新、真正 autosave 在更新前寫入 IndexedDB、worker 版本不符／下載失敗／另一分頁已啟用新版、舊資源保留與清理。沒有新增依賴或 migration；保留既有 SQLite experimental 與 Vite 大 bundle 提示。
+- 真實 Chrome：`NOTES_PLAYWRIGHT_MODULE=/tmp/notes-offline-browser/node_modules/playwright/index.mjs NOTES_CHROME_PATH='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' /tmp/notes-node22/node_modules/node/bin/node scripts/check-app-update.mjs http://127.0.0.1:18085` 全數 PASS。腳本複製當前前端來源至暫存目錄，實際另建測試版 1.0.8，透過本機代理切換兩份前端，後端為全新 `/data` tmpfs 容器。1.0.8 僅為驗收用，正式容器／工作版本仍是 1.0.7，沒有發布測試版或修改工作區版號。
+- 瀏覽器驗證：① 桌面側欄左下角是目前版號，透過前景定期檢查自動開啟新版 Modal 及更新內容；② 模擬 worker 503 時留在舊版並顯示可重試錯誤，恢復供應後按立即更新確實載入新 build；③ 刻意阻斷草稿上傳，更新後未同步內容仍在 IndexedDB 且畫面可讀，登入與附件快取保留；④ 另一舊分頁未被重載，仍能讀到自己的舊資源及草稿，主動更新後才移除舊 shell；⑤ 390×844 手機視口開啟側欄後，版號座標確實在可視範圍，沒有未捕捉前端錯誤。合成帳密只存記憶體，測試資料未寫入正式 volume；暫存前端與代理會自動清理。截圖存於 gitignored `.local/validation/app-version-mobile.png`。
+- 部署前 `docker compose exec -T app node dist/server/cli.js backup` 線上備份成功。`docker compose up --build --wait` 最終容器 healthy；`npm run test:app -- http://127.0.0.1:8080` **31 項 PASS**，含 `/healthz` 200。`curl -fsS http://127.0.0.1:8080/api/version` 實測回報 1.0.7 及更新內容。`git diff --check` 通過。
+- 限制：未做 iPhone Safari／Android 實機、手機 HTTPS 或外部 Cloudflare Tunnel 的部署切換驗收。一般明文 HTTP 不啟用 PWA，會以重新載入更新；關閉網站後不保證即時通知。首次從尚無偵測程式的舊介面升級，需手動連線重載一次；後續版本才會自動提示。只發布 GitHub Release 不會更新伺服器容器。
+
+## 1.0.6 留言取消與黃色標記修正（2026-11-09）
+
+- 重現：對獨立暫存容器執行 `scripts/check-annotation-removal.mjs`，點「標示為已解決」後確認伺服器 `resolved=true`，但實際 Chrome 背景仍為 `rgb(255, 240, 181)`，斷言「已解決的留言不應繼續顯示黃色標記」失敗。新增的刪除 API／介面測試也在修正前分別以 404／找不到「刪除整則討論」失敗。原因為 annotation 樣式無條件著色，未依討論狀態顯示，且沒有刪除入口。
+- 修正：改以 ProseMirror decorations 顯示未解決且仍有內容的討論，背景狀態刷新不改寫筆記 JSON；刪除成功才從目前編輯器移除該討論 anchor，保留文字、其他格式與重疊討論。已解決與空反應討論可由「包含已解決／已取消」查看。按帳號／頁面保存最後讀取過的 active IDs，供離線重開使用；不新增討論離線寫入功能。版本更新至 1.0.6，直接宣告 exact `@tiptap/pm@3.33.0`（原間接依賴已是相同版本），沒有升級 BlockNote 或新增 migration。
+- `PATH=/tmp/notes-node22/node_modules/node/bin:/tmp/notes-node22/node_modules/.bin:$PATH npm run check`：Node 22.23.1／npm 10.9.8，`npm run typecheck`、`npm run lint`、`npm test`（**25 檔／148 tests**）與 `npm run build` 全通過。新增刪除確認／取消、409 保留留言與草稿、移除 anchor 不損文字／粗體／重疊標記的測試，以及刪除 API 的登入、擁有者、CSRF、If-Match 與版本衝突測試。既有手機顏色、連結、格式與選取範圍測試均通過。直接修改編輯區 DOM 屬性的試驗曾造成手機顏色測試失敗，已撤除並改用 decorations；沒有留下 `[DEBUG-...]` 探針。保留既有 SQLite experimental 與 Vite 大 bundle 提示。
+- 真實 Chrome：`NOTES_PLAYWRIGHT_MODULE=/tmp/notes-offline-browser/node_modules/playwright/index.mjs NOTES_CHROME_PATH='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' /tmp/notes-node22/node_modules/node/bin/node scripts/check-annotation-removal.mjs http://127.0.0.1:18084`，使用全新測試容器及 `/data` tmpfs：① 解決後取消黃色，連線／離線重載維持取消，重新開啟恢復；② 取消刪除確認不刪資料，確認後刪除，保留文字／粗體／重疊討論，且伺服器內容不再含已刪 anchor；③ 移除唯一表情且沒有留言後取消黃色，連線／離線重載不復發，沒有未捕捉前端錯誤。全部 PASS；合成帳密僅存程序記憶體，沒有使用正式資料。
+- 更新前 `docker compose exec -T app node dist/server/cli.js backup` 線上備份成功。`docker compose up --build --wait` 建置完成且 healthy；`curl -fsS http://127.0.0.1:8080/api/version` 回報 `1.0.6`。`npm run test:app -- http://127.0.0.1:8080`：**31 項 PASS**，含 `/healthz` 200。`git diff --check` 通過。
+- 限制：沒有 iPhone Safari／Android 實體手機與真實 IME／鍵盤驗收；Chrome 使用 localhost 的安全環境例外。離線只沿用此裝置最後讀取過的標記狀態，無法離線取得其他裝置新改動的討論。更新後需關閉所有舊分頁／網站 App 再連線開啟，讓新 Service Worker 接手。
+
 ## 1.0.5 自動下載、同步提示與附件容量（2026-11-09）
 
 - 版本更新為 1.0.5；沒有新增依賴、沒有資料庫 migration。新增 `/api/offline/manifest`，依帳號提供不含內文的版本與頁面資訊，支援一般筆記增量下載、遠端刪除標記、衝突草稿保留與同步完成時間。附件上傳預設改為 90 MB，離線附件預設 500 MB 總容量、可設定 100–10,000 MB。

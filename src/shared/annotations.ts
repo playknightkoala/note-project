@@ -23,6 +23,9 @@ export interface Annotation {
   reactions: string[]; resolved: boolean; version: number; createdAt: number; updatedAt: number;
 }
 
+/** An empty reaction-only discussion no longer highlights any text. */
+export const isActiveAnnotation = (annotation: Annotation): boolean => !annotation.resolved && (annotation.messages.length > 0 || annotation.reactions.length > 0);
+
 /** Duplicated pages start a new discussion; do not retain links to the source's annotations. */
 export function stripAnnotationAnchors(content: unknown[]): unknown[] {
   const walk = (value: unknown): unknown => {

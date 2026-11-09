@@ -4,6 +4,7 @@ import { VIEW_TYPES, viewLabels } from '@shared/database';
 import type { DatabaseDto, DatabaseView, ViewType } from '@shared/database';
 import { useDatabaseSchema } from '../../api/databases.ts';
 import { errorText } from '../../api/client.ts';
+import { useUpdateGuard } from '../../updates/guards.ts';
 
 export function ViewDialog({ meta, view, onClose, onSelect }: { meta: DatabaseDto; view: DatabaseView | null; onClose: () => void; onSelect: (id: string) => void }) {
   const mutation = useDatabaseSchema(meta.id);
@@ -13,6 +14,7 @@ export function ViewDialog({ meta, view, onClose, onSelect }: { meta: DatabaseDt
   const [groupBy, setGroupBy] = useState<string | null>(view?.config.groupBy ?? null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const composing = useRef(false);
+  useUpdateGuard(() => { throw new Error('請先儲存或關閉視圖設定，再更新。'); });
   const groups = meta.properties.filter(property => property.type === 'select').map(property => ({ value: property.id, label: property.name }));
   const save = () => {
     const config = { ...(view?.config ?? { sorts: [], filters: [] }) };

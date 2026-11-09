@@ -7,6 +7,7 @@ import { useAutosave } from '../../src/client/features/page/useAutosave.ts';
 import { cachePage, offlineNote, rememberUser, syncNotes } from '../../src/client/offline/notes.ts';
 import type { OfflineNote } from '../../src/client/offline/notes.ts';
 import { clearLocal, updateLocal } from '../../src/client/offline/storage.ts';
+import { prepareForUpdate } from '../../src/client/updates/guards.ts';
 
 const userId = crypto.randomUUID();
 const response: PageResponse = { page: { id: crypto.randomUUID(), parentId: null, kind: 'page', databaseId: null, title: '標題', icon: null, coverUrl: null, coverPosition: 50, fullWidth: false, content: [], version: 4, isFavorite: false, trashedAt: null, createdAt: 1, updatedAt: 1 }, breadcrumbs: [] };
@@ -25,6 +26,22 @@ it('reports local persistence before server sync, and saves real editor content 
   await act(async () => { result.current.markDirty(); await result.current.saveNow(); });
   expect(result.current.state.status).toBe('local');
   expect((await offlineNote(response.page.id))?.local.page.content).toEqual(content);
+});
+
+it('persists a dirty note before an app update without requiring server sync', async () => {
+  const initial = await cachePage(response);
+  const content = [{ id: 'update-draft', type: 'paragraph', content: ['更新前的草稿'] }];
+  const { result } = renderHook(() => useAutosave({ pageId: response.page.id, initialVersion: 4, initialLocalRevision: initial.localRevision, getContent: () => content, onRemoteUpdate: vi.fn() }));
+  act(() => result.current.markDirty());
+  await act(async () => { await prepareForUpdate(); });
+  expect(await offlineNote(response.page.id)).toMatchObject({ pending: true, local: { page: { content } } });
+});
+
+it('blocks an update when current editor input cannot yet be saved', async () => {
+  const initial = await cachePage(response);
+  const { result } = renderHook(() => useAutosave({ pageId: response.page.id, initialVersion: 4, initialLocalRevision: initial.localRevision, getContent: () => null, onRemoteUpdate: vi.fn() }));
+  act(() => result.current.markDirty());
+  await expect(prepareForUpdate()).rejects.toThrow('尚未保存');
 });
 
 it('loading a competing tab draft does not discard that tab’s unsynced content', async () => {

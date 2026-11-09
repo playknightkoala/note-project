@@ -12,6 +12,7 @@ import { buildTreeIndex } from './treeIndex.ts';
 import type { FlatRow } from './treeDrag.ts';
 import { CommandPalette } from '../search/CommandPalette.tsx';
 import { OfflineStatus } from '../../offline/OfflineStatus.tsx';
+import { AppUpdates } from '../../updates/AppUpdates.tsx';
 
 export const SIDEBAR_BREAKPOINT = 768;
 interface ShellContext { sidebarOpen: boolean; toggleSidebar: () => void; closeSidebar: () => void }
@@ -98,6 +99,7 @@ export function AppShell() {
         <div className="sidebar-footer">
           <Link to="/trash" className={`sidebar-button${location.pathname === '/trash' ? ' sidebar-button--active' : ''}`}><Trash2 size={15} /><span>垃圾桶</span></Link>
           <Link to="/settings" className={`sidebar-button${location.pathname === '/settings' ? ' sidebar-button--active' : ''}`}><Settings size={15} /><span>設定</span></Link>
+          <AppUpdates />
         </div>
       </MantineAppShell.Navbar>
       <MantineAppShell.Main className="app-main">

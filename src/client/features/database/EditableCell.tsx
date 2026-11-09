@@ -4,6 +4,7 @@ import type { CellValue, DatabaseProperty } from '@shared/database';
 import { valueSchema } from '@shared/database';
 import { errorText, isApiError } from '../../api/client.ts';
 import { CellDisplay, CellValueInput } from './CellValueInput.tsx';
+import { useUpdateGuard } from '../../updates/guards.ts';
 
 export interface EditableCellProps {
   property: DatabaseProperty | null; value: CellValue; version: number; label: string; onSave: (value: CellValue, version: number) => Promise<unknown>; onReload: () => void;
@@ -41,6 +42,7 @@ function InlineCell({ property, value, version, label, onSave, onReload, tabInde
   const cancelled = useRef(false);
   const button = useRef<HTMLButtonElement>(null);
   const focusAfter = useRef(false);
+  useUpdateGuard(() => { if (editing && (draft !== original || pending)) throw new Error('請先儲存或取消資料格的修改，再更新。'); });
   useEffect(() => { if (!editing && focusAfter.current) { focusAfter.current = false; button.current?.focus(); } }, [editing]);
   const save = async (restoreFocus = false) => {
     if (busy.current || composing.current || cancelled.current) return;
@@ -80,6 +82,7 @@ function PopoverCell({ property, value, version, label, onSave, onReload, tabInd
   const [error, setError] = useState<unknown>(null);
   const [pending, setPending] = useState(false);
   const [composing, setComposing] = useState(false);
+  useUpdateGuard(() => { if (opened && (JSON.stringify(draft) !== JSON.stringify(value) || pending)) throw new Error('請先儲存或取消資料格的修改，再更新。'); });
   const save = async () => {
     if (pending || composing) return;
     setPending(true); setError(null);

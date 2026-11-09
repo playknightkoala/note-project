@@ -13,7 +13,17 @@ describe('bootstrap', () => {
     const health = await t.app.request('/healthz');
     expect(health.status).toBe(200); expect(await health.text()).toBe('ok\n');
     const version = await t.app.request('/api/version');
-    expect(version.status).toBe(200); expect(await version.json()).toEqual({ version: expect.any(String) });
+    expect(version.status).toBe(200); expect(await version.json()).toEqual({ version: expect.any(String), releases: expect.any(Array) });
+    expect(version.headers.get('cache-control')).toBe('no-store');
+  });
+
+  it('returns release information matching the running version and excludes future releases', async () => {
+    t.deps.config.version = '1.0.6';
+    const current = await (await t.app.request('/api/version')).json() as { releases: { version: string; changes: string[] }[] };
+    expect(current.releases[0]).toMatchObject({ version: '1.0.6', changes: expect.arrayContaining(['左下角顯示目前介面版號，可點擊檢查更新。', '可刪除整則討論，保留筆記文字與格式。']) });
+    t.deps.config.version = '1.0.5';
+    const older = await (await t.app.request('/api/version')).json() as { releases: { version: string }[] };
+    expect(older.releases.some(release => release.version === '1.0.6')).toBe(false);
   });
 
   it('sets the security headers on every response', async () => {

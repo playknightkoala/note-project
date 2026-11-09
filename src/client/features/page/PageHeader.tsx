@@ -6,6 +6,7 @@ import { Image as ImageIcon, Smile, Trash2 } from 'lucide-react';
 import { uploadFile } from '../../api/files.ts';
 import { PageTitle } from './PageTitle.tsx';
 import { errorText } from '../../api/client.ts';
+import { useUpdateGuard } from '../../updates/guards.ts';
 
 // Bundle the pinned BlockNote data: the default resolver fetches a public CDN,
 // which is unavailable offline and forbidden by our same-origin CSP.
@@ -33,6 +34,7 @@ export function PageHeader({ title, icon, coverUrl, coverPosition, onTitle, onIc
   const fileInput = useRef<HTMLInputElement>(null);
   const dragStart = useRef<{ y: number; position: number } | null>(null);
   const [uploading, setUploading] = useState(false);
+  useUpdateGuard(() => { if (uploading || repositioning !== null) throw new Error('請先完成封面上傳或位置設定，再更新。'); });
   const [uploadError, setUploadError] = useState<string | null>(null);
   const pickCover = async (file: File | undefined) => {
     if (!file) return;

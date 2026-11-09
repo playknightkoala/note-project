@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
+import { useUpdateGuard } from '../../updates/guards.ts';
 
 /** Notion-style inline title: a borderless auto-growing textarea; Enter/ArrowDown hand focus to the editor. */
 export function PageTitle({ value, onChange, onEnter }: { value: string; onChange: (title: string) => void; onEnter: () => void }) {
@@ -20,6 +21,7 @@ export function PageTitle({ value, onChange, onEnter }: { value: string; onChang
     if (event.key === 'Enter' || event.key === 'ArrowDown') { event.preventDefault(); if (timer.current) { clearTimeout(timer.current); timer.current = null; lastSent.current = draft; onChange(draft); } onEnter(); }
   };
   const flush = () => { if (timer.current) { clearTimeout(timer.current); timer.current = null; lastSent.current = draft; onChange(draft); } };
+  useUpdateGuard(flush);
   return <textarea ref={ref} className="page-title" value={draft} placeholder="無標題" rows={1} maxLength={500} spellCheck={false} aria-label="頁面標題"
     onChange={event => update(event.currentTarget.value.replace(/\r?\n/g, ' '))} onKeyDown={onKeyDown} onBlur={flush} />;
 }

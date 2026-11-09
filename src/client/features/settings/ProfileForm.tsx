@@ -3,6 +3,7 @@ import type { FormEvent } from 'react';
 import { Alert, Button, Group, Stack, TextInput } from '@mantine/core';
 import { useMe, useUpdateProfile } from '../../api/auth.ts';
 import { errorText } from '../../api/client.ts';
+import { useUpdateGuard } from '../../updates/guards.ts';
 
 export function ProfileForm() {
   const me = useMe();
@@ -10,6 +11,7 @@ export function ProfileForm() {
   const [displayName, setDisplayName] = useState(me.data?.displayName ?? '');
   const [username, setUsername] = useState(me.data?.username ?? '');
   const [saved, setSaved] = useState(false);
+  useUpdateGuard(() => { if (displayName !== (me.data?.displayName ?? '') || username.trim() !== (me.data?.username ?? '')) throw new Error('請先儲存個人資料，再更新。'); });
   const submit = (event: FormEvent) => {
     event.preventDefault(); setSaved(false);
     update.mutate({ displayName, username: username.trim() === '' ? null : username.trim() }, { onSuccess: () => setSaved(true) });
