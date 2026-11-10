@@ -67,3 +67,4 @@
   .database-board-column { min-width: 0; }
 }
 @media (max-width: 767px) { .database-view { margin: 16px; } .row-properties { padding-inline: 24px; } }
+.database-cell--static { cursor: default; }

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import type { ComponentType } from 'react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MantineProvider } from '@mantine/core';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BlockNoteEditor } from '@blocknote/core';
@@ -113,4 +113,37 @@ it('opens a discussion by clicking its text after the editor mounts', async () =
   fireEvent.click(host.querySelector('[data-annotation-ids]')!);
   await screen.findByText('原留言');
   editor.unmount(); host.remove();
+});
+
+it('lets a reader without edit access comment without touching the page: the discussion is shown by its quote', async () => {
+  const host = document.createElement('div'); document.body.append(host); editor.mount(host);
+  editor.replaceBlocks(editor.document, [{ id: 'b', type: 'paragraph', content: [{ type: 'text', text: '可以留言的原文', styles: { bold: true } }] }, { id: 'c', type: 'paragraph', content: '另一段可以留言' }]);
+  const stored = JSON.stringify(editor.document);
+  editor.isEditable = false;
+  Range.prototype.getBoundingClientRect = () => ({ top: 10, bottom: 24, left: 12, right: 80, width: 68, height: 14, x: 12, y: 10, toJSON: () => ({}) });
+  client.setQueryData(['annotations', 'owner', 'page-example'], { annotations: [] });
+  vi.mocked(api).mockImplementation(async (method, _path, options) => {
+    if (method === 'GET') return { annotations: [] } as never;
+    const op = (options!.json as { op: Extract<OfflineOp, { type: 'annotation.create' }> }).op;
+    return { annotation: { ...annotation, id: op.annotationId, quote: op.quote, blockIds: op.blockIds, floating: true, messages: [{ id: op.messageId, text: op.text, createdAt: 1 }] } } as never;
+  });
+  render(<MantineProvider env="test"><QueryClientProvider client={client}><SelectionTools editor={editor} pageId="page-example" readOnly /></QueryClientProvider></MantineProvider>);
+  // Nothing is offered until text is selected.
+  expect(screen.queryByRole('toolbar', { name: '選取文字工具' })).toBeNull();
+  const text = [...host.querySelectorAll('.bn-inline-content *, .bn-inline-content')].flatMap(node => [...node.childNodes]).find(node => node.nodeType === Node.TEXT_NODE && node.textContent === '可以留言的原文')!;
+  window.getSelection()!.setBaseAndExtent(text, 0, text, 4);
+  document.dispatchEvent(new Event('selectionchange'));
+  fireEvent.click(within(await screen.findByRole('toolbar', { name: '選取文字工具' })).getByRole('button', { name: '留言' }));
+  fireEvent.change(await screen.findByLabelText('留言'), { target: { value: '讀者的留言' } });
+  fireEvent.click(screen.getByRole('button', { name: '送出留言' }));
+  await waitFor(() => expect(sentOps()).toHaveLength(1));
+  const op = sentOps()[0] as Extract<OfflineOp, { type: 'annotation.create' }>;
+  // Only the discussion is sent: a quote and the blocks it is in, nothing of the page.
+  expect(op).toEqual({ type: 'annotation.create', pageId: 'page-example', annotationId: op.annotationId, messageId: op.messageId, quote: '可以留言', blockIds: ['b'], text: '讀者的留言', at: op.at, floating: true });
+  expect(JSON.stringify(editor.document)).toBe(stored);
+  // The quote is highlighted where it stands in the commented block (not the same words in another block), and
+  // leads to the discussion.
+  await waitFor(() => expect([...host.querySelectorAll('.annotation-highlight')].map(node => node.textContent)).toEqual(['可以留言']));
+  expect(host.querySelector('.annotation-highlight')?.getAttribute('data-annotation-ids')).toBe(op.annotationId);
+  host.remove();
 });

@@ -8,6 +8,7 @@ import type { CellValue, DatabaseProperty, DatabaseRow, ViewConfig } from '@shar
 import { EditableCell } from './EditableCell.tsx';
 import { ChoiceTag, CellDisplay } from './CellValueInput.tsx';
 import { NewRowInput } from './NewRowInput.tsx';
+import { useDatabaseAccess } from './access.ts';
 
 interface Props {
   rows: DatabaseRow[]; properties: DatabaseProperty[]; config: ViewConfig;
@@ -16,12 +17,14 @@ interface Props {
   onTrash: (row: DatabaseRow) => void; onReload: () => void; adding: boolean; onCloseAdd: () => void;
 }
 function RowActions({ row, onTrash }: Pick<Props, 'onTrash'> & { row: DatabaseRow }) {
-  return <Group gap={2} wrap="nowrap"><ActionIcon component={Link} to={`/p/${row.id}`} variant="subtle" color="gray" aria-label={`開啟資料列：${row.title || '無標題'}`}><ExternalLink size={14} /></ActionIcon>
+  const access = useDatabaseAccess();
+  return <Group gap={2} wrap="nowrap"><ActionIcon component={Link} to={access.rowHref(row.id)} variant="subtle" color="gray" aria-label={`開啟資料列：${row.title || '無標題'}`}><ExternalLink size={14} /></ActionIcon>
     <Menu withinPortal><Menu.Target><ActionIcon variant="subtle" color="gray" aria-label={`資料列選單：${row.title || '無標題'}`}><MoreHorizontal size={14} /></ActionIcon></Menu.Target>
-      <Menu.Dropdown><Menu.Item component={Link} to={`/p/${row.id}`}>開啟為頁面</Menu.Item><Menu.Item color="red" leftSection={<Trash2 size={14} />} onClick={() => onTrash(row)}>移至垃圾桶</Menu.Item></Menu.Dropdown></Menu>
+      <Menu.Dropdown><Menu.Item component={Link} to={access.rowHref(row.id)}>開啟為頁面</Menu.Item>{access.canManage && <Menu.Item color="red" leftSection={<Trash2 size={14} />} onClick={() => onTrash(row)}>移至垃圾桶</Menu.Item>}</Menu.Dropdown></Menu>
   </Group>;
 }
 export function ListView(props: Props) {
+  const access = useDatabaseAccess();
   const visible = props.properties.filter(property => !props.config.columns || props.config.columns.includes(property.id));
   return <div className="database-list" aria-label="資料庫清單">
     {props.rows.map(row => <div className="database-list-row" key={row.id}>
@@ -30,7 +33,7 @@ export function ListView(props: Props) {
       <RowActions row={row} onTrash={props.onTrash} />
     </div>)}
     {props.rows.length === 0 && <Text size="sm" c="dimmed" p="sm">尚無符合條件的資料列。</Text>}
-    <NewRowInput key={String(props.adding)} opened={props.adding} onClose={props.onCloseAdd} onCreate={title => props.onCreate(title, {})} />
+    {access.canEditRows && <NewRowInput key={String(props.adding)} opened={props.adding} onClose={props.onCloseAdd} onCreate={title => props.onCreate(title, {})} />}
   </div>;
 }
 const EMPTY_GROUP = '__ungrouped__';
@@ -38,6 +41,7 @@ export function BoardView(props: Props & { onMove: (row: DatabaseRow, groupBy: s
   const group = props.properties.find(property => property.id === props.config.groupBy && property.type === 'select');
   const [active, setActive] = useState<DatabaseRow | null>(null);
   const dragged = useRef<DatabaseRow | null>(null);
+  const access = useDatabaseAccess();
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
   if (!group) return <Text p="lg" c="dimmed">請在「編輯視圖」選擇單選欄位作為看板分組。</Text>;
   const groups = [...group.choices.map(choice => ({ id: choice.id, choice })), { id: EMPTY_GROUP, choice: null }];
@@ -53,11 +57,11 @@ export function BoardView(props: Props & { onMove: (row: DatabaseRow, groupBy: s
       return <BoardColumn key={id} id={id} label={choice?.label ?? '未設定'}>
         <Group gap="xs" className="database-board-heading">{choice ? <ChoiceTag choice={choice} /> : <Text size="sm" c="dimmed">未設定</Text>}<Text size="xs" c="dimmed">{rows.length}</Text></Group>
         <div className="database-board-cards">{rows.map(row => <BoardCard key={row.id} row={row} group={group} props={props} />)}
-          <NewRowInput onCreate={title => props.onCreate(title, { [group.id]: choice?.id ?? null })} />
+          {access.canEditRows && <NewRowInput onCreate={title => props.onCreate(title, { [group.id]: choice?.id ?? null })} />}
         </div>
       </BoardColumn>;
     })}</div>
-    {props.adding && <NewRowInput opened onClose={props.onCloseAdd} onCreate={title => props.onCreate(title, {})} />}
+    {props.adding && access.canEditRows && <NewRowInput opened onClose={props.onCloseAdd} onCreate={title => props.onCreate(title, {})} />}
     <DragOverlay>{active && <div className="database-board-card database-board-overlay">{active.title || '無標題'}</div>}</DragOverlay>
   </DndContext>;
 }
@@ -66,14 +70,15 @@ function BoardColumn({ id, label, children }: { id: string; label: string; child
   return <section ref={setNodeRef} className={`database-board-column${isOver ? ' database-board-column--over' : ''}`} aria-label={`群組：${label}`}>{children}</section>;
 }
 function BoardCard({ row, group, props }: { row: DatabaseRow; group: DatabaseProperty; props: Props & { onMove: (row: DatabaseRow, groupBy: string, choice: string | null) => void; moving: boolean } }) {
-  const { setNodeRef, attributes, listeners, isDragging } = useDraggable({ id: row.id, disabled: props.moving });
+  const access = useDatabaseAccess();
+  const { setNodeRef, attributes, listeners, isDragging } = useDraggable({ id: row.id, disabled: props.moving || !access.canEditRows });
   const visible = props.properties.filter(property => property.id !== group.id && (!props.config.columns || props.config.columns.includes(property.id)));
   return <div ref={setNodeRef} className={`database-board-card${isDragging ? ' database-board-card--dragging' : ''}`}>
-    <div className="database-board-card-title"><button type="button" className="database-drag-handle" aria-label={`拖曳卡片：${row.title || '無標題'}`} {...attributes} {...listeners}><GripVertical size={14} /></button>
+    <div className="database-board-card-title">{access.canEditRows && <button type="button" className="database-drag-handle" aria-label={`拖曳卡片：${row.title || '無標題'}`} {...attributes} {...listeners}><GripVertical size={14} /></button>}
       <EditableCell property={null} value={row.title} label={`${row.title || '無標題'}／名稱`} onReload={props.onReload} onSave={(value, base) => props.onSave(row, 'title', value, base)} />
       <Menu withinPortal><Menu.Target><ActionIcon size="sm" color="gray" variant="subtle" aria-label={`卡片選單：${row.title || '無標題'}`}><MoreHorizontal size={14} /></ActionIcon></Menu.Target>
-        <Menu.Dropdown><Menu.Item component={Link} to={`/p/${row.id}`}>開啟為頁面</Menu.Item><Menu.Label>移至</Menu.Label>{[...group.choices.map(choice => ({ id: choice.id, label: choice.label })), { id: '', label: '未設定' }].map(choice => <Menu.Item key={choice.id} disabled={props.moving || (row.values[group.id] ?? '') === choice.id} onClick={() => props.onMove(row, group.id, choice.id || null)}>{choice.label}</Menu.Item>)}
-          <Menu.Divider /><Menu.Item color="red" onClick={() => props.onTrash(row)}>移至垃圾桶</Menu.Item></Menu.Dropdown>
+        <Menu.Dropdown><Menu.Item component={Link} to={access.rowHref(row.id)}>開啟為頁面</Menu.Item>{access.canEditRows && <><Menu.Label>移至</Menu.Label>{[...group.choices.map(choice => ({ id: choice.id, label: choice.label })), { id: '', label: '未設定' }].map(choice => <Menu.Item key={choice.id} disabled={props.moving || (row.values[group.id] ?? '') === choice.id} onClick={() => props.onMove(row, group.id, choice.id || null)}>{choice.label}</Menu.Item>)}</>}
+          {access.canManage && <><Menu.Divider /><Menu.Item color="red" onClick={() => props.onTrash(row)}>移至垃圾桶</Menu.Item></>}</Menu.Dropdown>
       </Menu>
     </div>
     {visible.map(property => <div className="database-board-property" key={property.id}><span>{property.name}</span><CellDisplay property={property} value={row.values[property.id] ?? null} /></div>)}

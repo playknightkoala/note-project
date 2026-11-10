@@ -6,6 +6,7 @@ import type { PageResponse, TreeDto } from '../../shared/api.ts';
 import { AppError } from '../../shared/errors.ts';
 import { requireAuth, requireCsrf } from '../auth/middleware.ts';
 import * as pages from '../services/pages.ts';
+import { pageResponse, requireAccess } from '../services/access.ts';
 import { parseBody } from './validate.ts';
 
 /** `If-Match: "<version>"` is required for content writes so two tabs never overwrite each other silently. */
@@ -31,27 +32,42 @@ export function pageRoutes(): Hono<AppEnv> {
     return c.json<PageResponse>({ page: pages.toPageDto(row), breadcrumbs: pages.breadcrumbs(db, userId, row) }, 201);
   });
 
+  // The four routes below also serve members of a share: access is resolved first, then the page is read as its owner.
   app.get('/:id', c => {
     const { db, userId } = ctx(c);
-    const row = pages.loadPage(db, userId, c.req.param('id'), { allowTrashed: true });
+    const access = requireAccess(db, userId, c.req.param('id'), 'view');
+    // Only the owner may open a page that is in the trash.
+    const row = pages.loadPage(db, access.ownerId, c.req.param('id'), { allowTrashed: access.role === 'owner' });
     c.header('ETag', `"${row.version}"`);
-    return c.json<PageResponse>({ page: pages.toPageDto(row), breadcrumbs: pages.breadcrumbs(db, userId, row) });
+    return c.json<PageResponse>(pageResponse(db, access, row));
   });
 
-  app.get('/:id/head', c => { const { db, userId } = ctx(c); return c.json(pages.headOf(pages.loadPage(db, userId, c.req.param('id')))); });
+  app.get('/:id/head', c => {
+    const { db, userId } = ctx(c);
+    return c.json(pages.headOf(pages.loadPage(db, requireAccess(db, userId, c.req.param('id'), 'view').ownerId, c.req.param('id'))));
+  });
 
   app.put('/:id/content', async c => {
     const { db, userId, now } = ctx(c);
     const version = expectedVersion(c);
+    const access = requireAccess(db, userId, c.req.param('id'), 'edit');
     const input = await parseBody(c, contentSchema);
-    return c.json(pages.updateContent(db, userId, c.req.param('id'), input.content, version, now, input.overwrite ? 'overwrite' : 'autosave'));
+    return c.json(pages.updateContent(db, access.ownerId, c.req.param('id'), input.content, version, now, input.overwrite ? 'overwrite' : 'autosave', userId));
   });
 
   app.patch('/:id', async c => {
     const { db, userId, now } = ctx(c);
+    const id = c.req.param('id');
+    const access = requireAccess(db, userId, id, 'edit');
     const input = await parseBody(c, patchPageSchema);
-    const row = pages.patchPage(db, userId, c.req.param('id'), input, now);
-    return c.json<PageResponse>({ page: pages.toPageDto(row), breadcrumbs: pages.breadcrumbs(db, userId, row) });
+    if (access.role !== 'owner') {
+      // A member with edit access renames a note and nothing else: icon, cover and layout stay the owner's, and a
+      // row's name is one of its cells.
+      if (Object.keys(input).some(key => key !== 'title') || pages.loadPage(db, access.ownerId, id).kind !== 'page') throw new AppError('forbidden', '只有擁有者可以變更這個頁面的設定。');
+    }
+    const row = pages.patchPage(db, access.ownerId, id, input, now);
+    // The title is part of the path a member sees, so resolve again after the change.
+    return c.json<PageResponse>(pageResponse(db, access.role === 'owner' ? access : requireAccess(db, userId, id, 'view'), row));
   });
 
   app.post('/:id/move', async c => {

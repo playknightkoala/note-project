@@ -23,14 +23,16 @@ beforeEach(async () => {
 afterEach(async () => { cleanup(); await syncNotes(); vi.unstubAllGlobals(); });
 
 it('shows progress until both directions finish, then announces completion with a timestamp', async () => {
-  let release!: (response: Response) => void;
+  let release: ((response: Response) => void) | undefined;
   vi.stubGlobal('fetch', vi.fn(async (path: string) => path === '/api/auth/me'
     ? reply({ user: account, csrfToken: crypto.randomUUID() })
     : new Promise<Response>(resolve => { release = resolve; })));
   mount();
   await screen.findByText('正在同步離線筆記…');
   expect(screen.queryByText('離線筆記已同步完成')).toBeNull();
-  await act(async () => { release(reply({ userId: account.id, tree: [], pages: [], maxUploadBytes: 90 * 1024 * 1024 })); await syncNotes(); });
+  // The status says "syncing" before the list of pages is requested: wait for that request before answering it.
+  await waitFor(() => expect(release).toBeTypeOf('function'));
+  await act(async () => { release!(reply({ userId: account.id, tree: [], pages: [], maxUploadBytes: 90 * 1024 * 1024 })); await syncNotes(); });
   await screen.findByText('離線筆記已同步完成');
   expect(screen.getByText(/最近完整同步：/)).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: '離線與同步' }));

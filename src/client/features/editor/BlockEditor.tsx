@@ -27,11 +27,14 @@ export interface BlockEditorProps {
   onError?: (message: string) => void;
   uploadFile?: (file: File) => Promise<string>;
   fullWidth?: boolean;
+  /** False for a page shared read-only: nothing can be typed, but text can still be selected and discussed. */
   editable?: boolean;
   annotationsEnabled?: boolean;
+  /** False on somebody else's page: no child pages or databases can be created under it. */
+  ownPage?: boolean;
 }
 
-export function BlockEditor({ pageId, initialContent, onReady, onChange, onCompositionSettled, onComposingChange, onError, uploadFile, fullWidth, editable = true, annotationsEnabled = true }: BlockEditorProps) {
+export function BlockEditor({ pageId, initialContent, onReady, onChange, onCompositionSettled, onComposingChange, onError, uploadFile, fullWidth, editable = true, annotationsEnabled = true, ownPage = true }: BlockEditorProps) {
   const scheme = useComputedColorScheme('light');
   const navigate = useNavigate();
   const ime = useImeGuard(onCompositionSettled);
@@ -54,10 +57,10 @@ export function BlockEditor({ pageId, initialContent, onReady, onChange, onCompo
     <BlockNoteView editor={editor} editable={editable} theme={scheme} slashMenu={false} emojiPicker={false} formattingToolbar={false}
       onChange={() => { if (ime.composing.current) onComposingChange?.(); else onChange(); }}>
       <SuggestionMenuController triggerCharacter="/" shouldOpen={ime.notComposing}
-        getItems={async query => filterSuggestionItems([...slashItems(editor, pageId, navigate, onError), ...getDefaultReactSlashMenuItems(editor)], query)} />
+        getItems={async query => filterSuggestionItems([...slashItems(editor, pageId, navigate, onError).filter(item => ownPage || item.title === '提及頁面'), ...getDefaultReactSlashMenuItems(editor)], query)} />
       <SuggestionMenuController triggerCharacter="@" shouldOpen={ime.notComposing} minQueryLength={0} getItems={mentionItems} />
       <EmojiPickerController triggerCharacter=":" shouldOpen={ime.notComposing} minQueryLength={2} />
-      <SelectionTools editor={editor} pageId={pageId} composing={ime.isComposing} annotationsEnabled={annotationsEnabled} />
+      <SelectionTools editor={editor} pageId={pageId} composing={ime.isComposing} annotationsEnabled={annotationsEnabled} readOnly={!editable} />
     </BlockNoteView>
   </div>;
 }

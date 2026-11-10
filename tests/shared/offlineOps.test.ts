@@ -74,7 +74,7 @@ describe('the local view of discussions', () => {
     ];
     const run = (items: Annotation[]) => ops.reduce((list, op) => 'pageId' in op ? applyAnnotationOp(list, op) : list, items);
     const once = run([]);
-    expect(once).toEqual([{ id: annotationId, quote: '文字', blockIds: ['b'], messages: [{ id: first, text: '第一則', createdAt: 5 }, { id: second, text: '第二則', createdAt: 6 }], reactions: ['🎉'], resolved: true, version: 1, createdAt: 5, updatedAt: 6 }]);
+    expect(once).toEqual([{ id: annotationId, quote: '文字', blockIds: ['b'], messages: [{ id: first, text: '第一則', createdAt: 5 }, { id: second, text: '第二則', createdAt: 6 }], reactions: ['🎉'], resolved: true, version: 1, createdAt: 5, updatedAt: 6, mine: ['🎉'], counts: { '🎉': 1 }, canDelete: true }]);
     expect(run(once)).toEqual(once);
     expect(applyAnnotationOp(once, { type: 'annotation.delete', pageId, annotationId, messages: 2 })).toEqual([]);
     expect(applyAnnotationOp([], { type: 'annotation.comment', pageId, annotationId, messageId: second, text: '孤立', at: 1 })).toEqual([]);

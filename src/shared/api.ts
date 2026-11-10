@@ -73,6 +73,8 @@ export type PageKind = 'page' | 'database' | 'row';
 export interface PageNode {
   id: string; parentId: string | null; kind: PageKind; title: string; icon: string | null; position: number;
   isFavorite: boolean; favoritePosition: number | null; hasChildren: boolean; updatedAt: number;
+  /** Only present (and true) on a page the owner shares: it has a public link or at least one member. */
+  shared?: boolean;
 }
 export interface TreeDto { pages: PageNode[] }
 
@@ -82,7 +84,9 @@ export interface PageDto {
   isFavorite: boolean; trashedAt: number | null; createdAt: number; updatedAt: number;
 }
 export interface Breadcrumb { id: string; title: string; icon: string | null; kind: PageKind }
-export interface PageResponse { page: PageDto; breadcrumbs: Breadcrumb[] }
+/** How the reader may use a page that belongs to someone else. Never present on the reader's own pages. */
+export interface PageAccess { role: 'viewer' | 'editor'; /** The shared page this one is reached through. */ rootId: string; owner: { id: string; name: string } }
+export interface PageResponse { page: PageDto; breadcrumbs: Breadcrumb[]; access?: PageAccess }
 export interface PageHeadDto { version: number; updatedAt: number; title: string }
 
 export const createPageSchema = z.object({

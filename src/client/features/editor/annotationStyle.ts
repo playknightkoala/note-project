@@ -1,6 +1,7 @@
 import { createStyleSpec } from '@blocknote/core';
 import type { AppEditor } from './schema.ts';
 import { AnnotationHighlights } from './annotationHighlights.ts';
+import type { FloatingAnnotation } from './annotationHighlights.ts';
 
 export const annotationStyle = createStyleSpec({ type: 'annotation', propSchema: 'string' }, {
   render: value => {
@@ -25,9 +26,9 @@ export function markAnnotation(editor: AppEditor, from: number, to: number, id: 
 }
 
 /** Project discussion state onto the view without rewriting versioned note content. */
-export function updateAnnotationHighlights(editor: AppEditor, activeIds: ReadonlySet<string> | undefined): void {
+export function updateAnnotationHighlights(editor: AppEditor, activeIds: ReadonlySet<string> | undefined, floating: readonly FloatingAnnotation[] = []): void {
   if (!editor.getExtension(AnnotationHighlights)) editor.registerExtension(AnnotationHighlights());
-  editor.getExtension(AnnotationHighlights)!.setActiveIds(activeIds);
+  editor.getExtension(AnnotationHighlights)!.setActiveIds(activeIds, floating);
 }
 
 /** Explicit removal affects only this discussion; overlapping anchors and other styles remain. */

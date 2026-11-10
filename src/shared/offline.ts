@@ -4,12 +4,15 @@ import type { PageResponse, PageNode } from './api.ts';
 import { cellValueSchema, isEmptyValue, propertyInputSchema, pruneViewConfig, viewInputSchema } from './database.ts';
 import type { DatabaseDto, DatabaseProperty, DatabaseRow } from './database.ts';
 import { reactionSchema } from './annotations.ts';
-import type { Annotation } from './annotations.ts';
+import { myReactions } from './annotations.ts';
+import type { Annotation, AnnotationAuthor } from './annotations.ts';
+import type { IncomingShareDto } from './shares.ts';
 
 /** Content versions plus all metadata (including ancestor names) used by an offline copy. */
 export function summarizePage(response: PageResponse) {
   const { content: _content, ...page } = response.page;
-  return { page, breadcrumbs: response.breadcrumbs };
+  // The reader's role is part of what a device keeps; the key is left out for the reader's own pages.
+  return { page, breadcrumbs: response.breadcrumbs, ...(response.access ? { access: response.access } : {}) };
 }
 export interface OfflineManifest {
   userId: string;
@@ -18,6 +21,8 @@ export interface OfflineManifest {
   maxUploadBytes: number;
   databases: DatabaseStamp[];
   annotations: AnnotationStamp[];
+  /** What other accounts share with this one. Their pages, databases and discussions are listed above with the user's own. */
+  shared?: IncomingShareDto[];
 }
 
 /** A durable operation id makes retries safe even if the first response was lost. */
@@ -64,7 +69,9 @@ export const offlineOpSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('view.add'), ...schemaOp, viewId: id, input: viewInputSchema }),
   z.object({ type: z.literal('view.update'), ...schemaOp, viewId: id, input: viewInputSchema }),
   z.object({ type: z.literal('view.delete'), ...schemaOp, viewId: id }),
-  z.object({ type: z.literal('annotation.create'), pageId: id, annotationId: id, messageId: id, quote: z.string().trim().min(1).max(8000), blockIds: z.array(z.string().min(1).max(64)).min(1).max(100), text: note.optional(), emoji: reactionSchema.optional(), at })
+  z.object({ type: z.literal('annotation.create'), pageId: id, annotationId: id, messageId: id, quote: z.string().trim().min(1).max(8000), blockIds: z.array(z.string().min(1).max(64)).min(1).max(100), text: note.optional(), emoji: reactionSchema.optional(), at,
+    /** Set by a reader who may not write the page: the discussion is shown by its quote, without a mark in the text. */
+    floating: z.boolean().optional() })
     .refine(input => input.text !== undefined || input.emoji !== undefined, '請輸入留言或選擇表情符號。'),
   z.object({ type: z.literal('annotation.comment'), pageId: id, annotationId: id, messageId: id, text: note, at }),
   z.object({ type: z.literal('annotation.reaction'), pageId: id, annotationId: id, emoji: reactionSchema, on: z.boolean() }),
@@ -156,18 +163,31 @@ export function applyDatabaseOp(snapshot: DatabaseSnapshot, op: DatabaseOp, now:
   }
 }
 
-/** The discussions of a page as they will look once `op` is carried out; same rules as `applyDatabaseOp`. */
-export function applyAnnotationOp(items: Annotation[], op: AnnotationOp): Annotation[] {
+/**
+ * The discussions of a page as they will look once `op` is carried out; same rules as `applyDatabaseOp`.
+ * `actor` is the person this device belongs to: their name on what they write, and whose reaction is switched.
+ */
+export function applyAnnotationOp(items: Annotation[], op: AnnotationOp, actor?: AnnotationAuthor): Annotation[] {
   const change = (update: (item: Annotation) => Annotation) => items.map(item => item.id === op.annotationId ? update(item) : item);
+  const author = actor ? { author: actor } : {};
   switch (op.type) {
     case 'annotation.create':
       if (items.some(item => item.id === op.annotationId)) return items;
-      return [...items, { id: op.annotationId, quote: op.quote, blockIds: op.blockIds, messages: op.text ? [{ id: op.messageId, text: op.text, createdAt: op.at }] : [],
-        reactions: op.emoji ? [op.emoji] : [], resolved: false, version: 1, createdAt: op.at, updatedAt: op.at }];
+      return [...items, { id: op.annotationId, quote: op.quote, blockIds: op.blockIds, messages: op.text ? [{ id: op.messageId, text: op.text, createdAt: op.at, ...author }] : [],
+        reactions: op.emoji ? [op.emoji] : [], resolved: false, version: 1, createdAt: op.at, updatedAt: op.at,
+        ...author, mine: op.emoji ? [op.emoji] : [], counts: op.emoji ? { [op.emoji]: 1 } : {}, canDelete: true, ...(op.floating ? { floating: true } : {}) }];
     case 'annotation.comment':
-      return change(item => item.messages.some(message => message.id === op.messageId) ? item : { ...item, messages: [...item.messages, { id: op.messageId, text: op.text, createdAt: op.at }], updatedAt: op.at });
+      return change(item => item.messages.some(message => message.id === op.messageId) ? item : { ...item, messages: [...item.messages, { id: op.messageId, text: op.text, createdAt: op.at, ...author }], updatedAt: op.at });
     case 'annotation.reaction':
-      return change(item => ({ ...item, reactions: op.on ? [...item.reactions.filter(emoji => emoji !== op.emoji), op.emoji] : item.reactions.filter(emoji => emoji !== op.emoji) }));
+      return change(item => {
+        const mine = myReactions(item);
+        if (mine.includes(op.emoji) === op.on) return item;
+        const counts = { ...(item.counts ?? Object.fromEntries(item.reactions.map(emoji => [emoji, 1]))) };
+        const left = (counts[op.emoji] ?? 0) + (op.on ? 1 : -1);
+        if (left > 0) counts[op.emoji] = left; else delete counts[op.emoji];
+        return { ...item, counts, mine: op.on ? [...mine, op.emoji] : mine.filter(emoji => emoji !== op.emoji),
+          reactions: left > 0 ? (item.reactions.includes(op.emoji) ? item.reactions : [...item.reactions, op.emoji]) : item.reactions.filter(emoji => emoji !== op.emoji) };
+      });
     case 'annotation.resolve': return change(item => ({ ...item, resolved: op.resolved }));
     case 'annotation.delete': return items.filter(item => item.id !== op.annotationId);
   }

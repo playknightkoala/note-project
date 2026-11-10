@@ -7,8 +7,11 @@ import { AppError } from '../../shared/errors.ts';
 import { parseBody, parseValue } from './validate.ts';
 import { expectedVersion } from './pages.ts';
 import * as databases from '../services/databases.ts';
+import { requireAccess } from '../services/access.ts';
 
 function context(c: Context<AppEnv>) { return { db: c.get('deps').db, userId: c.get('auth')!.user.id, now: c.get('deps').now() }; }
+/** Reading is open to the members a database is shared with; every write below still names the caller as the owner. */
+function reader(c: Context<AppEnv>) { const { db, userId } = context(c); return { db, ownerId: requireAccess(db, userId, c.req.param('id')!, 'view').ownerId }; }
 function queryJson(value: string | undefined): unknown {
   if (value === undefined) return [];
   try { return JSON.parse(value); } catch { throw new AppError('bad_request', '排序或篩選格式不正確。'); }
@@ -16,7 +19,7 @@ function queryJson(value: string | undefined): unknown {
 export function databaseRoutes(): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
   app.use('*', requireAuth, requireCsrf);
-  app.get('/:id', c => { const { db, userId } = context(c); return c.json(databases.getDatabase(db, userId, c.req.param('id'))); });
+  app.get('/:id', c => { const { db, ownerId } = reader(c); return c.json(databases.getDatabase(db, ownerId, c.req.param('id'))); });
   app.post('/:id/properties', async c => {
     const { db, userId, now } = context(c); const input = await parseBody(c, propertyInputSchema);
     return c.json(databases.addProperty(db, userId, c.req.param('id'), input, expectedVersion(c), now), 201);
@@ -42,9 +45,9 @@ export function databaseRoutes(): Hono<AppEnv> {
     return c.json(databases.updateView(db, userId, c.req.param('id'), c.req.param('vid'), input, expectedVersion(c), now));
   });
   app.get('/:id/rows', c => {
-    const { db, userId } = context(c); const query = parseValue(c.req.query(), rowsQuerySchema);
+    const { db, ownerId } = reader(c); const query = parseValue(c.req.query(), rowsQuerySchema);
     const config = parseValue({ sorts: queryJson(query.sort), filters: queryJson(query.filter) }, viewConfigSchema);
-    return c.json(databases.listRows(db, userId, c.req.param('id'), config, query.offset, query.limit));
+    return c.json(databases.listRows(db, ownerId, c.req.param('id'), config, query.offset, query.limit));
   });
   app.post('/:id/rows', async c => {
     const { db, userId, now } = context(c); const input = await parseBody(c, rowInputSchema);
@@ -55,7 +58,7 @@ export function databaseRoutes(): Hono<AppEnv> {
 export function rowRoutes(): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
   app.use('*', requireAuth, requireCsrf);
-  app.get('/:id', c => { const { db, userId } = context(c); return c.json(databases.getRow(db, userId, c.req.param('id'))); });
+  app.get('/:id', c => { const { db, ownerId } = reader(c); return c.json(databases.getRow(db, ownerId, c.req.param('id'))); });
   app.patch('/:id/values', async c => {
     const { db, userId, now } = context(c); const input = await parseBody(c, rowInputSchema);
     return c.json(databases.updateRow(db, userId, c.req.param('id'), input, expectedVersion(c), now));

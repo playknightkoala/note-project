@@ -21,5 +21,7 @@ export function registerOfflineShell(): void {
       .then(() => { reportAppVersion(); window.dispatchEvent(new Event('notes:offline-ready')); })
       .catch(() => window.dispatchEvent(new Event('notes:offline-unavailable')));
   };
+  // A visitor of a public link does not get the offline interface installed; a device that already has it keeps it.
+  if (window.location.pathname.startsWith('/s/')) return;
   if (document.readyState === 'complete') register(); else window.addEventListener('load', register, { once: true });
 }

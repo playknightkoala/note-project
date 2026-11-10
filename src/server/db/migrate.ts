@@ -7,9 +7,10 @@ import { migration as annotations } from './migrations/0005_annotations.ts';
 import { migration as databaseViews } from './migrations/0006_database_views.ts';
 import { migration as offlineOperations } from './migrations/0007_offline_operations.ts';
 import { migration as offlineReceipts } from './migrations/0008_offline_receipts.ts';
+import { migration as shares } from './migrations/0009_shares.ts';
 
 export interface Migration { id: string; up: string }
-export const migrations: Migration[] = [init, coverPreset, searchContent, databaseVersions, annotations, databaseViews, offlineOperations, offlineReceipts];
+export const migrations: Migration[] = [init, coverPreset, searchContent, databaseVersions, annotations, databaseViews, offlineOperations, offlineReceipts, shares];
 
 /** Applies every migration whose id is not yet recorded, each in its own immediate transaction. Idempotent. */
 export function migrate(db: Db, list: Migration[] = migrations): string[] {

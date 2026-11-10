@@ -22,6 +22,15 @@ import { DatabaseView } from '../database/DatabaseView.tsx';
 import { RowPropertiesPanel } from '../database/RowPropertiesPanel.tsx';
 import { ContextMenu } from '../shell/ContextMenu.tsx';
 import { PageMenuItems } from '../shell/PageMenuItems.tsx';
+import { roleLabels } from '@shared/shares';
+import { useShares } from '../../api/shares.ts';
+import { PageLinkContext } from '../editor/pageLink/PageLinkContext.ts';
+import type { PageLinks } from '../editor/pageLink/PageLinkContext.ts';
+import { DatabaseAccessContext } from '../database/access.ts';
+import type { DatabaseAccess } from '../database/access.ts';
+
+import { AttachmentList } from '../share/AttachmentList.tsx';
+import { ErrorBoundary } from '../../app/ErrorBoundary.tsx';
 
 type Blocks = PartialBlock<typeof schema.blockSchema, typeof schema.inlineContentSchema, typeof schema.styleSchema>[];
 
@@ -37,6 +46,12 @@ export function PageRoute() {
 
 function PageView({ initial }: { initial: LocalPageResponse }) {
   const pageId = initial.page.id;
+  // Set when the page belongs to somebody else. What the reader may do follows from the role; the server enforces it.
+  const access = initial.access;
+  const readOnly = access?.role === 'viewer';
+  const shares = useShares();
+  const links = useMemo<PageLinks | null>(() => access ? { pages: shares.data?.incoming.find(share => share.tree.some(node => node.id === access.rootId))?.tree ?? [], href: id => `/p/${id}` } : null, [access, shares.data]);
+  const databaseAccess = useMemo<DatabaseAccess>(() => ({ canEditRows: !readOnly, canManage: !access, rowHref: id => `/p/${id}` }), [readOnly, access]);
   const queryClient = useQueryClient();
   const patch = usePatchPage();
   const { rememberPage, expandMany } = useUiState();
@@ -92,6 +107,8 @@ function PageView({ initial }: { initial: LocalPageResponse }) {
     localRevisionRef.current++;
     autosave.markDirty();
   }, [autosave]);
+  /** A reader without edit access never saves: the marks of their own discussions exist on their screen only. */
+  const ignoreChange = useCallback(() => {}, []);
   const onCompositionSettled = useCallback(() => { localRevisionRef.current++; autosave.markDirty(); }, [autosave]);
   const onComposingChange = useCallback(() => { if (replacingRef.current) return; localRevisionRef.current++; autosave.markComposing(); }, [autosave]);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -136,7 +153,8 @@ function PageView({ initial }: { initial: LocalPageResponse }) {
   }, [patch, pageId]);
   const saveCoverPosition = useCallback((coverPosition: number) => { setMeta(m => ({ ...m, coverPosition })); patch.mutate({ id: pageId, coverPosition }); }, [patch, pageId]);
   // Without a connection the file waits on this device under its final address and is uploaded before the note.
-  const upload = useCallback(async (file: File) => (await uploadFile(file, { offline: true })).url, []);
+  // Added to somebody else's page, the file becomes that page owner's.
+  const upload = useCallback(async (file: File) => (await uploadFile(file, { offline: true, ...(access ? { pageId } : {}) })).url, [access, pageId]);
   const focusEditor = useCallback(() => {
     const editor = editorRef.current; if (!editor) return;
     const first = editor.document[0]; if (first) editor.setTextCursorPosition(first, 'start');
@@ -146,14 +164,15 @@ function PageView({ initial }: { initial: LocalPageResponse }) {
   const currentPage = { id: pageId, kind: initial.page.kind, title: meta.title, icon: meta.icon, fullWidth: meta.fullWidth };
   const toggleFullWidth = () => { const fullWidth = !meta.fullWidth; setMeta(m => ({ ...m, fullWidth })); patch.mutate({ id: pageId, fullWidth }); };
 
-  return <ContextMenu label="頁面右鍵選單" items={<PageMenuItems page={currentPage} onToggleFullWidth={toggleFullWidth} smallText={smallText} onToggleSmallText={toggleSmallText} onOpenHistory={() => setHistoryOpen(true)} />}>
+  return <ContextMenu label="頁面右鍵選單" items={<PageMenuItems page={currentPage} access={access} onToggleFullWidth={toggleFullWidth} smallText={smallText} onToggleSmallText={toggleSmallText} onOpenHistory={() => setHistoryOpen(true)} />}>
     {handlers => <div className="page" ref={pageRef} {...handlers}>
     <TopBar page={currentPage} breadcrumbs={initial.breadcrumbs}
       saveStatus={autosave.state.status} saveError={autosave.state.error} onRetry={() => { void autosave.saveNow(); }}
       onToggleFullWidth={toggleFullWidth}
-      smallText={smallText} onToggleSmallText={toggleSmallText} onOpenHistory={() => setHistoryOpen(true)} />
-    <HistoryDrawer pageId={pageId} opened={historyOpen} onClose={() => setHistoryOpen(false)} currentVersion={autosave.state.version}
-      prepare={prepareRestore} onRestored={() => { void autosave.resolveConflict('reload'); }} />
+      smallText={smallText} onToggleSmallText={toggleSmallText} onOpenHistory={() => setHistoryOpen(true)} access={access} />
+    {!access && <HistoryDrawer pageId={pageId} opened={historyOpen} onClose={() => setHistoryOpen(false)} currentVersion={autosave.state.version}
+      prepare={prepareRestore} onRestored={() => { if (editorRef.current) void autosave.resolveConflict('reload'); else window.location.reload(); }} />}
+    {access && <Text size="xs" c="dimmed" className="shared-banner" role="status">{access.owner.name} 與你共用這個頁面 · {roleLabels[access.role]}{readOnly ? '：可以閱讀、留言與加表情' : initial.page.kind === 'database' ? '：可以修改資料列，也可以留言' : '：可以修改內文與標題，也可以留言'}</Text>}
     {autosave.state.status === 'conflict' && <Alert color="red" variant="light" className="conflict-bar" title="此頁面已在其他地方更新">
       <Group gap="sm">
         <Text size="sm">本機草稿已保留，系統不會自動合併或覆蓋。建議先匯出草稿，再選擇載入最新版本（捨棄這裡的修改），或以這裡的內容覆蓋（被覆蓋的線上版本會留在頁面歷史）。</Text>
@@ -170,13 +189,24 @@ function PageView({ initial }: { initial: LocalPageResponse }) {
     {patch.error && <Alert color="red" title="頁面設定尚未儲存">{errorText(patch.error)}</Alert>}
     <div ref={bodyRef} className={`page-body${initial.page.kind === 'database' ? ' page-body--database' : ''}${meta.fullWidth ? ' page-body--full' : ''}${smallText ? ' page-body--small' : ''}`}>
       <PageHeader title={meta.title} icon={meta.icon} coverUrl={meta.coverUrl} coverPosition={meta.coverPosition}
-        onTitle={saveTitle} onIcon={saveIcon} onCover={saveCover} onCoverPosition={saveCoverPosition} onEnter={focusEditor} />
+        onTitle={saveTitle} onIcon={saveIcon} onCover={saveCover} onCoverPosition={saveCoverPosition} onEnter={focusEditor}
+        editable={!access ? 'all' : readOnly || initial.page.kind === 'database' ? 'none' : 'title'} />
+      <PageLinkContext.Provider value={links}><DatabaseAccessContext.Provider value={databaseAccess}>
       {initial.page.kind === 'database'
         ? <DatabaseView databaseId={pageId} />
         : <>
           {initial.page.kind === 'row' && initial.page.databaseId && <RowPropertiesPanel rowId={pageId} databaseId={initial.page.databaseId} />}
-          <BlockEditor pageId={pageId} initialContent={initialContent} onReady={onReady} onChange={onChange} onCompositionSettled={onCompositionSettled} onComposingChange={onComposingChange} onError={setActionError} fullWidth={meta.fullWidth} uploadFile={upload} />
+          {/* Content the editor cannot build must not take the page down with it: the owner still reaches the history. */}
+          <ErrorBoundary fallback={<Alert color="red" title="這個頁面的內容無法顯示" role="alert">
+            <Text size="sm">內容含有編輯器無法處理的資料。{access ? '請通知頁面的擁有者。' : '可以從頁面歷史還原較早的版本。'}</Text>
+            {!access && <Button mt="xs" size="compact-sm" variant="white" onClick={() => setHistoryOpen(true)}>開啟頁面歷史</Button>}
+          </Alert>}>
+            <BlockEditor pageId={pageId} initialContent={initialContent} onReady={onReady} onChange={readOnly ? ignoreChange : onChange} onCompositionSettled={readOnly ? ignoreChange : onCompositionSettled} onComposingChange={readOnly ? ignoreChange : onComposingChange}
+              onError={setActionError} fullWidth={meta.fullWidth} uploadFile={upload} editable={!readOnly} ownPage={!access} />
+          </ErrorBoundary>
+          {readOnly && <AttachmentList content={initial.page.content} />}
         </>}
+      </DatabaseAccessContext.Provider></PageLinkContext.Provider>
     </div>
   </div>}
   </ContextMenu>;

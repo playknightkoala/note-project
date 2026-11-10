@@ -14,6 +14,7 @@ import { RulesDialog } from './RulesDialog.tsx';
 import { readViewParams, writeViewParams } from './viewParams.ts';
 import { ViewDialog } from './ViewDialog.tsx';
 import { BoardView, ListView } from './CollectionViews.tsx';
+import { useDatabaseAccess } from './access.ts';
 
 export function DatabaseView({ databaseId }: { databaseId: string }) {
   useDatabaseSync(databaseId);
@@ -25,6 +26,7 @@ export function DatabaseView({ databaseId }: { databaseId: string }) {
 function DatabaseContent({ meta }: { meta: LoadedDatabase }) {
   const [params, setParams] = useSearchParams();
   const client = useQueryClient();
+  const access = useDatabaseAccess();
   const view = meta.views.find(view => view.id === params.get('view')) ?? meta.views[0];
   const fallback = view?.config ?? { sorts: [], filters: [] };
   const { config, error } = readViewParams(params, fallback, meta.properties);
@@ -66,7 +68,7 @@ function DatabaseContent({ meta }: { meta: LoadedDatabase }) {
         if (next < 0 || (event.target as HTMLElement).getAttribute('role') !== 'tab') return;
         event.preventDefault(); const id = meta.views[next]!.id; selectView(id); document.getElementById(`view-tab-${id}`)?.focus();
       }}>{meta.views.map(item => { const Icon = icons[item.type]; return <Button key={item.id} role="tab" tabIndex={view?.id === item.id ? 0 : -1} aria-selected={view?.id === item.id} aria-controls={`view-panel-${item.id}`} id={`view-tab-${item.id}`} variant={view?.id === item.id ? 'light' : 'subtle'} color="gray" size="compact-sm" className="database-view-tab" leftSection={<Icon size={15} />} onClick={() => selectView(item.id)}>{item.name}</Button>; })}
-        <ActionIcon variant="subtle" color="gray" aria-label="新增視圖" disabled={meta.views.length >= 20} onClick={() => setViewDialog(null)}><Plus size={16} /></ActionIcon>
+        {access.canManage && <ActionIcon variant="subtle" color="gray" aria-label="新增視圖" disabled={meta.views.length >= 20} onClick={() => setViewDialog(null)}><Plus size={16} /></ActionIcon>}
       </Group>
       <Group gap="xs">
         <Tooltip label={`排序${config.sorts.length ? `（${config.sorts.length}）` : ''}`}><ActionIcon color="gray" variant={config.sorts.length ? 'light' : 'subtle'} aria-label="排序" onClick={() => setRules('sort')}><ArrowDownUp size={15} /></ActionIcon></Tooltip>
@@ -77,14 +79,14 @@ function DatabaseContent({ meta }: { meta: LoadedDatabase }) {
             apply({ ...config, columns: event.currentTarget.checked ? [...visible.filter(id => id !== p.id), p.id] : visible.filter(id => id !== p.id) });
           }} />)}<Button size="compact-xs" variant="subtle" onClick={() => apply({ ...config, columns: meta.properties.map(p => p.id) })}>顯示全部</Button>
         </Stack></Popover.Dropdown></Popover>
-        {view && <Tooltip label="編輯視圖"><ActionIcon variant="subtle" color="gray" aria-label="編輯視圖" onClick={() => setViewDialog(view)}><Settings2 size={15} /></ActionIcon></Tooltip>}
-        {view?.type !== 'table' && <Tooltip label="新增屬性"><ActionIcon variant="subtle" color="gray" aria-label="新增屬性" onClick={() => setProperty(null)}><Plus size={15} /></ActionIcon></Tooltip>}
+        {view && access.canManage && <Tooltip label="編輯視圖"><ActionIcon variant="subtle" color="gray" aria-label="編輯視圖" onClick={() => setViewDialog(view)}><Settings2 size={15} /></ActionIcon></Tooltip>}
+        {view?.type !== 'table' && access.canManage && <Tooltip label="新增屬性"><ActionIcon variant="subtle" color="gray" aria-label="新增屬性" onClick={() => setProperty(null)}><Plus size={15} /></ActionIcon></Tooltip>}
         <Tooltip label="重新載入"><ActionIcon variant="subtle" color="gray" aria-label="重新載入" loading={rows.isFetching} onClick={reload}><RefreshCw size={15} /></ActionIcon></Tooltip>
-        {view && hasOverride && <Button size="compact-xs" variant="light" leftSection={<Save size={14} />} disabled={!!error} loading={schema.isPending} onClick={() => schema.mutate({ action: 'view', id: view.id, input: { name: view.name, config }, version: viewVersion }, { onSuccess: () => { reset(); setViewSaved(true); } })}>儲存視圖</Button>}
-        <Button size="compact-xs" leftSection={<Plus size={14} />} onClick={() => { create.reset(); setAdding(true); }}>新增</Button>
+        {view && hasOverride && access.canManage && <Button size="compact-xs" variant="light" leftSection={<Save size={14} />} disabled={!!error} loading={schema.isPending} onClick={() => schema.mutate({ action: 'view', id: view.id, input: { name: view.name, config }, version: viewVersion }, { onSuccess: () => { reset(); setViewSaved(true); } })}>儲存視圖</Button>}
+        {access.canEditRows && <Button size="compact-xs" leftSection={<Plus size={14} />} onClick={() => { create.reset(); setAdding(true); }}>新增</Button>}
       </Group>
     </Group>
-    {hasOverride && <Group gap="xs" mb="xs"><Text size="xs" c="dimmed">目前條件尚未儲存為預設視圖，網址可保留這些條件。</Text><Button size="compact-xs" variant="subtle" onClick={reset}>還原已儲存視圖</Button></Group>}
+    {hasOverride && <Group gap="xs" mb="xs"><Text size="xs" c="dimmed">{access.canManage ? '目前條件尚未儲存為預設視圖，網址可保留這些條件。' : '這些排序與篩選只套用在你的畫面，不會改變擁有者的視圖。'}</Text><Button size="compact-xs" variant="subtle" onClick={reset}>還原已儲存視圖</Button></Group>}
     {meta.local && <Text size="xs" c="orange" mb="xs" role="status">目前顯示此裝置上的副本；修改已存此裝置，連線後自動同步。移至垃圾桶需要連線。</Text>}
     {viewSaved && <Text size="xs" c="green" mb="sm" role="status">視圖已儲存。</Text>}
     {notice && <Text size="xs" c="dimmed" mb="xs" role="status">{notice}</Text>}
@@ -101,7 +103,7 @@ function DatabaseContent({ meta }: { meta: LoadedDatabase }) {
       hasMore={!!rows.hasNextPage} loadingMore={rows.isFetchingNextPage} onMore={onMore} />)}
     </div>
     {view?.type !== 'table' && rows.hasNextPage && <Button mt="sm" variant="subtle" size="xs" loading={rows.isFetchingNextPage} onClick={onMore}>載入更多資料列</Button>}
-    <Text size="xs" c="dimmed" mt="xs">{data.length < total ? `已載入 ${data.length}／${total} 列；看板計數為已載入數量。` : `${total} 列`}{view?.type === 'table' && ' · 方向鍵移動 · Enter 編輯／儲存 · Alt+Enter 開啟頁面'}{view?.type === 'board' && ' · 拖曳把手移組，或使用卡片選單'}</Text>
+    <Text size="xs" c="dimmed" mt="xs">{data.length < total ? `已載入 ${data.length}／${total} 列；看板計數為已載入數量。` : `${total} 列`}{view?.type === 'table' && (access.canEditRows ? ' · 方向鍵移動 · Enter 編輯／儲存 · Alt+Enter 開啟頁面' : ' · 方向鍵移動 · Alt+Enter 開啟頁面')}{view?.type === 'board' && access.canEditRows && ' · 拖曳把手移組，或使用卡片選單'}</Text>
     {property !== undefined && <PropertyDialog meta={meta} property={property} onClose={() => setProperty(undefined)} onReload={reload} />}
     {rules && <RulesDialog mode={rules} properties={meta.properties} config={rules === 'filter' && columnFilter ? { ...config, filters: [...config.filters.filter(filter => filter.propertyId !== columnFilter.propertyId), columnFilter] } : config} onApply={apply} onClose={() => { setRules(null); setColumnFilter(null); }} />}
     {viewDialog !== undefined && <ViewDialog meta={meta} view={viewDialog} onClose={() => setViewDialog(undefined)} onSelect={selectView} />}

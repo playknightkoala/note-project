@@ -37,7 +37,8 @@ export function OfflineStatus() {
       void Promise.all([queuedOps(), pendingUploads(), owner ? storedDatabases(owner) : []]).then(([queued, files, stored]) => { if (active) { setOps(queued); setUploads(files); setDatabases(stored.length); } }).catch(() => {});
     };
     const sync = () => setStatus({ ...syncStatus });
-    const tree = () => { void queryClient.invalidateQueries({ queryKey: ['tree'] }); };
+    // A finished download may have brought new pages, and new or ended shares.
+    const tree = () => { void queryClient.invalidateQueries({ queryKey: ['tree'] }); void queryClient.invalidateQueries({ queryKey: ['shares'] }); };
     const connect = () => { setOnline(navigator.onLine); if (navigator.onLine) void syncNotes({ force: true }); };
     const focus = () => { if (document.visibilityState === 'visible') void syncNotes({ force: true }); };
     const prepared = () => setReady(true);

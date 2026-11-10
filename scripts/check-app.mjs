@@ -40,10 +40,22 @@ async function main() {
   const icon = await fetchText('/notes-icon.svg');
   check('PWA icon', icon.response.status === 200 && icon.text.startsWith('<svg'));
 
-  for (const route of ['/api/pages/tree', '/api/offline/manifest', '/api/search?q=x', '/api/auth/me', '/api/admin/users', '/api/trash']) {
+  for (const route of ['/api/pages/tree', '/api/offline/manifest', '/api/search?q=x', '/api/auth/me', '/api/admin/users', '/api/trash', '/api/shares', '/api/pages/00000000-0000-4000-8000-000000000000/share']) {
     const { response } = await fetchText(route);
     check(`${route} needs login`, response.status === 401);
   }
+  // Public links: an address nobody issued is "not found" (never a hint that it could exist), nothing under it can
+  // be written, and neither the API nor the page a link opens may be indexed.
+  const noLink = `/api/public/${'x'.repeat(43)}`;
+  for (const route of [noLink, `${noLink}/pages/00000000-0000-4000-8000-000000000000`, `${noLink}/files/00000000-0000-4000-8000-000000000000`, '/api/public/short']) {
+    const { response, text } = await fetchText(route);
+    check(`${route.replace(/x{43}/, '…')} unknown link is 404`, response.status === 404 && text.includes('"code":"not_found"') && response.headers.get('x-robots-tag') === 'noindex, nofollow');
+  }
+  const linkWrite = await fetchText(noLink, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+  check('public link API is read-only', linkWrite.response.status === 404);
+  const linkPage = await fetchText(`/s/${'x'.repeat(43)}`);
+  check('public link page is not indexed', linkPage.response.status === 200 && linkPage.text.includes('<div id="root">') && linkPage.response.headers.get('x-robots-tag') === 'noindex, nofollow');
+  check('other pages may be indexed normally', index.response.headers.get('x-robots-tag') === null);
   const unknown = await fetchText('/api/nothing');
   check('API 404 is JSON', unknown.response.status === 404 && unknown.text.includes('"code":"not_found"'));
   const csrf = await fetchText('/api/pages', { method: 'POST', headers: { 'content-type': 'application/json', origin: 'https://evil.example' }, body: '{}' });

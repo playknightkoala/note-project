@@ -4,7 +4,7 @@ import { applyAnnotationOp, applyDatabaseOp, describeOp, isDatabaseOp, isSchemaO
 import type { DatabaseSnapshot, DatabaseSnapshotDto, OfflineOp, OfflineOpResult } from '@shared/offline';
 import { newId } from '@shared/ids';
 import { ApiError, api, isApiError } from '../api/client.ts';
-import { annotationsKey, databaseKey, offlineOwner, opPrefix, pageKey } from './owner.ts';
+import { annotationsKey, databaseKey, offlineActor, offlineOwner, opPrefix, pageKey } from './owner.ts';
 import { listLocal, readLocal, removeLocal, updateLocal } from './storage.ts';
 
 /**
@@ -92,7 +92,7 @@ export async function localAnnotations(pageId: string): Promise<Annotation[]> {
   const owner = offlineOwner();
   if (!owner) return [];
   let items = (await readLocal<LocalAnnotations>(annotationsKey(owner, pageId)).catch(() => undefined))?.items ?? [];
-  for (const item of await waiting(owner)) if (!isDatabaseOp(item.op) && item.op.pageId === pageId) items = applyAnnotationOp(items, item.op);
+  for (const item of await waiting(owner)) if (!isDatabaseOp(item.op) && item.op.pageId === pageId) items = applyAnnotationOp(items, item.op, offlineActor());
   return items;
 }
 
@@ -112,7 +112,7 @@ async function absorb(userId: string, op: OfflineOp, result: OfflineOpResult): P
     if (op.type === 'row.create') await updateLocal<{ localOnly?: boolean }>(pageKey(userId, op.rowId), current => current?.localOnly ? { ...current, localOnly: undefined } : current);
   } else {
     await updateLocal<LocalAnnotations>(annotationsKey(userId, op.pageId), current => {
-      const items = applyAnnotationOp(current?.items ?? [], op);
+      const items = applyAnnotationOp(current?.items ?? [], op, offlineActor());
       return { pageId: op.pageId, stamp: current?.stamp ?? '', items: result.annotation ? [...items.filter(item => item.id !== result.annotation!.id), result.annotation].sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id)) : items };
     });
   }

@@ -75,6 +75,7 @@ npm run test:app -- https://你的網域
 
 - 代理必須傳 `X-Forwarded-Proto: https` 與 `X-Forwarded-For`，且 app 只在 `TRUST_PROXY=1` 時信任這些標頭。沒有代理時不要開，否則客戶端可以偽造來源 IP 影響速率限制。
 - 來源位址取 `X-Forwarded-For` 的最後一段（緊鄰 app 的代理所附加的位址）；前面各段可能是客戶端自己填的，不採用。自架代理請覆寫或附加真實位址（nginx：`proxy_set_header X-Forwarded-For $remote_addr;`）。代理另以專用標頭提供真實位址時，用 `NOTES_CLIENT_IP_HEADER` 指定。
+- 公開連結（`/s/…` 與 `/api/public/…`，見 [SHARING.md](SHARING.md)）不需登入，依來源位址限流（每分鐘 600 次）。在代理或 tunnel 後面若沒有設定 `NOTES_TRUST_PROXY=1`（及必要的 `NOTES_CLIENT_IP_HEADER`），所有訪客都會被當成代理的位址而共用同一個額度。公開連結的網址本身就是鑰匙，會出現在代理的存取紀錄中；app 自己的錯誤紀錄會遮蔽它，代理的紀錄請自行控管保存與存取。
 - 登入限制：每個來源位址 15 分鐘 10 次；同一來源對同一帳號 5 次失敗後暫停 15 分鐘；同一帳號不分來源以 30 次為上限。別人從其他位址猜錯密碼不會鎖住帳號本人。登入與註冊只接受同源的 `application/json` 請求。
 - 請求大小：帳號相關端點 64 KB、其他 JSON 端點 8 MB、附件為 `NOTES_MAX_UPLOAD_MB`；超過即回 413，未帶 `Content-Length`（chunked）的請求也在讀到上限時中止。
 - 寫入請求的來源檢查只比對主機名：`Origin` 必須是 `NOTES_PUBLIC_ORIGIN`，或等於請求抵達時的 `Host`（`NOTES_TRUST_PROXY=1` 時改看 `X-Forwarded-Host`）。若代理或 tunnel 改寫了 `Host`（症狀：登入後所有寫入動作都回 403 `csrf`，例如產生邀請碼、登出），在 `.env` 設 `NOTES_PUBLIC_ORIGIN=https://你的網域` 後 `docker compose up -d --wait`。

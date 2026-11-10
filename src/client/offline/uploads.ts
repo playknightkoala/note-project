@@ -6,7 +6,7 @@ import { mustStop } from './outbox.ts';
 import { listLocal, updateLocal } from './storage.ts';
 
 /** A file added while the server could not be reached. Its bytes wait in the browser's cache storage. */
-export interface PendingUpload { id: string; userId: string; name: string; type: string; size: number; url: string; createdAt: number; problem?: string }
+export interface PendingUpload { id: string; userId: string; name: string; type: string; size: number; url: string; createdAt: number; problem?: string; /** The shared page it was added to, when that is somebody else's. */ pageId?: string }
 
 export const pendingUploads = async (userId = offlineOwner()): Promise<PendingUpload[]> => userId ? listLocal<PendingUpload>(`upload:${userId}:`) : [];
 
@@ -14,7 +14,7 @@ export const pendingUploads = async (userId = offlineOwner()): Promise<PendingUp
  * Keeps a file on this device under the address it will have on the server, so the note can refer to it right away.
  * The offline interface (service worker) answers that address from here until the file has been uploaded.
  */
-export async function queueUpload(file: File, id: string, maxBytes?: number): Promise<UploadedFile> {
+export async function queueUpload(file: File, id: string, maxBytes?: number, pageId?: string): Promise<UploadedFile> {
   const owner = offlineOwner();
   if (!owner) throw new Error('請先登入。');
   if (!('caches' in window) || !navigator.serviceWorker?.controller) throw new Error('此裝置尚未啟用離線介面，無法離線加入附件；請連線後再試。');
@@ -26,7 +26,7 @@ export async function queueUpload(file: File, id: string, maxBytes?: number): Pr
   const headers = { ...fileHeaders(mime, name), 'Content-Length': String(file.size), 'Cache-Control': 'no-store', 'X-Notes-User': owner, 'X-Notes-Pending': '1' };
   try { await (await caches.open(uploadCache(owner))).put(url, new Response(file, { headers })); }
   catch { throw new Error('無法將附件保存至此裝置，可能儲存空間不足。'); }
-  const item: PendingUpload = { id, userId: owner, name, type: file.type, size: file.size, url, createdAt: Date.now() };
+  const item: PendingUpload = { id, userId: owner, name, type: file.type, size: file.size, url, createdAt: Date.now(), ...(pageId ? { pageId } : {}) };
   const undo = () => caches.open(uploadCache(owner)).then(cache => cache.delete(url)).catch(() => {});
   // Ask for it the way the note will. An offline interface from before this feature does not answer from here yet,
   // and the note would then show a broken attachment until it is updated.
@@ -54,6 +54,7 @@ export async function sendUploads(userId: string): Promise<void> {
     const form = new FormData();
     form.append('file', new File([await stored.clone().blob()], item.name, { type: item.type }));
     form.append('id', item.id);
+    if (item.pageId) form.append('pageId', item.pageId);
     try { await api<UploadedFile>('POST', '/api/files', { form }); }
     catch (error) {
       if (mustStop(error)) throw error;

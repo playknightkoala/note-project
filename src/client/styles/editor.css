@@ -133,3 +133,31 @@
   .block-editor .bn-editor { padding-inline: 36px 0; }
   .tree-row__actions { display: inline-flex; }
 }
+
+/* ---- Sharing ---- */
+.tree-row__shared { display: inline-flex; flex: none; color: var(--app-fg-muted); opacity: 0.8; }
+.tree-row__owner { flex: none; max-width: 84px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--app-fg-muted); }
+.tree-row:hover .tree-row__owner, .tree-row:focus-within .tree-row__owner { display: none; }
+.topbar__share, .topbar__access { flex: none; }
+.shared-banner { padding: 6px 24px 0; }
+.share-member { padding: 4px 0; }
+.page-title--static { cursor: default; white-space: pre-wrap; overflow-wrap: anywhere; }
+.page-icon--static { cursor: default; }
+.page-icon--static:hover { background: transparent; }
+.attachment-list { margin-top: 20px; padding-top: 12px; border-top: 1px solid var(--app-border); }
+.attachment-list a { display: inline-flex; align-items: center; gap: 4px; overflow-wrap: anywhere; }
+.readonly-selection-bar { position: fixed; z-index: 300; display: flex; align-items: center; gap: 2px; padding: 4px; background: var(--app-bg); border: 1px solid var(--app-border); border-radius: 8px; box-shadow: 0 6px 20px rgba(0,0,0,0.15); }
+.public-layout { display: flex; align-items: flex-start; flex: 1; min-width: 0; }
+.public-layout > .page-body { flex: 1; min-width: 0; }
+.public-nav { position: sticky; top: 52px; flex: none; width: 240px; max-height: calc(100vh - 60px); overflow: auto; padding: 12px 8px; border-right: 1px solid var(--app-border); }
+.public-nav .tree-row { text-decoration: none; }
+@media (max-width: 767px) {
+  .public-layout { flex-direction: column; }
+  .public-nav { position: static; width: 100%; max-height: 180px; border-right: 0; border-bottom: 1px solid var(--app-border); box-sizing: border-box; }
+  .shared-banner { padding: 6px 16px 0; }
+  .topbar__share .mantine-Button-label { display: none; }
+  .topbar__share .mantine-Button-section { margin: 0; }
+}
+@media (pointer: coarse) {
+  .readonly-selection-bar { top: auto !important; left: 50% !important; bottom: calc(12px + env(safe-area-inset-bottom)); transform: translateX(-50%); }
+}

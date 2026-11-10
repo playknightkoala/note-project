@@ -15,7 +15,8 @@ export function staticRoutes(clientDir: string): Hono<AppEnv> {
     // A missing hashed asset is an error, never the app shell: a 200 HTML answer would be cached as that asset.
     if (c.req.path.startsWith('/api/') || c.req.path.startsWith('/assets/')) return c.notFound();
     if (c.req.method !== 'GET' && c.req.method !== 'HEAD') return c.text('Method Not Allowed', 405);
-    return c.html(index, 200, { 'Cache-Control': 'no-cache' });
+    // A public link is for whoever was given it, not for search engines.
+    return c.html(index, 200, { 'Cache-Control': 'no-cache', ...(c.req.path.startsWith('/s/') ? { 'X-Robots-Tag': 'noindex, nofollow' } : {}) });
   });
   return app;
 }

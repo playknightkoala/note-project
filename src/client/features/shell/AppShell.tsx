@@ -13,6 +13,9 @@ import type { FlatRow } from './treeDrag.ts';
 import { CommandPalette } from '../search/CommandPalette.tsx';
 import { OfflineStatus } from '../../offline/OfflineStatus.tsx';
 import { AppUpdates } from '../../updates/AppUpdates.tsx';
+import { useShares } from '../../api/shares.ts';
+import { ShareDialogHost } from '../share/ShareDialog.tsx';
+import { SharedTree } from '../share/SharedTree.tsx';
 
 export const SIDEBAR_BREAKPOINT = 768;
 interface ShellContext { sidebarOpen: boolean; toggleSidebar: () => void; closeSidebar: () => void }
@@ -23,6 +26,7 @@ export function AppShell() {
   const me = useMe();
   const logout = useLogout();
   const tree = useTree();
+  const shares = useShares();
   const create = useCreatePage();
   const navigate = useNavigate();
   const location = useLocation();
@@ -62,7 +66,8 @@ export function AppShell() {
   const newDatabase = () => create.mutate({ kind: 'database' }, { onSuccess: result => { close(); navigate(`/p/${result.page.id}`); } });
   const shell = useMemo<ShellContext>(() => ({ sidebarOpen: isMobile ? opened : !desktopCollapsed, toggleSidebar: isMobile ? toggle : toggleDesktop, closeSidebar: close }), [opened, toggle, close, isMobile, desktopCollapsed]);
   const favoriteRows: FlatRow[] = index.favorites.map((node, i) => ({ id: node.id, parentId: null, depth: 0, index: i, node }));
-  return <ShellCtx.Provider value={shell}>
+  const incoming = shares.data?.incoming ?? [];
+  return <ShellCtx.Provider value={shell}><ShareDialogHost>
     <MantineAppShell navbar={{ width: 260, breakpoint: SIDEBAR_BREAKPOINT, collapsed: { mobile: !opened, desktop: desktopCollapsed } }} padding={0} className="app-shell">
       <MantineAppShell.Navbar className="sidebar" onClick={isMobile ? close : undefined}>
         <Menu position="bottom-start" width={240} shadow="md">
@@ -95,6 +100,10 @@ export function AppShell() {
           </>}
           <div className="sidebar-section">頁面</div>
           {tree.isPending ? <Text size="xs" c="dimmed" px="sm">載入中…</Text> : <PageTree index={index} currentId={pageId ?? null} dragEnabled={!isMobile} />}
+          {incoming.length > 0 && <>
+            <div className="sidebar-section">與我共用</div>
+            <SharedTree shares={incoming} currentId={pageId ?? null} />
+          </>}
         </ScrollArea>
         <div className="sidebar-footer">
           <Link to="/trash" className={`sidebar-button${location.pathname === '/trash' ? ' sidebar-button--active' : ''}`}><Trash2 size={15} /><span>垃圾桶</span></Link>
@@ -110,5 +119,5 @@ export function AppShell() {
       </MantineAppShell.Main>
     </MantineAppShell>
     {user && <CommandPalette key={user.id} userId={user.id} opened={searchOpened} onClose={() => setSearchOpened(false)} />}
-  </ShellCtx.Provider>;
+  </ShareDialogHost></ShellCtx.Provider>;
 }

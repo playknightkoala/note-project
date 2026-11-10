@@ -33,6 +33,7 @@
 | M7 收尾 | 頁面歷史、手機版、快捷鍵、小字體、帳號稽核修正、備份 CLI、靜態檢查、CSP 稽核、HTTPS 冒煙、文件 | 已完成並驗證（見 VALIDATION 的 M7 段落） |
 | M8 離線筆記（使用者追加授權） | PWA 離線介面、一般筆記本機保存／新增／標題與內文編輯、前景自動同步、版本衝突與草稿救援 | 已實作，驗證結果見 VALIDATION 的 M8 段落 |
 | M9 離線擴充（使用者 2026-11-10 追加授權，全部項目） | 新附件上傳、留言與反應、資料庫離線閱讀、資料列值／新增列／列內文離線編輯、資料庫結構與視圖離線修改；可重送的操作佇列、逐格衝突比對、待同步清單的重試／覆蓋／匯出／捨棄 | 已實作，驗證結果見 VALIDATION 的 M9 段落 |
+| M10 分享（使用者 2026-11-10 追加授權） | 公開連結（唯讀、無留言、可停用並換網址）、以 email 與站內帳號共用（唯讀／可編輯，皆可留言）、可選範圍（此頁面／含子頁面／含資料庫）、留言作者與每人表情、共用內容的離線下載與同步 | 已實作，驗證結果見 VALIDATION 的 M10 段落 |
 
 ## 驗證紀錄
 
@@ -116,3 +117,20 @@
 - 空表格且無篩選時，至少呈現兩個資料列／空白輸入位置；空白位置不寫 SQLite，任一欄位輸入並儲存後才 POST 建立正式列。原有「新增資料列」視窗改成底部直接輸入名稱；工具列「新增」也開啟同樣輸入。篩選可能隱藏新資料時顯示提示。
 - 名稱、文字、數字、網址改為原位編輯，Enter／失焦儲存，Escape 取消；中文組字期間 Enter 不送出，未完成數字不轉成 null。核取方塊點擊即更新；選項／日期保留選擇浮層。提交時防止 Enter＋blur 重複送出，錯誤保留輸入，409 不自動採用新版重送。表格虛擬捲動保留焦點列，結構版本刷新時保留前一批資料，避免僅因重新載入就卸載編輯格。
 - 清單可原位編輯名稱與屬性並開啟列頁面。看板依選項與未設定分組，可從群組底部新增，拖曳把手或卡片選單移組；以拖曳開始時的列版本提交，不做成功前的樂觀搬移。僅支援跨群組變更值，沒有卡片手動排序。清單／看板沿用每批 100 列並手動載入更多，畫面明示未載入完整資料時的總數／群組計數範圍；表格仍自動分批載入。
+
+## M10 分享協定（1.1.0）
+
+使用說明與各角色權限表見 [SHARING.md](SHARING.md)。
+
+- **資料**（migration `0009_shares`）：`page_shares` 每頁至多一筆（`scope`：`page`／`subpages`／`all`，選填的 `link_token`）；`share_members`（帳號與角色 `viewer`／`editor`）。`page_annotations.author_id`、`files.uploaded_by`、`pages.content_by` 記錄「不是擁有者的操作者」，NULL 代表擁有者。資料列不能作為分享的根。公開 token 為 32 bytes base64url，明文保存以便擁有者再次複製；它只授予讀取同一資料庫裡的內容。
+- **單一權限入口**（`src/server/services/access.ts`）：`requireAccess(db, viewerId, pageId, 'view'|'comment'|'edit')` 是唯一不帶讀者自己的 `user_id` 查頁面的地方，回傳 `{ ownerId, role, chain, member }`。對成員開放的路由先呼叫它，再以 `ownerId` 呼叫既有的 service（service 的 SQL 仍一律帶 `user_id`）；沒有修改的路由繼續傳呼叫者自己的 id，所以預設拒絕。陌生人、垃圾桶中的頁面、擁有者已停用 → 404；成員角色不足 → 403。公開連結由 `resolveLink`／`linkChain` 以同樣方式解析。
+- **範圍**（`src/shared/shares.ts` 的 `scopeCovers`，SQL 版為 `access.ts` 的 `scopePages`，測試以隨機樹驗證兩者一致）：令 `below` 為分享根以下到目標各節點的 kind。`page`：`below` 為空或只有一個 `row`；`subpages`：不含 `database`；`all`：全部。巢狀分享取最高角色，以最上層涵蓋該頁的分享為根。
+- **成員看到的頁面**（`pageResponse`）：`access: { role, rootId, owner }`（自己的頁面不輸出這個鍵）、麵包屑只到分享根、根的 `parentId` 為 null、`isFavorite` 一律 false。manifest、`GET /api/pages/:id`、`/api/offline/pages` 與 `/api/offline/databases/:id` 用同一個建構函式，因為裝置以摘要逐位元組比對判斷是否需要重新下載。
+- **路由**：成員可讀 `GET /api/pages/:id`、`/head`、資料庫與資料列的讀取、留言；可編輯者另可 `PUT /content`、`PATCH`（只有一般頁面的 `title`）、`PUT /api/offline/pages/:id`、`row.create`／`row.update` 操作，以及帶 `pageId` 的 `POST /api/files`。留言操作任何成員皆可；刪除整則討論限擁有者與發起者。資料庫結構與視圖（REST 與 `property.*`／`view.*` 操作）、新增頁面、搬移、最愛、複製、歷史、垃圾桶、分享管理都只有擁有者。離線操作在查 receipt 之前先重新確認權限，被移除的成員重送舊的 `operationId` 得不到任何資料；重送的回應一律是「現在看得到的狀態」，不是當時存下的回應。
+- **唯讀成員的留言**：唯讀成員不寫入頁面。他們發起的討論帶 `floating`（`page_annotations.floating`），內文沒有標記；每個讀者的畫面由 `annotationHighlights.ts` 的 `locateQuote` 在討論的 `blockIds` 內尋找引文並加上裝飾（decoration），找不到就不標示。頁面的內容與版本因此完全不受唯讀成員影響，也不會讓正在編輯的人遇到版本衝突。（初版曾讓伺服器接受讀者送來的已標記區塊，獨立審查指出可藉此寫入任意內容，已整個移除。）標示已解決限擁有者、可編輯成員與發起者；非擁有者每頁最多發起 100 則討論、每則每人 20 個表情；`at` 最多回溯 30 天。
+- **留言身分**：`messages[].authorId` 與每人各自的 `reactions: [{ emoji, userId }]`；舊紀錄（沒有作者、表情為字串）視為擁有者的。DTO 依讀者計算 `author`、`messages[].author`、`mine`、`counts`、`canDelete`，原有欄位不變，因此裝置上的舊副本仍可使用。
+- **附件**：在別人的頁面上傳的檔案歸頁面擁有者（`uploaded_by` 記上傳者，上傳者自己可讀）。非擁有者讀檔的條件是：自己可存取、屬於檔案擁有者的頁面，其封面或內文引用了它（`scopeShowsFile`，在分享範圍內以 `instr(content, '/api/files/<id>')` 判斷，沒有另建索引）。`X-Notes-User` 為請求者的 id，Service Worker 的帳號別快取照常運作。
+- **公開連結**（`src/server/routes/public.ts`，頁面路由 `/s/:token[/:pageId]`）：`/api/public/:token`（根與範圍內的樹）、`…/pages/:id`（頁面；資料庫附結構與資料列，資料列附儲存格）、`…/files/:id`。只有 GET；未知、已停用的 token 與範圍外的頁面回應相同的 404；依來源位址每分鐘 600 次；回應帶 `X-Robots-Tag: noindex, nofollow`；未處理錯誤的 log 與內建 HTTPS overlay 的 nginx 存取紀錄都會遮蔽 token。內容經 `publicContent` 清理：去掉留言標記、範圍外的頁面提及換成文字「無法存取的頁面」、連到範圍外頁面的一般連結只留文字、範圍內的改指向公開網址、檔案網址改寫為 token 版。前端的公開頁面不呼叫任何需要登入的端點（401 會清掉裝置記住的帳號），也不註冊 Service Worker。
+- **生命週期**：把頁面移至垃圾桶會清掉其子樹內的公開 token（成員名單保留，垃圾桶中仍可移除成員）；擁有者停用時所有分享失效。
+- **頁面歷史**：寫入者改變時，被取代的內容一定留一份快照（`page_versions.written_by` 記下那份內容是誰寫的）。擁有者寫的與成員寫的各自保留最新 100 份，成員的存檔不會擠掉擁有者的版本；成員重複的「覆蓋」不會每次都產生快照。伺服器只檢查區塊的外形，不檢查行內內容，因此編輯器外包了一層錯誤邊界：內容無法建立時頁面仍可使用，擁有者可從頁面歷史還原。
+- **離線**：manifest 另列共用的頁面摘要、資料庫與留言 stamp 與 `shared`（側欄用），既有的下載流程照常運作，分享結束後由「不在清單 → 標記移除」處理。待同步的草稿保留基準，但會更新 `access`。用戶端在共用頁面底下不建立本機子頁（伺服器會永遠拒絕），共用頁面的草稿不併入自己的頁面樹。被降級（403）或移除（404）時，未同步的修改成為待處理項目，可匯出或捨棄。

@@ -1,10 +1,11 @@
 import type { PageHeadDto, PageNode, PageResponse, SessionDto, TreeDto, UserDto } from '@shared/api';
 import { summarizePage } from '@shared/offline';
 import type { DatabaseSnapshotDto, OfflineManifest, SyncNoteInput } from '@shared/offline';
+import type { IncomingShareDto, SharesDto } from '@shared/shares';
 import type { Annotation } from '@shared/annotations';
 import { ApiError, api, isApiError, setCsrfToken } from '../api/client.ts';
 import { announceOfflineChange, listLocal, readLocal, removeLocal, updateLocal } from './storage.ts';
-import { fileCache, pageKey, setOfflineOwner, uploadCache } from './owner.ts';
+import { fileCache, pageKey, setOfflineOwner, sharedKey, uploadCache } from './owner.ts';
 import { forgetAnnotations, forgetDatabase, mustStop, queuedOps, sendOps, storeAnnotations, storeDatabase, storedAnnotationStamp, storedAnnotations, storedDatabase, storedDatabases, transient } from './outbox.ts';
 import { pendingUploads, sendUploads } from './uploads.ts';
 
@@ -31,7 +32,7 @@ export interface OfflineNote {
 export const hasDraft = (kind: PageResponse['page']['kind']): boolean => kind !== 'database';
 const writer = crypto.randomUUID();
 let user: UserDto | null = null;
-function setUser(value: UserDto | null): void { user = value; setOfflineOwner(value?.id ?? null); }
+function setUser(value: UserDto | null): void { user = value; setOfflineOwner(value?.id ?? null, value?.displayName); }
 let syncing: Promise<void> | undefined;
 export const SYNC_EVENT = 'notes:sync-status';
 export const SYNC_TREE_EVENT = 'notes:tree-synced';
@@ -62,7 +63,7 @@ function storageError(error: unknown): void {
 }
 
 /** Records are keyed `<kind>:<userId>[:<id>]`; the `user` record has no owner. */
-const ownerOfKey = (key: string): string | undefined => /^(page|tree|synced|attachments|annotation-highlights|db|annotations|op|upload|upload-limit):/.test(key) ? key.split(':')[1] : undefined;
+const ownerOfKey = (key: string): string | undefined => /^(page|tree|synced|attachments|annotation-highlights|db|annotations|op|upload|upload-limit|shared):/.test(key) ? key.split(':')[1] : undefined;
 /** Work that exists only on this device: a note draft, a row made here, a queued change, a file waiting to be uploaded. */
 const isUnsyncedDraft = (key: string, value: unknown): boolean => key.startsWith('op:') || key.startsWith('upload:')
   || (key.startsWith('page:') && ((value as OfflineNote | undefined)?.pending === true || (value as OfflineNote | undefined)?.localOnly === true));
@@ -174,7 +175,8 @@ export async function loadTree(): Promise<PageNode[]> {
     nodes = owner ? await readLocal<PageNode[]>(`tree:${owner.id}`) ?? [] : [];
   }
   // Rows are listed inside their database, never in the page tree, also while their text waits to be synced.
-  const pending = (await offlineNotes()).filter(n => n.pending && n.local.page.kind === 'page');
+  // Neither is somebody else's page that waits here: it belongs under 「與我共用」, not among the user's own pages.
+  const pending = (await offlineNotes()).filter(n => n.pending && n.local.page.kind === 'page' && !n.local.access);
   const map = new Map(nodes.map(n => [n.id, n]));
   for (const note of pending) {
     const old = map.get(note.local.page.id);
@@ -189,6 +191,8 @@ export async function createLocalNote(input: { title?: string; parentId?: string
   const id = crypto.randomUUID(), at = Date.now();
   const parent = input.parentId ? await offlineNote(input.parentId) : undefined;
   if (input.parentId && (!parent || parent.local.page.kind !== 'page')) throw new Error('請先連線下載上層筆記。');
+  // The server would refuse it, and the note would wait on this device for ever.
+  if (parent?.local.access) throw new Error('只有擁有者可以在共用的頁面底下新增子頁面。');
   const response: PageResponse = {
     page: { id, parentId: input.parentId ?? null, kind: 'page', databaseId: null, title: input.title ?? '', icon: null, coverUrl: null, coverPosition: 50, fullWidth: false, content: [], version: 0, isFavorite: false, trashedAt: null, createdAt: at, updatedAt: at },
     breadcrumbs: [...(parent?.local.breadcrumbs ?? []), { id, title: input.title ?? '', icon: null, kind: 'page' }],
@@ -212,6 +216,8 @@ export async function createLocalRow(databaseId: string, rowId: string, title: s
   const response: PageResponse = {
     page: { id: rowId, parentId: databaseId, kind: 'row', databaseId, title, icon: null, coverUrl: null, coverPosition: 50, fullWidth: false, content: [], version: 1, isFavorite: false, trashedAt: null, createdAt: at, updatedAt: at },
     breadcrumbs: [...(database?.local.breadcrumbs ?? []), { id: rowId, title, icon: null, kind: 'row' }],
+    // A row added to a shared database is reached the same way as the database itself.
+    ...(database?.local.access ? { access: database.local.access } : {}),
   };
   await updateLocal<OfflineNote>(pageKey(owner.id, rowId), current => current ?? { userId: owner.id, base: response, local: response, revision: crypto.randomUUID(), writer: '', isNew: false, pending: false, localOnly: true });
 }
@@ -311,7 +317,11 @@ async function pullNotes(owner: UserDto): Promise<void> {
   for (const summary of manifest.pages) {
     if (user?.id !== owner.id) return;
     const current = await offlineNote(summary.page.id);
-    if (current?.pending) continue;
+    if (current?.pending) {
+      // The draft keeps its baseline, but what the reader may do with a shared page is the server's to say.
+      if (JSON.stringify(current.base.access) !== JSON.stringify(summary.access)) await updateLocal<OfflineNote>(pageKey(owner.id, summary.page.id), note => note && { ...note, base: withAccess(note.base, summary.access), local: withAccess(note.local, summary.access) });
+      continue;
+    }
     if (current && !current.removed && JSON.stringify(summarizePage(current.base)) === JSON.stringify(summary)) continue;
     const response = await api<PageResponse>('GET', `/api/pages/${summary.page.id}`);
     if (response.page.trashedAt !== null) throw new ApiError(404, 'not_found', '筆記清單已變更，請重新同步。');
@@ -321,9 +331,31 @@ async function pullNotes(owner: UserDto): Promise<void> {
   await pullDatabases(owner, manifest, known);
   await pullAnnotations(owner, manifest);
   if (user?.id === owner.id) {
+    await updateLocal<IncomingShareDto[]>(sharedKey(owner.id), () => manifest.shared ?? []).catch(() => undefined);
     await updateLocal<number>(`upload-limit:${owner.id}`, () => manifest.maxUploadBytes).catch(() => undefined);
     setSyncStatus({ ...syncStatus, maxUploadBytes: manifest.maxUploadBytes });
     window.dispatchEvent(new Event(SYNC_TREE_EVENT));
+  }
+}
+
+function withAccess(response: PageResponse, access: PageResponse['access']): PageResponse {
+  const { access: _previous, ...rest } = response;
+  return access ? { ...rest, access } : rest;
+}
+
+/**
+ * What I share and what is shared with me. Without a connection the list of what is shared with me comes from this
+ * device, so those notes stay reachable from the sidebar; managing my own shares needs the server.
+ */
+export async function loadShares(): Promise<SharesDto> {
+  const owner = user;
+  try {
+    const shares = await api<SharesDto>('GET', '/api/shares');
+    if (owner && user?.id === owner.id) await updateLocal<IncomingShareDto[]>(sharedKey(owner.id), () => shares.incoming).catch(storageError);
+    return shares;
+  } catch (error) {
+    if (!transient(error) || !owner) throw error;
+    return { outgoing: [], incoming: await readLocal<IncomingShareDto[]>(sharedKey(owner.id)) ?? [] };
   }
 }
 

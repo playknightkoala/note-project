@@ -23,12 +23,15 @@ interface Props {
   onTitle: (title: string) => void; onIcon: (icon: string | null) => void;
   onCover: (coverFileId: string | null) => void; onCoverPosition: (position: number) => void;
   onEnter: () => void;
+  /** What the reader may change: `none` for a page shared read-only, `title` for one shared for editing (icon and cover stay the owner's). */
+  editable?: 'all' | 'title' | 'none';
 }
 
-const GRADIENTS = ['linear-gradient(120deg, #a1c4fd, #c2e9fb)', 'linear-gradient(120deg, #fbc2eb, #a6c1ee)', 'linear-gradient(120deg, #f6d365, #fda085)', 'linear-gradient(120deg, #84fab0, #8fd3f4)'];
+export const GRADIENTS = ['linear-gradient(120deg, #a1c4fd, #c2e9fb)', 'linear-gradient(120deg, #fbc2eb, #a6c1ee)', 'linear-gradient(120deg, #f6d365, #fda085)', 'linear-gradient(120deg, #84fab0, #8fd3f4)'];
 
 /** Notion-style header: optional cover (with vertical reposition), emoji icon, inline title; hover reveals 新增圖示／封面. */
-export function PageHeader({ title, icon, coverUrl, coverPosition, onTitle, onIcon, onCover, onCoverPosition, onEnter }: Props) {
+export function PageHeader({ title, icon, coverUrl, coverPosition, onTitle, onIcon, onCover, onCoverPosition, onEnter, editable = 'all' }: Props) {
+  const own = editable === 'all';
   const [pickerOpen, setPickerOpen] = useState(false);
   const [repositioning, setRepositioning] = useState<number | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -51,7 +54,7 @@ export function PageHeader({ title, icon, coverUrl, coverPosition, onTitle, onIc
       onPointerDown={repositioning === null ? undefined : event => { dragStart.current = { y: event.clientY, position: repositioning }; (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId); }}
       onPointerMove={event => { if (repositioning === null || !dragStart.current) return; const delta = (event.clientY - dragStart.current.y) / event.currentTarget.clientHeight * -100; setRepositioning(Math.max(0, Math.min(100, Math.round(dragStart.current.position + delta)))); }}
       onPointerUp={() => { dragStart.current = null; }} onPointerCancel={() => { dragStart.current = null; }}>
-      <Group gap={4} className="page-cover__actions" onPointerDown={event => event.stopPropagation()}>
+      {own && <Group gap={4} className="page-cover__actions" onPointerDown={event => event.stopPropagation()}>
         {repositioning === null ? <>
           <Button size="compact-xs" variant="default" onClick={() => fileInput.current?.click()} loading={uploading}>變更封面</Button>
           {gradientIndex < 0 && <Button size="compact-xs" variant="default" onClick={() => setRepositioning(coverPosition)}>調整位置</Button>}
@@ -60,22 +63,23 @@ export function PageHeader({ title, icon, coverUrl, coverPosition, onTitle, onIc
           <Button size="compact-xs" onClick={() => { onCoverPosition(repositioning); setRepositioning(null); }}>儲存位置</Button>
           <Button size="compact-xs" variant="default" onClick={() => setRepositioning(null)}>取消</Button>
         </>}
-      </Group>
+      </Group>}
       {repositioning !== null && <div className="page-cover__hint">拖曳圖片調整位置</div>}
     </div>}
     <div className="page-header__body">
-      {icon && <Popover opened={pickerOpen} onChange={setPickerOpen} position="bottom-start" shadow="md" withinPortal>
+      {icon && !own && <span className="page-icon page-icon--static" aria-label="頁面圖示">{icon}</span>}
+      {icon && own && <Popover opened={pickerOpen} onChange={setPickerOpen} position="bottom-start" shadow="md" withinPortal>
         <Popover.Target><button type="button" className="page-icon" aria-label="變更圖示" onClick={() => setPickerOpen(o => !o)}>{icon}</button></Popover.Target>
         <Popover.Dropdown p={0}><IconPicker onPick={emoji => { onIcon(emoji); setPickerOpen(false); }} onRemove={() => { onIcon(null); setPickerOpen(false); }} /></Popover.Dropdown>
       </Popover>}
-      <Group gap={4} className="page-header__tools">
+      {own && <Group gap={4} className="page-header__tools">
         {!icon && <Popover opened={pickerOpen} onChange={setPickerOpen} position="bottom-start" shadow="md" withinPortal>
           <Popover.Target><Button size="compact-xs" variant="subtle" color="gray" leftSection={<Smile size={14} />} onClick={() => setPickerOpen(o => !o)}>新增圖示</Button></Popover.Target>
           <Popover.Dropdown p={0}><IconPicker onPick={emoji => { onIcon(emoji); setPickerOpen(false); }} /></Popover.Dropdown>
         </Popover>}
         {!coverUrl && <Button size="compact-xs" variant="subtle" color="gray" leftSection={<ImageIcon size={14} />} onClick={() => onCover(`gradient:${Math.floor(Math.random() * GRADIENTS.length)}`)}>新增封面</Button>}
-      </Group>
-      <PageTitle value={title} onChange={onTitle} onEnter={onEnter} />
+      </Group>}
+      <PageTitle value={title} onChange={onTitle} onEnter={onEnter} readOnly={editable === 'none'} />
       {uploadError && <Alert color="red" role="alert" mt="sm" withCloseButton onClose={() => setUploadError(null)}>{uploadError}</Alert>}
     </div>
     <input ref={fileInput} type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden onChange={event => { void pickCover(event.currentTarget.files?.[0]); event.currentTarget.value = ''; }} />

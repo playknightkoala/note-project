@@ -13,7 +13,7 @@ export let pendingFileUploads = 0;
  * `offline`, a file that cannot reach the server is kept on this device and uploaded later (attachments in a note);
  * without it the caller needs the file on the server now (a cover).
  */
-export async function uploadFile(file: File, { offline = false }: { offline?: boolean } = {}): Promise<UploadedFile> {
+export async function uploadFile(file: File, { offline = false, pageId }: { offline?: boolean; /** Somebody else's page the file is added to: it becomes that page owner's file. */ pageId?: string } = {}): Promise<UploadedFile> {
   const id = newId();
   pendingFileUploads++;
   try {
@@ -21,10 +21,11 @@ export async function uploadFile(file: File, { offline = false }: { offline?: bo
       const form = new FormData();
       form.append('file', file, file.name);
       form.append('id', id);
+      if (pageId) form.append('pageId', pageId);
       try { return await api<UploadedFile>('POST', '/api/files', { form }); }
       catch (error) { if (!offline || !transient(error)) throw error; }
     }
-    return await queueUpload(file, id, syncStatus.maxUploadBytes);
+    return await queueUpload(file, id, syncStatus.maxUploadBytes, pageId);
   }
   finally { pendingFileUploads--; }
 }

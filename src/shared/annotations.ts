@@ -17,11 +17,25 @@ export const changeAnnotationSchema = z.discriminatedUnion('action', [
 ]);
 export type CreateAnnotation = z.infer<typeof createAnnotationSchema>;
 export type ChangeAnnotation = z.infer<typeof changeAnnotationSchema>;
-export interface AnnotationMessage { id: string; text: string; createdAt: number }
+export interface AnnotationAuthor { id: string; name: string }
+export interface AnnotationMessage { id: string; text: string; createdAt: number; author?: AnnotationAuthor }
+/**
+ * `reactions` lists every emoji anyone put on the discussion. The fields after `updatedAt` are computed for the
+ * reader and may be missing on a copy a device stored before pages could be shared: such a copy is always of the
+ * reader's own page, where every reaction is theirs and they may delete the discussion.
+ */
 export interface Annotation {
   id: string; quote: string; blockIds: string[]; messages: AnnotationMessage[];
   reactions: string[]; resolved: boolean; version: number; createdAt: number; updatedAt: number;
+  author?: AnnotationAuthor; mine?: string[]; counts?: Record<string, number>; canDelete?: boolean;
+  /**
+   * Started by someone who may not write the page, so the text carries no mark. Readers highlight the quote where
+   * it is still found in the commented blocks; nothing of the page is changed by such a discussion.
+   */
+  floating?: boolean;
 }
+export const myReactions = (annotation: Annotation): string[] => annotation.mine ?? annotation.reactions;
+export const reactionCount = (annotation: Annotation, emoji: string): number => annotation.counts?.[emoji] ?? 1;
 
 /** An empty reaction-only discussion no longer highlights any text. */
 export const isActiveAnnotation = (annotation: Annotation): boolean => !annotation.resolved && (annotation.messages.length > 0 || annotation.reactions.length > 0);

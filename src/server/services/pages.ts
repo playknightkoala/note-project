@@ -11,6 +11,8 @@ export interface PageRow {
   title: string; icon: string | null; cover_file_id: string | null; cover_preset: string | null; cover_position: number; content: string; content_text: string;
   version: number; is_favorite: number; favorite_position: number | null; full_width: number; trashed_at: number | null;
   trash_root_id: string | null; import_key: string | null; created_at: number; updated_at: number;
+  /** Who last wrote the content when it was not the owner (a member with edit access); null for the owner. */
+  content_by?: string | null;
 }
 
 const GAP = 1024;
@@ -46,12 +48,14 @@ export function breadcrumbs(db: Db, userId: string, row: PageRow): Breadcrumb[] 
 }
 
 export function listTree(db: Db, userId: string): PageNode[] {
-  const rows = db.all<PageRow & { has_children: number }>(
+  const rows = db.all<PageRow & { has_children: number; shared: number }>(
     `SELECT p.id, p.parent_id, p.kind, p.title, p.icon, p.position, p.is_favorite, p.favorite_position, p.updated_at,
-     EXISTS(SELECT 1 FROM pages c WHERE c.parent_id = p.id AND c.user_id = p.user_id AND c.trashed_at IS NULL AND c.kind <> 'row') AS has_children
+     EXISTS(SELECT 1 FROM pages c WHERE c.parent_id = p.id AND c.user_id = p.user_id AND c.trashed_at IS NULL AND c.kind <> 'row') AS has_children,
+     EXISTS(SELECT 1 FROM page_shares s WHERE s.page_id = p.id AND (s.link_token IS NOT NULL OR EXISTS(SELECT 1 FROM share_members m WHERE m.page_id = s.page_id))) AS shared
      FROM pages p WHERE p.user_id = ? AND p.trashed_at IS NULL AND p.kind <> 'row' ORDER BY p.parent_id, p.position, p.created_at`, userId);
   return rows.map(row => ({ id: row.id, parentId: row.parent_id, kind: row.kind, title: row.title, icon: row.icon, position: row.position,
-    isFavorite: row.is_favorite === 1, favoritePosition: row.favorite_position, hasChildren: row.has_children === 1, updatedAt: row.updated_at }));
+    isFavorite: row.is_favorite === 1, favoritePosition: row.favorite_position, hasChildren: row.has_children === 1, updatedAt: row.updated_at,
+    ...(row.shared === 1 ? { shared: true } : {}) }));
 }
 
 function siblings(db: Db, userId: string, parentId: string | null): { id: string; position: number }[] {
@@ -105,28 +109,40 @@ export function createPage(db: Db, userId: string, input: CreatePageInput, now: 
 
 export function headOf(row: PageRow): PageHeadDto { return { version: row.version, updatedAt: row.updated_at, title: row.title }; }
 
-/** Snapshot the outgoing content when the newest snapshot is older than the interval; keep the last N per page. */
+/**
+ * Snapshot the outgoing content when the newest snapshot is older than the interval. What the owner wrote and what
+ * members wrote are kept as two separate sets of the last N each: however often a member saves, none of the owner's
+ * versions is pushed out of the history.
+ */
 function snapshotIfDue(db: Db, row: PageRow, now: number, reason: string, force = false): void {
   const latest = db.get<{ created_at: number; version: number }>('SELECT created_at, version FROM page_versions WHERE page_id = ? ORDER BY version DESC LIMIT 1', row.id);
   if (latest?.version === row.version) return;
   if (!force && latest && now - latest.created_at < SNAPSHOT_INTERVAL_MS) return;
-  db.run('INSERT INTO page_versions (id, page_id, version, title, content, reason, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    crypto.randomUUID(), row.id, row.version, row.title, row.content, reason, now);
-  db.run('DELETE FROM page_versions WHERE page_id = ? AND version NOT IN (SELECT version FROM page_versions WHERE page_id = ? ORDER BY version DESC LIMIT ?)',
-    row.id, row.id, SNAPSHOTS_PER_PAGE);
+  const writer = row.content_by ?? null, own = writer === null ? 1 : 0;
+  db.run('INSERT INTO page_versions (id, page_id, version, title, content, reason, created_at, written_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    crypto.randomUUID(), row.id, row.version, row.title, row.content, reason, now, writer);
+  db.run(`DELETE FROM page_versions WHERE page_id = ? AND (written_by IS NULL) = ? AND version NOT IN
+    (SELECT version FROM page_versions WHERE page_id = ? AND (written_by IS NULL) = ? ORDER BY version DESC LIMIT ?)`, row.id, own, row.id, own, SNAPSHOTS_PER_PAGE);
 }
 
-/** Optimistic-concurrency save: the row must still be at `expectedVersion`, otherwise 409 with the current head. */
-export function updateContent(db: Db, userId: string, id: string, content: unknown, expectedVersion: number, now: number, reason = 'autosave'): PageHeadDto {
+/**
+ * Optimistic-concurrency save: the row must still be at `expectedVersion`, otherwise 409 with the current head.
+ * `actorId` is who writes when that is not the owner. Whenever the writer changes, the outgoing content is kept in
+ * the page history regardless of the usual interval, so the owner can always get back what a member replaced.
+ * The owner's explicit overwrite or restore keeps what it replaces as well; a member's repeated overwrites do not
+ * each add a version.
+ */
+export function updateContent(db: Db, userId: string, id: string, content: unknown, expectedVersion: number, now: number, reason = 'autosave', actorId: string = userId): PageHeadDto {
   const parsed = parseBlocks(content);
   if ('error' in parsed) throw new AppError('bad_request', parsed.error);
   const text = extractPlainText(parsed.blocks);
   return db.transaction(() => {
     const row = loadPage(db, userId, id);
     if (row.version !== expectedVersion) throw new AppError('version_conflict', undefined, { current: headOf(row) });
-    snapshotIfDue(db, row, now, reason, reason !== 'autosave');
-    const changes = db.run('UPDATE pages SET content = ?, content_text = ?, version = version + 1, updated_at = ? WHERE id = ? AND user_id = ? AND version = ?',
-      parsed.json, text, now, id, userId, expectedVersion).changes;
+    const writer = actorId === userId ? null : actorId;
+    snapshotIfDue(db, row, now, reason, writer !== (row.content_by ?? null) || (reason !== 'autosave' && writer === null));
+    const changes = db.run('UPDATE pages SET content = ?, content_text = ?, content_by = ?, version = version + 1, updated_at = ? WHERE id = ? AND user_id = ? AND version = ?',
+      parsed.json, text, writer, now, id, userId, expectedVersion).changes;
     if (changes !== 1) throw new AppError('version_conflict', undefined, { current: headOf(loadPage(db, userId, id)) });
     return { version: expectedVersion + 1, updatedAt: now, title: row.title };
   });
@@ -192,7 +208,11 @@ export function trashPage(db: Db, userId: string, id: string, now: number): numb
   return db.transaction(() => {
     loadPage(db, userId, id);
     const ids = subtreeIds(db, userId, id);
-    for (const pageId of ids) db.run('UPDATE pages SET trashed_at = ?, trash_root_id = ?, is_favorite = 0, favorite_position = NULL, updated_at = ? WHERE id = ? AND trashed_at IS NULL', now, id, now, pageId);
+    for (const pageId of ids) {
+      db.run('UPDATE pages SET trashed_at = ?, trash_root_id = ?, is_favorite = 0, favorite_position = NULL, updated_at = ? WHERE id = ? AND trashed_at IS NULL', now, id, now, pageId);
+      // A public address must not come back to life when the page is restored; switching it on again issues a new one.
+      db.run('UPDATE page_shares SET link_token = NULL, link_created_at = NULL, updated_at = ? WHERE page_id = ? AND link_token IS NOT NULL', now, pageId);
+    }
     return ids.length;
   });
 }

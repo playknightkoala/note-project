@@ -5,6 +5,7 @@ import { valueSchema } from '@shared/database';
 import { errorText, isApiError } from '../../api/client.ts';
 import { CellDisplay, CellValueInput } from './CellValueInput.tsx';
 import { useUpdateGuard } from '../../updates/guards.ts';
+import { useDatabaseAccess } from './access.ts';
 
 export interface EditableCellProps {
   property: DatabaseProperty | null; value: CellValue; label: string;
@@ -13,9 +14,16 @@ export interface EditableCellProps {
   tabIndex?: number; rowIndex?: number; columnIndex?: number; onFocus?: () => void; emptyLabel?: string;
 }
 export function EditableCell(props: EditableCellProps) {
+  const { canEditRows } = useDatabaseAccess();
+  if (!canEditRows) return <StaticCell {...props} />;
   if (!props.property || ['text', 'number', 'url'].includes(props.property.type)) return <InlineCell {...props} />;
   if (props.property.type === 'checkbox') return <CheckboxCell {...props} />;
   return <PopoverCell {...props} />;
+}
+/** The value only: for a reader who may not change rows. Keeps its place in the grid's keyboard navigation. */
+function StaticCell({ property, value, label, tabIndex = 0, rowIndex, columnIndex, onFocus, emptyLabel }: EditableCellProps) {
+  return <button type="button" role={rowIndex === undefined ? undefined : 'gridcell'} tabIndex={tabIndex} className="database-cell database-cell--static" aria-label={label} aria-readonly
+    data-row={rowIndex} data-col={columnIndex} onFocus={onFocus}>{emptyLabel !== undefined && (value === null || value === '') ? emptyLabel : <CellDisplay property={property} value={value} />}</button>;
 }
 function CheckboxCell({ value, label, onSave, onReload, tabIndex = 0, rowIndex, columnIndex, onFocus }: EditableCellProps) {
   const [pending, setPending] = useState(false);
