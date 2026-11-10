@@ -2,7 +2,7 @@ import { useCallback, useEffect, useReducer, useRef } from 'react';
 import type { PageHeadDto } from '@shared/api';
 import { fetchHead, saveContent } from '../../api/pages.ts';
 import { isApiError } from '../../api/client.ts';
-import { isLocalWriter, offlineNote, resolveLocalNote, syncNotes } from '../../offline/notes.ts';
+import { isLocalWriter, offlineNote, resolveLocalNote, saveLocalContent, syncNotes } from '../../offline/notes.ts';
 import type { LocalHead } from '../../offline/notes.ts';
 import { OFFLINE_EVENT } from '../../offline/storage.ts';
 import { useUpdateGuard } from '../../updates/guards.ts';
@@ -28,6 +28,8 @@ export function autosaveReducer(state: AutosaveState, action: AutosaveAction): A
 
 export const DEBOUNCE_MS = 800;
 export const MAX_WAIT_MS = 5000;
+/** How soon a save that was skipped for an open IME composition is tried again. */
+const COMPOSING_RETRY_MS = 250;
 const BACKOFF_MS = [2000, 4000, 8000, 16000, 30000];
 const HEAD_POLL_MS = 30_000;
 
@@ -35,8 +37,11 @@ export interface AutosaveOptions {
   pageId: string;
   initialVersion: number;
   initialLocalRevision?: string;
-  /** Serializes the editor; returns null while a composition is open (nothing is sent then). */
-  getContent: () => unknown[] | null;
+  /**
+   * Serializes the editor. Returns null while an IME composition is open, unless `force` is set: when the page is
+   * being left, or the maximum wait has passed, the text typed so far must be saved as it stands.
+   */
+  getContent: (force?: boolean) => unknown[] | null;
   /** The server has a newer version and nothing is dirty: replace the editor content. */
   onRemoteUpdate: () => void;
   now?: () => number;
@@ -57,19 +62,45 @@ export function useAutosave({ pageId, initialVersion, initialLocalRevision, getC
 
   const clearTimers = () => { const r = ref.current; if (r.timer) clearTimeout(r.timer); if (r.retry) clearTimeout(r.retry); r.timer = null; r.retry = null; };
 
-  const save = useCallback(async (options: { keepalive?: boolean; overrideVersion?: number } = {}): Promise<void> => {
+  /**
+   * While a conflict is unresolved nothing is uploaded, but the text must not exist only in memory: ordinary notes
+   * keep their draft on this device. Returns false when the draft could not be stored (online-only pages, or another
+   * tab owns the newer local draft).
+   */
+  const keepDraft = useCallback(async (force = false): Promise<boolean> => {
     const r = ref.current;
-    if (r.inFlight || r.status === 'conflict') return;
-    const content = getContentRef.current();
-    if (!content) { schedule(); return; }
-    r.inFlight = true; r.dirty = false; clearTimers();
+    if (!r.dirty) return true;
+    if (r.inFlight) return false;
+    const content = getContentRef.current(force);
+    if (!content) { arm(COMPOSING_RETRY_MS); return false; }
+    r.inFlight = true; clearTimers();
+    try {
+      if ((await offlineNote(pageId).catch(() => undefined))?.local.page.kind !== 'page') return false;
+      r.dirty = false;
+      const head = await saveLocalContent(pageId, content, localRevision.current);
+      localRevision.current = head.localRevision;
+      return !r.dirty;
+    } catch { r.dirty = true; return false; }
+    finally { r.inFlight = false; }
+  }, [pageId]);
+
+  const save = useCallback(async (options: { keepalive?: boolean; overrideVersion?: number; force?: boolean } = {}): Promise<void> => {
+    const r = ref.current;
+    if (r.inFlight) return;
+    if (r.status === 'conflict') { await keepDraft(options.force); return; }
+    const overdue = r.firstDirtyAt > 0 && now() - r.firstDirtyAt >= MAX_WAIT_MS;
+    const content = getContentRef.current(options.force || overdue);
+    // An open composition postpones the save briefly; the max wait above still bounds how long text stays unsaved.
+    if (!content) { if (!r.firstDirtyAt) r.firstDirtyAt = now(); arm(COMPOSING_RETRY_MS); return; }
+    r.inFlight = true; r.dirty = false; r.firstDirtyAt = 0; clearTimers();
     dispatch({ type: 'saving' });
     try {
       const head: LocalHead = await saveContent(pageId, options.overrideVersion ?? r.version, content, { ...(options.keepalive ? { keepalive: true } : {}), overwrite: options.overrideVersion !== undefined, localRevision: localRevision.current });
       r.inFlight = false;
       // The ref is the source of truth for the next If-Match: a follow-up save may start before React re-renders.
       r.version = head.version;
-      localRevision.current = head.localRevision;
+      // Pages saved through the API (rows) have no local revision; keep the one the page was opened with.
+      if (head.localRevision !== undefined) localRevision.current = head.localRevision;
       dispatch({ type: 'saved', version: head.version, at: now(), stillDirty: r.dirty, queued: head.queued });
       if (r.dirty) schedule(0);
     } catch (error) {
@@ -81,8 +112,15 @@ export function useAutosave({ pageId, initialVersion, initialLocalRevision, getC
       const attempt = Math.min(stateAttempts.current, BACKOFF_MS.length - 1);
       r.retry = setTimeout(() => { void save(); }, BACKOFF_MS[attempt]);
     }
-  }, [pageId]);
+  }, [pageId, keepDraft]);
   const stateAttempts = useRef(0); stateAttempts.current = state.attempts;
+
+  /** (Re)starts the save timer without touching the first-dirty time. */
+  const arm = (wait: number) => {
+    const r = ref.current;
+    if (r.timer) clearTimeout(r.timer);
+    r.timer = setTimeout(() => { r.timer = null; void save(); }, wait);
+  };
 
   useUpdateGuard(async () => {
     const deadline = Date.now() + 10_000;
@@ -93,18 +131,17 @@ export function useAutosave({ pageId, initialVersion, initialLocalRevision, getC
 
   const schedule = useCallback((delay = DEBOUNCE_MS) => {
     const r = ref.current;
-    if (r.status === 'conflict') return;
     if (!r.firstDirtyAt) r.firstDirtyAt = now();
-    if (r.timer) clearTimeout(r.timer);
     const sinceFirst = now() - r.firstDirtyAt;
-    const wait = Math.max(0, Math.min(delay, MAX_WAIT_MS - sinceFirst));
-    r.timer = setTimeout(() => { r.timer = null; r.firstDirtyAt = 0; void save(); }, wait);
+    arm(Math.max(0, Math.min(delay, MAX_WAIT_MS - sinceFirst)));
   }, [save]);
 
   /** Call on every editor change outside a composition. */
   const markDirty = useCallback(() => { ref.current.dirty = true; dispatch({ type: 'dirty' }); schedule(); }, [schedule]);
+  /** A change inside an open composition: remembered without re-rendering, saved on settle, on leave or at the max wait. */
+  const markComposing = useCallback(() => { ref.current.dirty = true; schedule(); }, [schedule]);
 
-  const flush = useCallback((keepalive = false) => { if (ref.current.dirty && !ref.current.inFlight) void save({ keepalive }); }, [save]);
+  const flush = useCallback((keepalive = false, force = false) => { if (ref.current.dirty && !ref.current.inFlight) void save({ keepalive, force }); }, [save]);
 
   const resolveConflict = useCallback(async (choice: 'reload' | 'overwrite') => {
     const r = ref.current;
@@ -147,6 +184,9 @@ export function useAutosave({ pageId, initialVersion, initialLocalRevision, getC
     const refresh = () => { void offlineNote(pageId).then(note => {
       const r = ref.current;
       if (!active || !note || r.inFlight) return;
+      // Only ordinary notes are edited through the local store. Rows and databases are cached there for reading
+      // but saved through the API, so their cached copy says nothing about this editor's state.
+      if (note.local.page.kind !== 'page') return;
       if (note.removed && !note.pending) { dispatch({ type: 'error', message: '此筆記已在線上刪除；若有本機修改，請先保存或匯出草稿。', offline: false }); return; }
       if (note.problem) {
         if (note.conflict) { localConflict.current = false; dispatch({ type: 'conflict', head: note.conflict }); }
@@ -169,16 +209,17 @@ export function useAutosave({ pageId, initialVersion, initialLocalRevision, getC
 
   // Flush when the tab hides or the page unloads; a dirty editor on route change is flushed by the unmount cleanup.
   useEffect(() => {
-    const onHide = () => { if (document.visibilityState === 'hidden') flush(true); };
-    const onUnload = (event: BeforeUnloadEvent) => { if (ref.current.dirty || ref.current.inFlight) { flush(true); event.preventDefault(); } };
+    // Leaving cannot wait for an open composition to settle: save what has been typed so far.
+    const onHide = () => { if (document.visibilityState === 'hidden') flush(true, true); };
+    const onUnload = (event: BeforeUnloadEvent) => { if (ref.current.dirty || ref.current.inFlight) { flush(true, true); event.preventDefault(); } };
     const onOnline = () => { if (ref.current.dirty) void save(); void syncNotes(); };
     document.addEventListener('visibilitychange', onHide);
     window.addEventListener('beforeunload', onUnload);
     window.addEventListener('online', onOnline);
     return () => {
       document.removeEventListener('visibilitychange', onHide); window.removeEventListener('beforeunload', onUnload); window.removeEventListener('online', onOnline);
-      if (ref.current.dirty && !ref.current.inFlight) void save({ keepalive: true });
       clearTimers();
+      if (ref.current.dirty && !ref.current.inFlight) void save({ keepalive: true, force: true });
     };
   }, [pageId]);
 
@@ -199,5 +240,15 @@ export function useAutosave({ pageId, initialVersion, initialLocalRevision, getC
   }, [pageId]);
 
   const setVersion = useCallback((version: number, revision?: string) => { ref.current.version = version; localRevision.current = revision; dispatch({ type: 'version', version }); }, []);
-  return { state, markDirty, flush, resolveConflict, setVersion, localRevision: () => localRevision.current, saveNow: () => save() };
+  /** Saves pending edits and resolves once they are stored (locally for notes, on the server for rows). */
+  const settle = useCallback(async () => {
+    const deadline = now() + 10_000;
+    while (ref.current.inFlight && now() < deadline) await new Promise(resolve => setTimeout(resolve, 25));
+    if (ref.current.dirty && !ref.current.inFlight) await save({ force: true });
+  }, [save]);
+  return { state, markDirty, markComposing, flush, resolveConflict, setVersion, localRevision: () => localRevision.current, saveNow: () => save(), settle, keepDraft,
+    version: () => ref.current.version,
+    /** Edits that exist only in this editor while a conflict blocks saving. */
+    unsavedConflict: () => ref.current.status === 'conflict' && ref.current.dirty,
+    hasUnsaved: () => ref.current.dirty || ref.current.inFlight };
 }

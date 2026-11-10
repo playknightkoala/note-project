@@ -9,10 +9,14 @@ import { useVersions } from '../../api/pages.ts';
 const reasons: Record<string, string> = { autosave: '自動快照', restore: '還原前', import: '匯入', manual: '手動' };
 const formatTime = (value: number) => new Date(value).toLocaleString('zh-TW', { hour12: false });
 
-interface Props { pageId: string; opened: boolean; onClose: () => void; currentVersion: number; onRestored: () => void }
+interface Props {
+  pageId: string; opened: boolean; onClose: () => void; currentVersion: number; onRestored: () => void;
+  /** Saves and syncs pending edits, then returns the server version to restore against; throws when that is not possible. */
+  prepare?: () => Promise<number>;
+}
 
 /** Page history: snapshots the server kept before overwrites; restoring goes through the normal If-Match save path. */
-export function HistoryDrawer({ pageId, opened, onClose, currentVersion, onRestored }: Props) {
+export function HistoryDrawer({ pageId, opened, onClose, currentVersion, onRestored, prepare }: Props) {
   const versions = useVersions(pageId, opened);
   const [selected, setSelected] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -26,7 +30,10 @@ export function HistoryDrawer({ pageId, opened, onClose, currentVersion, onResto
     if (!selected) return;
     setRestoring(true); setError(null);
     try {
-      await api('POST', `/api/pages/${pageId}/versions/${selected}/restore`, { headers: { 'if-match': `"${currentVersion}"` } });
+      // Unsaved or unsynced edits go to the server first, so the restore snapshots them into the history instead
+      // of silently replacing them.
+      const version = prepare ? await prepare() : currentVersion;
+      await api('POST', `/api/pages/${pageId}/versions/${selected}/restore`, { headers: { 'if-match': `"${version}"` } });
       onRestored(); onClose();
     } catch (err) { setError(errorText(err)); } finally { setRestoring(false); }
   };

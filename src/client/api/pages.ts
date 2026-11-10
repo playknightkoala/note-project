@@ -42,6 +42,18 @@ function useTreeMutation<TInput>(mutationFn: (input: TInput) => Promise<unknown>
 
 export interface CreatePageInput { parentId?: string | null; kind?: 'page' | 'database'; title?: string; afterId?: string | null; icon?: string | null }
 
+/**
+ * Creates a page the way the sidebar does: an ordinary note under a downloaded note (or at the root) is created on
+ * this device and synced later, anything else needs the server.
+ */
+export async function createPage(input: CreatePageInput): Promise<PageResponse> {
+  if (input.kind !== 'database' && !input.icon && !offlineStorageError) {
+    const parent = input.parentId ? await offlineNote(input.parentId).catch(() => undefined) : undefined;
+    if (!input.parentId || parent?.local.page.kind === 'page') return createLocalNote(input);
+  }
+  return cachePage(await api<PageResponse>('POST', '/api/pages', { json: input }));
+}
+
 export function useCreatePage() {
   const queryClient = useQueryClient();
   return useMutation({
@@ -103,10 +115,14 @@ export function useDuplicatePage() {
   });
 }
 
+const KEEPALIVE_LIMIT_BYTES = 60 * 1024;
 export async function saveContent(id: string, version: number, content: unknown[], { overwrite = false, localRevision, ...options }: { keepalive?: boolean; signal?: AbortSignal; overwrite?: boolean; localRevision?: string } = {}) {
   const note = await offlineNote(id).catch(() => undefined);
   if (note?.local.page.kind === 'page') return saveLocalContent(id, content, localRevision);
-  return api<PageHeadDto>('PUT', `/api/pages/${id}/content`, { json: { content, overwrite }, headers: { 'if-match': `"${version}"` }, ...options });
+  // Browsers refuse keepalive requests above 64 KB outright; a plain request at least has a chance to complete.
+  const { keepalive, ...rest } = options;
+  const small = keepalive === true && new TextEncoder().encode(JSON.stringify(content)).length < KEEPALIVE_LIMIT_BYTES;
+  return api<PageHeadDto>('PUT', `/api/pages/${id}/content`, { json: { content, overwrite }, headers: { 'if-match': `"${version}"` }, ...rest, ...(small ? { keepalive: true } : {}) });
 }
 
 export const fetchHead = (id: string) => api<PageHeadDto>('GET', `/api/pages/${id}/head`);

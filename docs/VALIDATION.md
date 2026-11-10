@@ -229,3 +229,22 @@
 - package.json 與 package-lock.json 根套件版本同步更新為 1.0.3，依賴版本維持不變。
 - `npm run typecheck`、`npm run lint`、`npm test -- --reporter=dot`（20 檔／116 tests）、`npm run build` 全部通過；`docker compose up -d --build --wait` 成功且 healthy，`/healthz` 200；`GET /api/version` 實測回 `{ "version": "1.0.3" }`。
 - `npm run test:app -- http://127.0.0.1:8081` 25 項 PASS。發布說明列出手機格式面板、段落類型與選取範圍修正，並明示依使用者指示略過瀏覽器／實體手機驗收。
+
+## Code review 與資安修正（2026-11-10）
+
+- 範圍：對 1.0.6 做整體 code review 與資安檢查後的修正，之後以 1.0.7 發布（見下一段）。問題清單與逐項狀態在本機的 `.local/CODE_REVIEW_2026-11-10.md`（不進版本控制）。
+- 資安：全站請求大小上限（帳號端點 64 KB、JSON 8 MB、附件依 `NOTES_MAX_UPLOAD_MB`，chunked 也計數）；來源位址改取 `X-Forwarded-For` 最後一段並新增 `NOTES_CLIENT_IP_HEADER`，nginx 改為覆寫該標頭；登入限制改為「來源＋帳號」5 次、帳號總計 30 次，他人猜錯不再鎖住本人；登入／註冊檢查同源 `Origin` 並要求 `application/json`；邀請碼先驗證再寫入使用者；新增選用的 `NOTES_SETUP_TOKEN` 保護第一個管理者帳號；每小時清除過期 session；登入後導向只接受站內路徑。
+- 離線與自動保存：輸入法組字中離開頁面／切背景會保存已輸入內容，連續組字最久 5 秒保存一次；資料列頁面不再把自己的保存當成遠端更新；衝突中繼續輸入的一般筆記仍存入裝置，無法存入時離開前先詢問；只改圖示／封面／最愛／搬移不再重載編輯器；被拒絕的草稿重試時送出修改後的內容；線上已刪除的筆記清除本機內文；換帳號時不再刪除另一帳號的未同步草稿，並移除其已同步副本與附件快取；還原歷史前先保存並同步。
+- Service Worker：舊版不再刪除等待中新版的離線快取，啟用時補回缺少的介面檔；附件先回應再背景快取、可用 ETag 重新驗證、相同內容不重寫；不把 HTML 回應快取成資產。伺服器對不存在的 `/assets/*` 回 404。
+- 其他：修改選項只移除指向已刪除選項的篩選，保留排序；資料庫仍在垃圾桶時拒絕單獨還原其資料列；標題輸入後立即離開仍會送出；斜線選單的子頁面可離線建立，失敗時顯示錯誤。
+- 驗證中另外發現並修正：HTTPS overlay 的 nginx 把請求內容暫存到 16 MB 的 tmpfs，超過約 16 MB 的附件上傳回 500（`pwrite() ... No space left on device`）。改為串流轉送（`proxy_request_buffering off`、`proxy_max_temp_file_size 0`）。
+- 實際命令：`npm run check`（typecheck、lint、test、build）全部通過，測試 30 檔／198 tests（新增 `tests/server/hardening.test.ts` 14 項、`tests/client/reviewFixes.test.tsx` 12 項、`tests/server/offlineShell.test.ts` 新增 5 項）。新增的客戶端測試在還原 `useAutosave.ts` 與 `offline/notes.ts` 後有 10 項失敗，確認能擋住回歸。`npm audit --omit=dev` 0 個漏洞。
+- 容器：以獨立專案名稱與埠啟動（`docker compose -p notes-review -f compose.yaml -f compose.https.yaml up -d --build --wait`，自簽憑證、暫用 volume，未動到正式的 `notes_notes-data`），app 與 nginx 皆 healthy，`/healthz` 兩端 200，`node scripts/check-app.mjs http://127.0.0.1:18480` 31 項 PASS。經 nginx 實測：未登入送 300 MB（含 chunked）到登入端點 413 且記憶體維持約 29 MiB；輪替偽造 `X-Forwarded-For` 仍在額度用完後回 429；跨站 `Origin` 登入 403、`text/plain` 登入 415 且不設 cookie；已註冊與未註冊 email 搭配無效邀請碼回應相同；150 MB 上傳（上限 90 MB）413；50 MB 上傳 201 且下載回來內容相同。驗證後已 `down -v --rmi local` 移除。
+- 限制：沒有實際瀏覽器、實體手機或真實輸入法的驗收；輸入法、離頁攔截與 Service Worker 行為以 jsdom／模擬環境測試為準。正式環境尚未重新部署。
+
+## 1.0.7 發布前檢查（2026-11-10）
+
+- `package.json` 與 `package-lock.json` 根套件版本同步更新為 1.0.7（`npm version 1.0.7 --no-git-tag-version`），沒有調整任何依賴版本；`src/server/releases.ts` 新增 1.0.7 的更新資訊，發布說明見 `docs/releases/1.0.7.md`。
+- `npm run check`（typecheck、lint、30 檔／198 tests、build）全部通過；建置出的 `sw.js` 版號為 1.0.7。
+- 容器：`docker compose -p notes-review up -d --build --wait`（獨立專案名稱、埠 18480、暫用 volume）healthy，`/healthz` 200，`GET /api/version` 實測回 1.0.7 與本版更新資訊，`node scripts/check-app.mjs http://127.0.0.1:18480` 31 項 PASS；驗證後已移除，未動到正式的 `notes_notes-data`。HTTPS overlay 的實測沿用上一段（程式碼相同，只差版號）。
+- 限制沿用上一段：沒有實際瀏覽器、實體手機或真實輸入法的驗收；正式環境需另行重新部署。

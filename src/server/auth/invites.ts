@@ -23,6 +23,11 @@ export function createInvite(db: Db, createdBy: string, now: number, expiresInHo
   return { code, invite: toDto(row) };
 }
 
+/** True when the code names an unused, unrevoked, unexpired invite. Checked before any account data is touched. */
+export function inviteUsable(db: Db, code: string, now: number): boolean {
+  return db.get('SELECT 1 AS ok FROM invites WHERE code_hash = ? AND used_at IS NULL AND revoked_at IS NULL AND expires_at > ?', hashToken(code), now) !== undefined;
+}
+
 /** Consumes an invite inside the caller's transaction; throws `invite_invalid` when unusable. */
 export function redeemInvite(db: Db, code: string, userId: string, now: number): void {
   const changed = db.run(

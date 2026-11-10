@@ -46,10 +46,17 @@ export function addProperty(db: Db, userId: string, id: string, input: PropertyI
     return bumpSchema(db, userId, id, now);
   });
 }
-function pruneViews(db: Db, userId: string, id: string, propertyId: string, remove: boolean, clearGrouping = remove): void {
+/**
+ * Drops references to a property from saved views. `validChoices` narrows this to filters that name a choice which
+ * no longer exists, so adding or renaming a choice leaves sorts and the remaining filters alone.
+ */
+function pruneViews(db: Db, userId: string, id: string, propertyId: string, options: { remove: boolean; clearGrouping: boolean; validChoices?: Set<string> }): void {
+  const { remove, clearGrouping, validChoices } = options;
   const views = getDatabase(db, userId, id).views;
   for (const view of views) {
-    const config = { ...view.config, sorts: view.config.sorts.filter(sort => sort.propertyId !== propertyId), filters: view.config.filters.filter(filter => filter.propertyId !== propertyId),
+    const config = { ...view.config,
+      sorts: validChoices ? view.config.sorts : view.config.sorts.filter(sort => sort.propertyId !== propertyId),
+      filters: view.config.filters.filter(filter => filter.propertyId !== propertyId || (validChoices !== undefined && (typeof filter.value !== 'string' || validChoices.has(filter.value)))),
       ...(remove && view.config.columns ? { columns: view.config.columns.filter(col => col !== propertyId) } : {}) };
     if (clearGrouping && config.groupBy === propertyId) delete config.groupBy;
     db.run('UPDATE db_views SET config = ? WHERE id = ? AND database_id = ? AND EXISTS (SELECT 1 FROM pages WHERE id = db_views.database_id AND user_id = ?)', JSON.stringify(config), view.id, id, userId);
@@ -66,7 +73,8 @@ export function updateProperty(db: Db, userId: string, id: string, propertyId: s
     if (input.type !== current.type && values.length) throw new AppError('conflict', '此欄位已有資料，請先清空後再變更型別。');
     const candidate: DatabaseProperty = { ...current, ...input };
     if (input.type === current.type && values.some(value => !valueSchema(candidate).safeParse(JSON.parse(value.value_json)).success)) throw new AppError('conflict', '選項仍有資料列使用，請先更新資料列後再移除。');
-    if (input.type !== current.type || JSON.stringify(input.choices) !== JSON.stringify(current.choices)) pruneViews(db, userId, id, propertyId, false, input.type !== 'select');
+    if (input.type !== current.type) pruneViews(db, userId, id, propertyId, { remove: false, clearGrouping: input.type !== 'select' });
+    else if (JSON.stringify(input.choices) !== JSON.stringify(current.choices)) pruneViews(db, userId, id, propertyId, { remove: false, clearGrouping: false, validChoices: new Set(input.choices.map(choice => choice.id)) });
     db.run('UPDATE db_properties SET name = ?, type = ?, options = ? WHERE id = ? AND database_id = ?', input.name, input.type, JSON.stringify({ choices: input.choices }), propertyId, id);
     return bumpSchema(db, userId, id, now);
   });
@@ -75,7 +83,7 @@ export function deleteProperty(db: Db, userId: string, id: string, propertyId: s
   return db.transaction(() => {
     assertVersion(database(db, userId, id).schema_version, version);
     if (!properties(db, userId, id).some(p => p.id === propertyId)) throw new AppError('not_found');
-    pruneViews(db, userId, id, propertyId, true);
+    pruneViews(db, userId, id, propertyId, { remove: true, clearGrouping: true });
     db.run('DELETE FROM db_properties WHERE id = ? AND database_id = ?', propertyId, id);
     return bumpSchema(db, userId, id, now);
   });

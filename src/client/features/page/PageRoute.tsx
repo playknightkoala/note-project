@@ -2,10 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { PartialBlock } from '@blocknote/core';
 import { Alert, Button, Center, Group, Loader, Text } from '@mantine/core';
 import { useQueryClient } from '@tanstack/react-query';
-import { useParams } from 'react-router';
+import { useBlocker, useParams } from 'react-router';
 import { pageKeys, usePage, usePatchPage } from '../../api/pages.ts';
 import { errorText, isApiError } from '../../api/client.ts';
-import { loadNote } from '../../offline/notes.ts';
+import { loadNote, offlineNote, syncNotes } from '../../offline/notes.ts';
 import type { LocalPageResponse } from '../../offline/notes.ts';
 import { exportPageDraft } from '../../offline/exportDraft.ts';
 import { useOnline } from '../../offline/useOnline.ts';
@@ -69,7 +69,7 @@ function PageView({ initial }: { initial: LocalPageResponse }) {
 
   const autosave = useAutosave({
     pageId, initialVersion: initial.page.version, initialLocalRevision: initial.localRevision,
-    getContent: () => (composingRef.current() || !editorRef.current) ? null : editorRef.current.document as unknown[],
+    getContent: force => !editorRef.current || (composingRef.current() && !force) ? null : editorRef.current.document as unknown[],
     onRemoteUpdate: () => {
       const revision = localRevisionRef.current;
       setRefreshError(null);
@@ -92,6 +92,37 @@ function PageView({ initial }: { initial: LocalPageResponse }) {
     autosave.markDirty();
   }, [autosave]);
   const onCompositionSettled = useCallback(() => { localRevisionRef.current++; autosave.markDirty(); }, [autosave]);
+  const onComposingChange = useCallback(() => { if (replacingRef.current) return; localRevisionRef.current++; autosave.markComposing(); }, [autosave]);
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  // A conflict blocks saving. Before the page is left, an ordinary note stores its draft on this device; where that
+  // is not possible (rows, or a newer draft from another tab) the user decides whether to give the edits up.
+  const autosaveRef = useRef(autosave); autosaveRef.current = autosave;
+  const blocker = useBlocker(useCallback(() => autosaveRef.current.unsavedConflict(), []));
+  const blockerRef = useRef(blocker); blockerRef.current = blocker;
+  useEffect(() => {
+    if (blocker.state !== 'blocked') return;
+    let active = true;
+    void autosaveRef.current.keepDraft(true).then(kept => {
+      if (!active || blockerRef.current.state !== 'blocked') return;
+      if (kept || window.confirm('這裡的修改與線上版本衝突，尚未保存。離開這個頁面會遺失這些修改（可先按「匯出此處草稿」）。確定離開？')) blockerRef.current.proceed();
+      else blockerRef.current.reset();
+    });
+    return () => { active = false; };
+  }, [blocker.state]);
+
+  /** Everything typed here must be on the server before a history restore replaces the content. */
+  const prepareRestore = useCallback(async (): Promise<number> => {
+    await autosave.settle();
+    if (initial.page.kind === 'page') {
+      await syncNotes({ force: true });
+      const note = await offlineNote(pageId).catch(() => undefined);
+      if (note?.pending) throw new Error('這裡還有尚未同步到伺服器的修改。請先完成同步或處理衝突，再還原歷史版本。');
+      if (note) return note.base.page.version;
+    }
+    if (autosave.hasUnsaved()) throw new Error('這裡還有尚未儲存的修改，請先完成儲存再還原歷史版本。');
+    return autosave.version();
+  }, [autosave, initial.page.kind, pageId]);
   const saveTitle = useCallback((title: string) => { localRevisionRef.current++; setMeta(m => ({ ...m, title })); patch.mutate({ id: pageId, title, localRevision: autosave.localRevision() }); }, [patch, pageId, autosave]);
   const saveIcon = useCallback((icon: string | null) => { setMeta(m => ({ ...m, icon })); patch.mutate({ id: pageId, icon }); }, [patch, pageId]);
   const saveCover = useCallback((cover: string | null) => {
@@ -117,7 +148,7 @@ function PageView({ initial }: { initial: LocalPageResponse }) {
       onToggleFullWidth={toggleFullWidth}
       smallText={smallText} onToggleSmallText={toggleSmallText} onOpenHistory={() => setHistoryOpen(true)} />
     <HistoryDrawer pageId={pageId} opened={historyOpen} onClose={() => setHistoryOpen(false)} currentVersion={autosave.state.version}
-      onRestored={() => { void autosave.resolveConflict('reload'); }} />
+      prepare={prepareRestore} onRestored={() => { void autosave.resolveConflict('reload'); }} />
     {autosave.state.status === 'conflict' && <Alert color="red" variant="light" className="conflict-bar" title="此頁面已在其他地方更新">
       <Group gap="sm">
         <Text size="sm">本機草稿已保留，系統不會自動合併或覆蓋。建議先匯出草稿，再選擇載入最新版本（捨棄這裡的修改），或以這裡的內容覆蓋（被覆蓋的線上版本會留在頁面歷史）。</Text>
@@ -130,6 +161,7 @@ function PageView({ initial }: { initial: LocalPageResponse }) {
       </Group>
     </Alert>}
     {refreshError && <Alert color="red" title="無法載入最新內容">{refreshError}</Alert>}
+    {actionError && <Alert color="red" withCloseButton onClose={() => setActionError(null)}>{actionError}</Alert>}
     {patch.error && <Alert color="red" title="頁面設定尚未儲存">{errorText(patch.error)}</Alert>}
     <div ref={bodyRef} className={`page-body${initial.page.kind === 'database' ? ' page-body--database' : ''}${meta.fullWidth ? ' page-body--full' : ''}${smallText ? ' page-body--small' : ''}`}>
       <PageHeader title={meta.title} icon={meta.icon} coverUrl={meta.coverUrl} coverPosition={meta.coverPosition}
@@ -138,7 +170,7 @@ function PageView({ initial }: { initial: LocalPageResponse }) {
         ? online ? <DatabaseView databaseId={pageId} /> : <Alert title="資料庫需要連線">一般筆記仍可離線編輯，資料庫視圖請恢復連線後開啟。</Alert>
         : <>
           {initial.page.kind === 'row' && initial.page.databaseId && (online ? <RowPropertiesPanel rowId={pageId} databaseId={initial.page.databaseId} /> : <Alert title="資料列需要連線">已下載的內文可閱讀，編輯請恢復連線後進行。</Alert>)}
-          <BlockEditor pageId={pageId} initialContent={initialContent} onReady={onReady} onChange={onChange} onCompositionSettled={onCompositionSettled} fullWidth={meta.fullWidth} uploadFile={upload} editable={online || initial.page.kind === 'page'} annotationsEnabled={online && autosave.state.version > 0} />
+          <BlockEditor pageId={pageId} initialContent={initialContent} onReady={onReady} onChange={onChange} onCompositionSettled={onCompositionSettled} onComposingChange={onComposingChange} onError={setActionError} fullWidth={meta.fullWidth} uploadFile={upload} editable={online || initial.page.kind === 'page'} annotationsEnabled={online && autosave.state.version > 0} />
         </>}
     </div>
   </div>}

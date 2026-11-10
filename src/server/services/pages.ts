@@ -209,6 +209,8 @@ export function restorePage(db: Db, userId: string, id: string, now: number): Pa
     const row = loadPage(db, userId, id, { allowTrashed: true });
     if (row.trashed_at === null || row.trash_root_id !== id) throw new AppError('not_found', '垃圾桶裡沒有這個頁面。');
     const parent = row.parent_id ? db.get<PageRow>('SELECT * FROM pages WHERE id = ? AND user_id = ?', row.parent_id, userId) : undefined;
+    // A row only exists inside its database; detaching it to the root would leave it unreachable.
+    if (row.kind === 'row' && (!parent || parent.trashed_at !== null)) throw new AppError('conflict', '請先還原這筆資料所屬的資料庫。');
     const parentId = parent && parent.trashed_at === null ? parent.id : null;
     db.run('UPDATE pages SET trashed_at = NULL, trash_root_id = NULL, updated_at = ? WHERE trash_root_id = ?', now, id);
     const position = positionAt(db, userId, parentId, Number.MAX_SAFE_INTEGER, id);

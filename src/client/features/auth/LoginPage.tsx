@@ -5,8 +5,10 @@ import { Link, Navigate, useNavigate, useSearchParams } from 'react-router';
 import { useAuthStatus, useLogin, useMe } from '../../api/auth.ts';
 import { errorText } from '../../api/client.ts';
 import { AuthLayout } from './AuthLayout.tsx';
+import { safeNext } from './safeNext.ts';
 
 const REMEMBER_KEY = 'notes:remembered-identifier';
+
 function readRemembered(): string | null { try { return localStorage.getItem(REMEMBER_KEY); } catch { return null; } }
 function writeRemembered(value: string | null): void {
   try { if (value) localStorage.setItem(REMEMBER_KEY, value); else localStorage.removeItem(REMEMBER_KEY); } catch { /* storage unavailable */ }
@@ -22,13 +24,13 @@ export function LoginPage() {
   const [identifier, setIdentifier] = useState(remembered ?? '');
   const [password, setPassword] = useState('');
   const [remember, setRemember] = useState(remembered !== null);
-  const next = params.get('next') ?? '/';
-  if (me.data) return <Navigate to={next.startsWith('/') ? next : '/'} replace />;
+  const next = safeNext(params.get('next'));
+  if (me.data) return <Navigate to={next} replace />;
   if (status.data?.setupRequired) return <Navigate to="/register" replace />;
   const submit = (event: FormEvent) => {
     event.preventDefault();
     writeRemembered(remember ? identifier.trim() : null);
-    login.mutate({ identifier, password }, { onSuccess: () => navigate(next.startsWith('/') ? next : '/', { replace: true }) });
+    login.mutate({ identifier, password }, { onSuccess: () => navigate(next, { replace: true }) });
   };
   return <AuthLayout title="登入" subtitle="使用電子郵件或使用者名稱登入。">
     <form onSubmit={submit}>

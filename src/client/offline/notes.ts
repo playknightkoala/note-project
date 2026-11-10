@@ -2,7 +2,7 @@ import type { PageHeadDto, PageNode, PageResponse, SessionDto, TreeDto, UserDto 
 import { summarizePage } from '@shared/offline';
 import type { OfflineManifest, SyncNoteInput } from '@shared/offline';
 import { ApiError, api, isApiError, setCsrfToken } from '../api/client.ts';
-import { announceOfflineChange, clearLocal, listLocal, readLocal, updateLocal } from './storage.ts';
+import { announceOfflineChange, listLocal, readLocal, removeLocal, updateLocal } from './storage.ts';
 
 export interface LocalPageResponse extends PageResponse { localRevision?: string }
 export interface LocalHead extends PageHeadDto { localRevision?: string; queued?: boolean }
@@ -50,11 +50,24 @@ function storageError(error: unknown): void {
   if (offlineStorageError !== message) { offlineStorageError = message; announceOfflineChange(); }
 }
 
+/** Records are keyed `<kind>:<userId>[:<id>]`; the `user` record has no owner. */
+const ownerOfKey = (key: string): string | undefined => /^(page|tree|synced|attachments|annotation-highlights):/.test(key) ? key.split(':')[1] : undefined;
+const isUnsyncedDraft = (key: string, value: unknown): boolean => key.startsWith('page:') && (value as OfflineNote | undefined)?.pending === true;
+
+/**
+ * Removes other accounts' downloaded copies and attachment caches from this browser. Their unsynced drafts are the
+ * only thing kept, so the owner can still upload or export them after signing in again.
+ */
+async function purgeOtherAccounts(keep: string): Promise<void> {
+  await removeLocal((key, value) => { const owner = ownerOfKey(key); return owner !== undefined && owner !== keep && !isUnsyncedDraft(key, value); });
+  if ('caches' in window) for (const name of await caches.keys()) if (name.startsWith('notes-files-') && name !== `notes-files-${keep}`) await caches.delete(name);
+}
+
 export async function rememberUser(value: UserDto): Promise<void> {
   const changed = user?.id !== value.id;
   user = value;
   try { await updateLocal<UserDto>('user', () => value); offlineStorageError = null; } catch (error) { storageError(error); }
-  if (changed) await restoreSyncStatus(value.id);
+  if (changed) { await purgeOtherAccounts(value.id).catch(storageError); await restoreSyncStatus(value.id); }
 }
 export async function cachedUser(): Promise<UserDto | null> {
   try { user = await readLocal<UserDto>('user') ?? null; if (user) await restoreSyncStatus(user.id); return user; } catch (error) { storageError(error); return null; }
@@ -66,11 +79,22 @@ export async function revokeOfflineEntry(): Promise<void> {
   setCsrfToken(null);
   await updateLocal('user', () => undefined).catch(storageError);
 }
-export async function forgetOfflineData(): Promise<void> {
+/** Another tab ended or replaced the session: stop acting for the old account here, without touching storage. */
+export function detachOfflineUser(): void {
   user = null;
   nextDownloadAt = 0; retryAt = 0; failures = 0;
   setSyncStatus({ phase: 'idle', completedAt: null });
-  await clearLocal();
+}
+/**
+ * Sign-out: forget this account and every clean copy on the device. Unsynced drafts that belong to a different
+ * account (whose session expired here earlier) are never deleted by someone else's sign-out.
+ */
+export async function forgetOfflineData(): Promise<void> {
+  const owner = user?.id ?? (await readLocal<UserDto>('user').catch(() => undefined))?.id;
+  user = null;
+  nextDownloadAt = 0; retryAt = 0; failures = 0;
+  setSyncStatus({ phase: 'idle', completedAt: null });
+  await removeLocal((key, value) => ownerOfKey(key) === owner || !isUnsyncedDraft(key, value));
   if ('caches' in window) for (const name of await caches.keys()) if (name.startsWith('notes-files-')) await caches.delete(name);
 }
 export async function offlineNotes(): Promise<OfflineNote[]> {
@@ -89,8 +113,11 @@ export async function cachePage(response: PageResponse, expectedUserId = user?.i
     const note = await updateLocal<OfflineNote>(pageKey(owner.id, response.page.id), current => {
       if (user?.id !== owner.id) throw new ApiError(401, 'unauthorized', '帳號已切換。');
       if (current?.pending || (current && current.base.page.version > response.page.version)) return current;
-      const changed = !current || JSON.stringify(current.base) !== JSON.stringify(response);
-      return { userId: owner.id, base: response, local: response, revision: changed ? crypto.randomUUID() : current.revision, writer: changed ? '' : current.writer, isNew: false, pending: false };
+      // Icon, cover, favourite, position and ancestor names change without a new content version. Those must not
+      // look like someone else's edit to an open editor, so the revision only changes with the text itself.
+      const sameText = !!current && !current.removed && current.base.page.version === response.page.version && current.base.page.title === response.page.title
+        && JSON.stringify(current.base.page.content) === JSON.stringify(response.page.content);
+      return { userId: owner.id, base: response, local: response, revision: sameText ? current.revision : crypto.randomUUID(), writer: sameText ? current.writer : '', isNew: false, pending: false };
     });
     return localResponse(note!);
   } catch (error) { if (isApiError(error, 401)) throw error; storageError(error); return response; }
@@ -202,9 +229,12 @@ async function sendNote(owner: UserDto, id: string): Promise<void> {
     });
   } catch (error) {
     if (transient(error) || isApiError(error, 401)) throw error;
+    // A rejected operation left no receipt on the server. Unless it is a conflict (resolved explicitly), drop the
+    // frozen payload so the next attempt sends the note as it is by then, e.g. after the user shortened it.
     await updateLocal<OfflineNote>(key, current => current && current.sending?.input.operationId === sent.input.operationId ? {
       ...current, problem: error instanceof Error ? error.message : '同步失敗',
       conflict: isApiError(error, 409) ? error.details?.current as PageHeadDto : undefined,
+      sending: isApiError(error, 409) ? current.sending : undefined,
     } : current);
   }
 }
@@ -222,8 +252,9 @@ async function pullNotes(owner: UserDto): Promise<void> {
     if (note.local.page.kind === 'page' && !active.has(note.local.page.id) && !note.isNew) {
       await updateLocal<OfflineNote>(pageKey(owner.id, note.local.page.id), current => {
         if (!current || user?.id !== owner.id || current.revision !== note.revision || current.pending) return current;
-        // Keep the baseline for an editor that has not flushed yet, but never offer a deleted page offline.
-        return { ...current, removed: true };
+        // Keep a marker for an editor that still has this page open, but not the text of a page deleted online.
+        const emptied = (response: PageResponse): PageResponse => ({ ...response, page: { ...response.page, content: [] } });
+        return { ...current, removed: true, base: emptied(current.base), local: emptied(current.local) };
       });
     }
   }

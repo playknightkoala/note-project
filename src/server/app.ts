@@ -14,6 +14,7 @@ import { healthRoutes } from './routes/health.ts';
 import { fileRoutes } from './routes/files.ts';
 import { pageRoutes, trashRoutes } from './routes/pages.ts';
 import { staticRoutes } from './static.ts';
+import { requestBodyLimit } from './routes/validate.ts';
 import { searchRoutes } from './routes/search.ts';
 import { databaseRoutes, rowRoutes } from './routes/databases.ts';
 import { annotationRoutes } from './routes/annotations.ts';
@@ -31,6 +32,11 @@ export interface AppDeps {
 }
 
 export type AppEnv = { Variables: { deps: AppDeps; auth?: AuthContext } };
+
+/** Credentials and profile fields only. */
+const MAX_AUTH_BODY_BYTES = 64 * 1024;
+/** Page content is capped at 2M UTF-16 units (shared/blocks.ts), which is at most ~6 MB of UTF-8 plus JSON framing. */
+const MAX_JSON_BODY_BYTES = 8 * 1024 * 1024;
 
 export function errorBody(error: AppError): ErrorBody {
   return { error: { code: error.code, message: error.message, ...(error.details ? { details: error.details } : {}) } };
@@ -62,6 +68,12 @@ export function createApp(input: Omit<AppDeps, 'now' | 'rateLimiter'> & Partial<
   });
   app.use('*', async (c, next) => c.req.path.startsWith('/api/files/') && c.req.method !== 'POST' ? next() : secure(c, next));
   app.use('/api/*', async (c, next) => { c.header('Cache-Control', 'no-store'); await next(); });
+  // Nothing is read into memory beyond these sizes. Uploads get their own (authenticated) limit in the files route.
+  const authBody = requestBodyLimit(MAX_AUTH_BODY_BYTES), jsonBody = requestBodyLimit(MAX_JSON_BODY_BYTES);
+  app.use('/api/*', async (c, next) => {
+    if (c.req.method === 'POST' && /^\/api\/files\/?$/.test(c.req.path)) return next();
+    return (c.req.path.startsWith('/api/auth/') ? authBody : jsonBody)(c, next);
+  });
 
   app.route('/', healthRoutes());
   app.get('/api/version', c => c.json(versionInfo(deps.config.version)));

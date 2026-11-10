@@ -12,7 +12,8 @@ export function staticRoutes(clientDir: string): Hono<AppEnv> {
   app.use('/sw.js', async (c, next) => { c.header('Cache-Control', 'no-cache'); c.header('Service-Worker-Allowed', '/'); await next(); });
   app.use('*', serveStatic({ root: clientDir, index: '__none__' }));
   app.get('*', c => {
-    if (c.req.path.startsWith('/api/')) return c.notFound();
+    // A missing hashed asset is an error, never the app shell: a 200 HTML answer would be cached as that asset.
+    if (c.req.path.startsWith('/api/') || c.req.path.startsWith('/assets/')) return c.notFound();
     if (c.req.method !== 'GET' && c.req.method !== 'HEAD') return c.text('Method Not Allowed', 405);
     return c.html(index, 200, { 'Cache-Control': 'no-cache' });
   });

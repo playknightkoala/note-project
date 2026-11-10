@@ -6,12 +6,17 @@ import type { AppEnv } from '../app.ts';
 import { AppError } from '../../shared/errors.ts';
 import { SESSION_COOKIE, loadSession } from './session.ts';
 
-/** Client IP for rate limiting: the first X-Forwarded-For hop only when a trusted proxy is configured. */
+/**
+ * Client IP for rate limiting. Behind a trusted proxy: the configured CLIENT_IP_HEADER, otherwise the LAST
+ * X-Forwarded-For hop. Earlier hops are whatever the client sent, so they must never be used as the key.
+ */
 export function clientIp(c: Context<AppEnv>): string {
   const { config } = c.get('deps');
   if (config.trustProxy) {
-    const forwarded = c.req.header('x-forwarded-for')?.split(',')[0]?.trim();
-    if (forwarded) return forwarded;
+    const named = config.clientIpHeader ? c.req.header(config.clientIpHeader)?.trim() : undefined;
+    if (named) return named.slice(0, 64);
+    const forwarded = c.req.header('x-forwarded-for')?.split(',').map(hop => hop.trim()).filter(Boolean).at(-1);
+    if (forwarded) return forwarded.slice(0, 64);
   }
   try { return getConnInfo(c).remote.address ?? 'unknown'; } catch { return 'unknown'; }
 }
@@ -51,12 +56,27 @@ export const requireAdmin: MiddlewareHandler<AppEnv> = async (c, next) => {
   await next();
 };
 
+const SAFE_METHODS = ['GET', 'HEAD', 'OPTIONS'];
+
+function assertSameOrigin(c: Context<AppEnv>): void {
+  const origin = c.req.header('origin');
+  if (origin === 'null') throw new AppError('csrf');
+  if (origin && !originAllowed(c, origin)) throw new AppError('csrf', '請求來源與網站不符；若網站在反向代理後面，請設定 NOTES_PUBLIC_ORIGIN。');
+}
+
+/**
+ * For the endpoints that run before a session exists (login, register): a cross-site page must not be able to sign
+ * the visitor into an account of the attacker's choosing.
+ */
+export const requireSameOrigin: MiddlewareHandler<AppEnv> = async (c, next) => {
+  if (!SAFE_METHODS.includes(c.req.method)) assertSameOrigin(c);
+  await next();
+};
+
 /** Every state-changing request must carry the session's CSRF token and, when present, a same-origin Origin header. */
 export const requireCsrf: MiddlewareHandler<AppEnv> = async (c, next) => {
-  if (['GET', 'HEAD', 'OPTIONS'].includes(c.req.method)) { await next(); return; }
-  const origin = c.req.header('origin');
-  if (origin && origin !== 'null' && !originAllowed(c, origin)) throw new AppError('csrf', '請求來源與網站不符；若網站在反向代理後面，請設定 NOTES_PUBLIC_ORIGIN。');
-  if (origin === 'null') throw new AppError('csrf');
+  if (SAFE_METHODS.includes(c.req.method)) { await next(); return; }
+  assertSameOrigin(c);
   const auth = c.get('auth');
   const header = c.req.header('x-csrf-token') ?? '';
   if (!auth || header.length !== auth.session.csrf_token.length || !timingSafeEqual(Buffer.from(header), Buffer.from(auth.session.csrf_token))) throw new AppError('csrf');

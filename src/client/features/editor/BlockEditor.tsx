@@ -21,13 +21,17 @@ export interface BlockEditorProps {
   onChange: () => void;
   /** Fires when a composition finished (the pending change can now be serialized). */
   onCompositionSettled: () => void;
+  /** A document change inside an open composition; must not re-render the editor. */
+  onComposingChange?: () => void;
+  /** An editor action (e.g. creating a child page) failed. */
+  onError?: (message: string) => void;
   uploadFile?: (file: File) => Promise<string>;
   fullWidth?: boolean;
   editable?: boolean;
   annotationsEnabled?: boolean;
 }
 
-export function BlockEditor({ pageId, initialContent, onReady, onChange, onCompositionSettled, uploadFile, fullWidth, editable = true, annotationsEnabled = true }: BlockEditorProps) {
+export function BlockEditor({ pageId, initialContent, onReady, onChange, onCompositionSettled, onComposingChange, onError, uploadFile, fullWidth, editable = true, annotationsEnabled = true }: BlockEditorProps) {
   const scheme = useComputedColorScheme('light');
   const navigate = useNavigate();
   const ime = useImeGuard(onCompositionSettled);
@@ -48,9 +52,9 @@ export function BlockEditor({ pageId, initialContent, onReady, onChange, onCompo
   const mentionItems = usePageMentionItems(editor, pageId);
   return <div className={`block-editor${fullWidth ? ' block-editor--full' : ''}`} {...ime.wrapperProps}>
     <BlockNoteView editor={editor} editable={editable} theme={scheme} slashMenu={false} emojiPicker={false} formattingToolbar={false}
-      onChange={() => { if (!ime.composing.current) onChange(); }}>
+      onChange={() => { if (ime.composing.current) onComposingChange?.(); else onChange(); }}>
       <SuggestionMenuController triggerCharacter="/" shouldOpen={ime.notComposing}
-        getItems={async query => filterSuggestionItems([...slashItems(editor, pageId, navigate), ...getDefaultReactSlashMenuItems(editor)], query)} />
+        getItems={async query => filterSuggestionItems([...slashItems(editor, pageId, navigate, onError), ...getDefaultReactSlashMenuItems(editor)], query)} />
       <SuggestionMenuController triggerCharacter="@" shouldOpen={ime.notComposing} minQueryLength={0} getItems={mentionItems} />
       <EmojiPickerController triggerCharacter=":" shouldOpen={ime.notComposing} minQueryLength={2} />
       <SelectionTools editor={editor} pageId={pageId} composing={ime.isComposing} annotationsEnabled={annotationsEnabled} />

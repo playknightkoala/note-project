@@ -7,6 +7,7 @@ import { loadConfig } from './config.ts';
 import { assertSqliteCapabilities, openDatabase } from './db/driver.ts';
 import { migrate } from './db/migrate.ts';
 import { createLogger } from './logger.ts';
+import { sweepSessions } from './auth/session.ts';
 
 const config = loadConfig();
 const logger = createLogger(config.logLevel);
@@ -24,6 +25,14 @@ const app = createApp({ db, config, logger, clientDir });
 const server = serve({ fetch: app.fetch, hostname: config.host, port: config.port }, info => {
   logger.info('listening', { host: info.address, port: info.port, version: config.version, env: config.env });
 });
+
+// Expired sessions are otherwise only removed when their own cookie is presented again.
+const sweep = () => {
+  try { const removed = sweepSessions(db, Date.now()); if (removed) logger.info('expired sessions removed', { removed }); }
+  catch (error) { logger.warn('session sweep failed', { message: error instanceof Error ? error.message : String(error) }); }
+};
+sweep();
+setInterval(sweep, 60 * 60 * 1000).unref();
 
 const shutdown = (signal: string) => {
   logger.info('shutting down', { signal });

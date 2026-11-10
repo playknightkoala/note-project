@@ -46,7 +46,7 @@ export function createTestApp(env: Record<string, string> = {}): TestApp {
         if (options.csrf !== false && state.csrf && !['GET', 'HEAD'].includes(method)) headers['x-csrf-token'] = state.csrf;
         if (options.origin !== null) headers.origin = options.origin ?? 'http://localhost';
         const body = options.json !== undefined ? JSON.stringify(options.json) : options.body;
-        const response = await app.request(`http://localhost${path}`, { method, headers, ...(body !== undefined ? { body } : {}) });
+        const response = await app.request(`http://localhost${path}`, { method, headers, ...(body !== undefined ? { body } : {}), ...(body instanceof ReadableStream ? { duplex: 'half' } : {}) } as RequestInit);
         const setCookie = response.headers.get('set-cookie');
         if (setCookie) {
           const pair = setCookie.split(';')[0]!;

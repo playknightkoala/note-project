@@ -10,6 +10,8 @@ docker compose up -d --build --wait
 
 網站在 `http://127.0.0.1:${NOTES_PORT:-8080}/`，只綁 loopback。第一次開啟會要求建立管理者帳號；之後的使用者需要管理者在「設定 → 邀請碼」產生的邀請連結。
 
+**第一個註冊的人就是管理者。** 若網站在你建立帳號之前就能被其他人連到（對外網域、共用區網），先在 `.env` 設 `NOTES_SETUP_TOKEN`（16 個字元以上的隨機值）：建立第一個帳號時必須在「設定碼」欄位輸入這個值，其他人無法搶先註冊。管理者建立後這個設定不再有作用。
+
 檢查：
 
 ```powershell
@@ -54,7 +56,7 @@ NOTES_HTTPS_PORT=443
 docker compose -f compose.yaml -f compose.https.yaml up -d --build --wait
 ```
 
-overlay 會：以 nginx 終結 TLS（TLS 1.2／1.3）並轉給 app；把 app 的 `TRUST_PROXY` 設為 1，讓伺服器信任 `X-Forwarded-Proto`／`X-Forwarded-For`，因此 session cookie 會帶 `Secure`，速率限制用真實來源 IP。app 自己的 8080 仍只綁 `127.0.0.1`，不要另外發布。
+overlay 會：以 nginx 終結 TLS（TLS 1.2／1.3）並轉給 app；把 app 的 `TRUST_PROXY` 設為 1，讓伺服器信任 `X-Forwarded-Proto`／`X-Forwarded-Host`／`X-Forwarded-For`，因此 session cookie 會帶 `Secure`。nginx 會以實際連線位址覆寫 `X-Forwarded-For`（不沿用客戶端送來的值），速率限制因此以連到 nginx 的位址計算；若 nginx 前面還有 Cloudflare，請依下節設定 `NOTES_CLIENT_IP_HEADER`，否則所有訪客會被算成 Cloudflare 的節點位址。app 自己的 8080 仍只綁 `127.0.0.1`，不要另外發布。
 
 驗證：
 
@@ -67,10 +69,14 @@ npm run test:app -- https://你的網域
 - DNS「僅 DNS」（灰雲）：瀏覽器直接連主機，憑證由你的主機提供（例如 Let's Encrypt）。
 - 「已代理」（橘雲）：訪客看到 Cloudflare 的憑證；Cloudflare 到主機請用 **Full (strict)** 搭配免費的 Origin Certificate 當上面的憑證檔，並在主機防火牆只允許 Cloudflare 的 IP 範圍連 443，否則知道 IP 的人能繞過 Cloudflare 直連。不要用 Flexible（Cloudflare 到主機是明文）。
 - 或用 Cloudflare Tunnel：主機不開對外埠，把 tunnel 指到 `http://127.0.0.1:${NOTES_PORT}`，並在 app 設 `NOTES_TRUST_PROXY=1`（compose.yaml 的 `TRUST_PROXY` 讀這個變數）。
+- 經過 Cloudflare（橘雲或 Tunnel）時設 `NOTES_CLIENT_IP_HEADER=cf-connecting-ip`，速率限制才會以訪客的真實位址計算。只有在所有流量都確實經過 Cloudflare 時才設定：能繞過 Cloudflare 直連的人可以自行填寫這個標頭。
 
 ### 反向代理注意事項
 
 - 代理必須傳 `X-Forwarded-Proto: https` 與 `X-Forwarded-For`，且 app 只在 `TRUST_PROXY=1` 時信任這些標頭。沒有代理時不要開，否則客戶端可以偽造來源 IP 影響速率限制。
+- 來源位址取 `X-Forwarded-For` 的最後一段（緊鄰 app 的代理所附加的位址）；前面各段可能是客戶端自己填的，不採用。自架代理請覆寫或附加真實位址（nginx：`proxy_set_header X-Forwarded-For $remote_addr;`）。代理另以專用標頭提供真實位址時，用 `NOTES_CLIENT_IP_HEADER` 指定。
+- 登入限制：每個來源位址 15 分鐘 10 次；同一來源對同一帳號 5 次失敗後暫停 15 分鐘；同一帳號不分來源以 30 次為上限。別人從其他位址猜錯密碼不會鎖住帳號本人。登入與註冊只接受同源的 `application/json` 請求。
+- 請求大小：帳號相關端點 64 KB、其他 JSON 端點 8 MB、附件為 `NOTES_MAX_UPLOAD_MB`；超過即回 413，未帶 `Content-Length`（chunked）的請求也在讀到上限時中止。
 - 寫入請求的來源檢查只比對主機名：`Origin` 必須是 `NOTES_PUBLIC_ORIGIN`，或等於請求抵達時的 `Host`（`NOTES_TRUST_PROXY=1` 時改看 `X-Forwarded-Host`）。若代理或 tunnel 改寫了 `Host`（症狀：登入後所有寫入動作都回 403 `csrf`，例如產生邀請碼、登出），在 `.env` 設 `NOTES_PUBLIC_ORIGIN=https://你的網域` 後 `docker compose up -d --wait`。
 - 附件上傳預設 `NOTES_MAX_UPLOAD_MB=90`；既有 `.env` 若仍明確設定為 20，升級時需自行改為 90 才會放寬。上傳大檔時代理的 body 上限要高於附件上限（含 multipart 包裝；overlay 已設 220 MB、讀取逾時 300 秒）。Cloudflare 若為單次請求 100 MB 上限，建議維持 90，避免容量單位與包裝造成 413；此限制與裝置離線快取總容量不同。
 

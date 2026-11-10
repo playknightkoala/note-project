@@ -64,7 +64,7 @@ export interface InviteDto {
   revokedAt: number | null;
 }
 
-export interface AuthStatusDto { setupRequired: boolean }
+export interface AuthStatusDto { setupRequired: boolean; /** The first account needs the operator's SETUP_TOKEN. */ setupTokenRequired?: boolean }
 
 // ---- Pages ----
 export const pageIdSchema = z.string().uuid();

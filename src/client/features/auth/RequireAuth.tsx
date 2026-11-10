@@ -5,7 +5,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Navigate, useLocation } from 'react-router';
 import { AUTH_LOST_EVENT, setCsrfToken } from '../../api/client.ts';
 import { authKeys, useMe } from '../../api/auth.ts';
-import { revokeOfflineEntry } from '../../offline/notes.ts';
+import { detachOfflineUser, revokeOfflineEntry } from '../../offline/notes.ts';
 import { OFFLINE_EVENT, readLocal } from '../../offline/storage.ts';
 import type { UserDto } from '@shared/api';
 
@@ -22,7 +22,8 @@ export function RequireAuth({ children }: { children: ReactNode }) {
   useEffect(() => {
     let active = true;
     const changed = () => { void readLocal<UserDto>('user').then(cached => {
-      if (active && me.data && cached?.id !== me.data.id) { setCsrfToken(null); queryClient.clear(); queryClient.setQueryData(authKeys.me, null); }
+      // Another tab signed out or signed in as someone else: this tab must stop syncing for the old account too.
+      if (active && me.data && cached?.id !== me.data.id) { setCsrfToken(null); detachOfflineUser(); queryClient.clear(); queryClient.setQueryData(authKeys.me, null); }
     }).catch(() => {}); };
     window.addEventListener(OFFLINE_EVENT, changed);
     return () => { active = false; window.removeEventListener(OFFLINE_EVENT, changed); };

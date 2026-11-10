@@ -4,17 +4,24 @@ import { Readable } from 'node:stream';
 import type { AppEnv } from '../app.ts';
 import { AppError } from '../../shared/errors.ts';
 import { requireAuth, requireCsrf } from '../auth/middleware.ts';
+import { requestBodyLimit } from './validate.ts';
 import { blobPath, deleteFile, fileDto, loadFile, saveFile, servesInline } from '../services/storage.ts';
+
+/** Boundary lines and part headers around the single `file` field. */
+const MULTIPART_OVERHEAD_BYTES = 16 * 1024;
 
 export function fileRoutes(): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
   app.use('*', requireAuth, requireCsrf);
 
-  app.post('/', async c => {
+  // Runs after authentication, and also counts bodies sent without a Content-Length (chunked), so an oversized
+  // upload is cut off at the limit instead of being buffered whole.
+  app.post('/', async (c, next) => {
+    const { maxUploadBytes } = c.get('deps').config;
+    return requestBodyLimit(maxUploadBytes + MULTIPART_OVERHEAD_BYTES, `檔案超過 ${Math.round(maxUploadBytes / 1024 / 1024)} MB。`)(c, next);
+  }, async c => {
     const deps = c.get('deps');
     const userId = c.get('auth')!.user.id;
-    const length = Number(c.req.header('content-length') ?? 0);
-    if (length > deps.config.maxUploadBytes + 4096) throw new AppError('payload_too_large', `檔案超過 ${Math.round(deps.config.maxUploadBytes / 1024 / 1024)} MB。`);
     const limited = deps.rateLimiter.hit(`upload:${userId}`, 60, 60_000, deps.now());
     if (!limited.allowed) throw new AppError('rate_limited', undefined, { retryAfterSeconds: limited.retryAfterSeconds });
     let form: FormData;

@@ -67,6 +67,24 @@ export async function listLocal<T>(prefix: string): Promise<T[]> {
   });
 }
 
+/** Deletes every record the predicate selects, in one transaction. */
+export async function removeLocal(select: (key: string, value: unknown) => boolean): Promise<void> {
+  const db = await open();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction('records', 'readwrite');
+    const request = tx.objectStore('records').openCursor();
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (!cursor) return;
+      if (select(String(cursor.key), cursor.value)) cursor.delete();
+      cursor.continue();
+    };
+    tx.oncomplete = () => resolve();
+    tx.onabort = tx.onerror = () => reject(tx.error);
+  });
+  announceOfflineChange();
+}
+
 export async function clearLocal(): Promise<void> {
   const db = await open();
   await new Promise<void>((resolve, reject) => {

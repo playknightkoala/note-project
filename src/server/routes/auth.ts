@@ -1,3 +1,4 @@
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
@@ -6,13 +7,21 @@ import { loginSchema, passwordChangeSchema, profileUpdateSchema, registerSchema 
 import type { AuthStatusDto, SessionDto } from '../../shared/api.ts';
 import { AppError } from '../../shared/errors.ts';
 import { dummyVerify, hashPassword, needsRehash, verifyPassword } from '../auth/password.ts';
-import { redeemInvite } from '../auth/invites.ts';
-import { clientIp, requireAuth, requireCsrf } from '../auth/middleware.ts';
+import { inviteUsable, redeemInvite } from '../auth/invites.ts';
+import { clientIp, requireAuth, requireCsrf, requireSameOrigin } from '../auth/middleware.ts';
 import { ABSOLUTE_TTL_MS, SESSION_COOKIE, createSession, deleteSession, deleteUserSessions, userDto } from '../auth/session.ts';
 import { countUsers, findUserByIdentifier, insertUser } from '../services/users.ts';
 import { parseBody } from './validate.ts';
 
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_PER_IP = 10;
+const LOGIN_PER_PAIR = 5;
+const LOGIN_PER_ACCOUNT = 30;
+
+function secretEquals(given: string, expected: string): boolean {
+  const a = createHash('sha256').update(given).digest(), b = createHash('sha256').update(expected).digest();
+  return timingSafeEqual(a, b);
+}
 
 function cookieSecure(c: Context<AppEnv>): boolean {
   const { config } = c.get('deps');
@@ -31,8 +40,13 @@ function issueSession(c: Context<AppEnv>, userId: string): string {
 export function authRoutes(): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
 
-  app.get('/status', c => c.json<AuthStatusDto>({ setupRequired: countUsers(c.get('deps').db) === 0 }));
+  app.get('/status', c => {
+    const { db, config } = c.get('deps');
+    const setupRequired = countUsers(db) === 0;
+    return c.json<AuthStatusDto>({ setupRequired, ...(setupRequired && config.setupToken ? { setupTokenRequired: true } : {}) });
+  });
 
+  app.use('/register', requireSameOrigin);
   app.post('/register', async c => {
     const deps = c.get('deps');
     const now = deps.now();
@@ -40,12 +54,22 @@ export function authRoutes(): Hono<AppEnv> {
     const limited = deps.rateLimiter.hit(`register:${ip}`, 5, 60 * 60 * 1000, now);
     if (!limited.allowed) throw new AppError('rate_limited', undefined, { retryAfterSeconds: limited.retryAfterSeconds });
     const input = await parseBody(c, registerSchema);
+    // The invite (or setup token) is checked before anything else, so a caller without one learns nothing about
+    // which emails exist and cannot make the server spend a password hash.
+    const admit = (): boolean => {
+      const first = countUsers(deps.db) === 0;
+      if (first) {
+        if (deps.config.setupToken && !secretEquals(input.inviteCode ?? '', deps.config.setupToken)) throw new AppError('invite_invalid', '需要設定碼才能建立管理者帳號。');
+      } else {
+        if (!input.inviteCode) throw new AppError('invite_invalid', '註冊需要邀請碼。');
+        if (!inviteUsable(deps.db, input.inviteCode, now)) throw new AppError('invite_invalid');
+      }
+      return first;
+    };
+    admit();
     const passwordHash = await hashPassword(input.password);
     const user = deps.db.transaction(() => {
-      const first = countUsers(deps.db) === 0;
-      if (!first) {
-        if (!input.inviteCode) throw new AppError('invite_invalid', '註冊需要邀請碼。');
-      }
+      const first = admit();
       const created = insertUser(deps.db, { email: input.email, username: input.username ?? null, displayName: input.displayName,
         passwordHash, role: first ? 'admin' : 'user' }, now);
       if (!first) redeemInvite(deps.db, input.inviteCode!, created.id, now);
@@ -56,25 +80,31 @@ export function authRoutes(): Hono<AppEnv> {
     return c.json<SessionDto>({ user: userDto(user), csrfToken }, 201);
   });
 
+  app.use('/login', requireSameOrigin);
   app.post('/login', async c => {
     const deps = c.get('deps');
     const now = deps.now();
-    const input = await parseBody(c, loginSchema);
     const ip = clientIp(c);
+    const limit = (key: string, max: number) => {
+      const result = deps.rateLimiter.hit(key, max, LOGIN_WINDOW_MS, now);
+      if (!result.allowed) throw new AppError('rate_limited', undefined, { retryAfterSeconds: result.retryAfterSeconds });
+    };
+    // Per address first, before the body is even read.
+    limit(`login:ip:${ip}`, LOGIN_PER_IP);
+    const input = await parseBody(c, loginSchema);
     const identifier = input.identifier.trim().toLowerCase();
-    const byIp = deps.rateLimiter.hit(`login:ip:${ip}`, 10, LOGIN_WINDOW_MS, now);
-    const byId = deps.rateLimiter.hit(`login:id:${identifier}`, 5, LOGIN_WINDOW_MS, now);
-    if (!byIp.allowed || !byId.allowed) {
-      const retryAfterSeconds = Math.max(byIp.retryAfterSeconds, byId.retryAfterSeconds);
-      c.header('Retry-After', String(retryAfterSeconds));
-      throw new AppError('rate_limited', undefined, { retryAfterSeconds });
-    }
+    // The strict limit is per (address, account): someone else's failed guesses must not lock the real owner out.
+    // The per-account limit is a much higher backstop against guessing spread over many addresses.
+    const pairKey = `login:pair:${ip}:${identifier}`, idKey = `login:id:${identifier}`;
+    limit(pairKey, LOGIN_PER_PAIR);
+    limit(idKey, LOGIN_PER_ACCOUNT);
     const user = findUserByIdentifier(deps.db, identifier);
     const ok = user ? await verifyPassword(user.password_hash, input.password) : (await dummyVerify(input.password), false);
     if (!user || !ok) throw new AppError('unauthorized', '帳號或密碼錯誤。');
     if (user.disabled_at !== null) throw new AppError('account_disabled');
     if (needsRehash(user.password_hash)) deps.db.run('UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?', await hashPassword(input.password), now, user.id);
-    deps.rateLimiter.clear(`login:id:${identifier}`);
+    deps.rateLimiter.clear(pairKey);
+    deps.rateLimiter.clear(idKey);
     const csrfToken = issueSession(c, user.id);
     return c.json<SessionDto>({ user: userDto(user), csrfToken });
   });
