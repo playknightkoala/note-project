@@ -10,7 +10,7 @@ import { scopePages } from './access.ts';
 
 interface ShareRow { page_id: string; user_id: string; scope: ShareScope; link_token: string | null; link_created_at: number | null; created_at: number; updated_at: number; account_role: MemberRole | null }
 
-/** The shares that reach an account: those that list it, and those open to every signed-in account whose link it has opened. */
+/** The shares that reach an account: those that list it, and those whose public link gives accounts a role and which it has opened. */
 const REACHES = `(EXISTS(SELECT 1 FROM share_members m WHERE m.page_id = s.page_id AND m.user_id = ?)
   OR (s.account_role IS NOT NULL AND EXISTS(SELECT 1 FROM share_visitors v WHERE v.page_id = s.page_id AND v.user_id = ?)))`;
 const stronger = (a: MemberRole | null, b: MemberRole | null): MemberRole => a === 'editor' || b === 'editor' ? 'editor' : 'viewer';
@@ -52,7 +52,7 @@ export function shareState(db: Db, ownerId: string, pageId: string): ShareStateD
     const share = find(db, ownerId, parent.id);
     if (share && scopeCovers(share.scope, below)) {
       const members = Number(db.get<{ n: number }>('SELECT COUNT(*) AS n FROM share_members WHERE page_id = ?', parent.id)?.n ?? 0);
-      if (share.link_token || members || share.account_role) inherited.push({ pageId: parent.id, title: parent.title, scope: share.scope, link: !!share.link_token, members, accountRole: share.account_role });
+      if (share.link_token || members) inherited.push({ pageId: parent.id, title: parent.title, scope: share.scope, link: !!share.link_token, members, accountRole: share.account_role });
     }
     below.unshift(parent.kind);
     parentId = parent.parent_id;
@@ -74,29 +74,38 @@ export function removeShare(db: Db, ownerId: string, pageId: string): void {
   db.run('DELETE FROM page_shares WHERE page_id = ? AND user_id = ?', pageId, ownerId);
 }
 
-/** Switching the link on always issues a new address; an address that was switched off never works again. */
+/**
+ * A share has one link, the public one. Switching it on always issues a new address; an address that was switched
+ * off never works again. Without an account it gives read access; what it gives a signed-in account is a setting of
+ * the link (`setAccountRole`) and ends with it.
+ */
 export function enableLink(db: Db, ownerId: string, pageId: string, now: number): ShareStateDto {
   return db.transaction(() => {
     ensure(db, ownerId, pageId, now);
-    db.run('UPDATE page_shares SET link_token = ?, link_created_at = ?, updated_at = ? WHERE page_id = ? AND user_id = ?', randomBytes(32).toString('base64url'), now, now, pageId, ownerId);
+    db.run('UPDATE page_shares SET link_token = ?, link_created_at = ?, updated_at = ? WHERE page_id = ? AND user_id = ? AND link_token IS NULL', randomBytes(32).toString('base64url'), now, now, pageId, ownerId);
     return shareState(db, ownerId, pageId);
   });
 }
 export function disableLink(db: Db, ownerId: string, pageId: string, now: number): ShareStateDto {
   return db.transaction(() => {
     loadPage(db, ownerId, pageId, { allowTrashed: true });
-    db.run('UPDATE page_shares SET link_token = NULL, link_created_at = NULL, updated_at = ? WHERE page_id = ? AND user_id = ?', now, pageId, ownerId);
+    if (db.run('UPDATE page_shares SET link_token = NULL, link_created_at = NULL, account_role = NULL, updated_at = ? WHERE page_id = ? AND user_id = ?', now, pageId, ownerId).changes) {
+      db.run('DELETE FROM share_visitors WHERE page_id = ?', pageId);
+    }
     return shareState(db, ownerId, pageId);
   });
 }
 
 /**
- * Opens the page to every signed-in account that has its address, with the given role, or closes that again.
- * Closing forgets who had opened it: they lose access at once, and the page leaves their lists.
+ * What a signed-in account gets by opening the public link: a role, or (null) nothing beyond the read-only copy
+ * everybody gets. Only while the link is on. Taking the role away forgets who had come in: they lose it at once,
+ * and the page leaves their lists.
  */
 export function setAccountRole(db: Db, ownerId: string, pageId: string, role: MemberRole | null, now: number): ShareStateDto {
   return db.transaction(() => {
-    if (role === null) loadPage(db, ownerId, pageId, { allowTrashed: true }); else ensure(db, ownerId, pageId, now);
+    loadPage(db, ownerId, pageId, { allowTrashed: true });
+    const share = find(db, ownerId, pageId);
+    if (role !== null && !share?.link_token) throw new AppError('bad_request', '請先開啟公開連結，再設定知道連結的本站帳號可以做什麼。');
     db.run('UPDATE page_shares SET account_role = ?, updated_at = ? WHERE page_id = ? AND user_id = ?', role, now, pageId, ownerId);
     if (role === null) db.run('DELETE FROM share_visitors WHERE page_id = ?', pageId);
     return shareState(db, ownerId, pageId);
@@ -136,7 +145,7 @@ export function outgoingShares(db: Db, ownerId: string): OutgoingShareDto[] {
   return db.all<ShareRow & { title: string; icon: string | null; kind: PageKind; members: number }>(
     `SELECT s.*, p.title, p.icon, p.kind, (SELECT COUNT(*) FROM share_members m WHERE m.page_id = s.page_id) AS members
      FROM page_shares s JOIN pages p ON p.id = s.page_id AND p.user_id = s.user_id AND p.trashed_at IS NULL WHERE s.user_id = ? ORDER BY s.updated_at DESC, s.page_id`, ownerId)
-    .filter(row => row.link_token !== null || Number(row.members) > 0 || row.account_role !== null)
+    .filter(row => row.link_token !== null || Number(row.members) > 0)
     .map(row => ({ pageId: row.page_id, title: row.title, icon: row.icon, kind: row.kind, scope: row.scope, link: row.link_token !== null, members: Number(row.members), accountRole: row.account_role, updatedAt: row.updated_at }));
 }
 
@@ -161,8 +170,8 @@ export function incomingShares(db: Db, userId: string): IncomingShareDto[] {
 }
 
 /**
- * A member removes the share from their own list. Where the page is open to every signed-in account with the link,
- * opening that link again brings it back.
+ * A member removes the share from their own list and loses access with it. Where the public link gives accounts a
+ * role, opening the link again brings it back.
  */
 export function leaveShare(db: Db, userId: string, pageId: string): void {
   const left = db.run('DELETE FROM share_members WHERE page_id = ? AND user_id = ?', pageId, userId).changes

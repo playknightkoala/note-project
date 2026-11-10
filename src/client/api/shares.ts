@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { MemberRole, ShareScope, SharesDto, ShareStateDto } from '@shared/shares';
+import type { MemberRole, OpenedLinkDto, ShareScope, SharesDto, ShareStateDto } from '@shared/shares';
 import { api } from './client.ts';
 import { loadShares } from '../offline/notes.ts';
 import { pageKeys } from './pages.ts';
@@ -41,6 +41,9 @@ export function useChangeShare(pageId: string) {
     },
   });
 }
+
+/** Opens a share link as the signed-in account; answers the page to go to. */
+export const openShareLink = (token: string, pageId?: string) => api<OpenedLinkDto>('POST', '/api/shares/open', { json: { token, ...(pageId ? { pageId } : {}) } });
 
 /** Stops sharing a page altogether: the link and every member. */
 export function useStopSharing() {

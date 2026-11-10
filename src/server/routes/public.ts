@@ -3,12 +3,14 @@ import type { Context } from 'hono';
 import type { AppEnv } from '../app.ts';
 import { AppError } from '../../shared/errors.ts';
 import { pageIdSchema } from '../../shared/api.ts';
-import type { PublicPageDto, PublicShareDto } from '../../shared/shares.ts';
+import type { AccountLinkDto, PublicPageDto, PublicShareDto } from '../../shared/shares.ts';
 import { publicContent, publicFileUrl } from '../../shared/shares.ts';
+import { getCookie } from 'hono/cookie';
 import { clientIp } from '../auth/middleware.ts';
+import { SESSION_COOKIE, loadSession } from '../auth/session.ts';
 import * as pages from '../services/pages.ts';
 import * as databases from '../services/databases.ts';
-import { linkChain, resolveLink, scopePages } from '../services/access.ts';
+import { linkAdmits, linkChain, resolveLink, scopePages } from '../services/access.ts';
 import type { LinkShare } from '../services/access.ts';
 import { loadLinkFile } from '../services/storage.ts';
 import { sendFile } from './files.ts';
@@ -20,6 +22,10 @@ const LIMIT = 600, WINDOW_MS = 60_000;
  * What the holder of a public link may read, without an account: GET only, nothing here writes. An unknown or
  * switched-off address and a page the link does not reach are answered identically ("not found"). Discussions are
  * never served, and page content is cleaned of everything that points outside the share.
+ *
+ * The one thing a session changes: a signed-in account that the link takes into the page itself (its owner, a
+ * listed member, or any account when the link gives accounts a role) is told so instead of being shown the public
+ * copy, and the app then opens the link with `POST /api/shares/open`.
  */
 export function publicRoutes(): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
@@ -33,8 +39,10 @@ export function publicRoutes(): Hono<AppEnv> {
   const link = (c: Context<AppEnv>): LinkShare => resolveLink(c.get('deps').db, c.req.param('token') ?? '');
 
   app.get('/:token', c => {
-    const { db } = c.get('deps');
+    const deps = c.get('deps'), { db } = deps;
     const share = link(c);
+    const auth = loadSession(db, getCookie(c, SESSION_COOKIE), deps.now());
+    if (auth && auth.user.disabled_at === null && linkAdmits(db, auth.user.id, share)) return c.json<AccountLinkDto>({ account: true });
     const tree = scopePages(db, share.ownerId, share.pageId, share.scope).filter(page => page.kind !== 'row')
       .map(page => ({ id: page.id, parentId: page.id === share.pageId ? null : page.parent_id, kind: page.kind, title: page.title, icon: page.icon }));
     return c.json<PublicShareDto>({ rootId: share.pageId, scope: share.scope, tree });

@@ -1,6 +1,6 @@
 // Sharing: contracts and the pure rules both sides rely on. No Node or DOM API.
 import { z } from 'zod';
-import { emailSchema } from './api.ts';
+import { emailSchema, pageIdSchema } from './api.ts';
 import type { Breadcrumb, PageKind, PageNode } from './api.ts';
 import type { DatabaseDto, DatabaseProperty, DatabaseRow } from './database.ts';
 
@@ -12,8 +12,8 @@ export const databaseScopeLabels: Record<ShareScope, string> = { page: '此資�
 export const MEMBER_ROLES = ['viewer', 'editor'] as const;
 export type MemberRole = typeof MEMBER_ROLES[number];
 export const roleLabels: Record<MemberRole, string> = { viewer: '唯讀', editor: '可編輯' };
-/** What every signed-in account that has the page's address may do. */
-export const accountLinkLabels: Record<MemberRole | 'off', string> = { off: '不開放', viewer: '知道連結的人皆可唯讀', editor: '知道連結的人皆可編輯' };
+/** What a signed-in account gets by opening the public link; `off`: the read-only copy, like anybody without an account. */
+export const accountLinkLabels: Record<MemberRole | 'off', string> = { off: '與未登入相同（只能閱讀）', viewer: '知道連結的人皆可唯讀', editor: '知道連結的人皆可編輯' };
 
 /**
  * Whether a share placed on some page reaches a page below it. `below` lists the kinds on the way down, the shared
@@ -28,17 +28,22 @@ export function scopeCovers(scope: ShareScope, below: readonly PageKind[]): bool
 export const shareScopeSchema = z.object({ scope: z.enum(SHARE_SCOPES) });
 export const memberAddSchema = z.object({ email: emailSchema, role: z.enum(MEMBER_ROLES) });
 export const memberRoleSchema = z.object({ role: z.enum(MEMBER_ROLES) });
-/** What every signed-in account that has the page's address may do; null closes that again. */
+/** What a signed-in account gets by opening the public link; null: nothing beyond reading it. */
 export const accountRoleSchema = z.object({ role: z.enum(MEMBER_ROLES).nullable() });
 /** 32 random bytes, base64url. */
 export const linkTokenSchema = z.string().regex(/^[A-Za-z0-9_-]{43}$/);
+/** A signed-in account opening a public link, optionally at one of the pages below the shared one. */
+export const openLinkSchema = z.object({ token: z.string().min(1).max(100), pageId: pageIdSchema.optional() });
+export interface OpenedLinkDto { pageId: string }
 
 export interface ShareMemberDto { userId: string; email: string; displayName: string; role: MemberRole }
 export interface ShareDto {
-  pageId: string; scope: ShareScope; link: { token: string; createdAt: number } | null; members: ShareMemberDto[];
-  /** The role of every signed-in account that has the page's address, when that is switched on. */
+  pageId: string; scope: ShareScope; members: ShareMemberDto[];
+  /** The share's one link, the public one: read-only without an account. */
+  link: { token: string; createdAt: number } | null;
+  /** The role a signed-in account gets by opening that link, when one is set. Only while the link is on. */
   accountRole: MemberRole | null;
-  /** Accounts that opened the page that way. */
+  /** Accounts that got in that way. */
   visitors: { userId: string; displayName: string }[];
 }
 /** A share on a page above this one that also reaches it. */
@@ -55,6 +60,8 @@ export const publicFileUrl = (token: string, rest: string): string => `/api/publ
 // ---- What a visitor of a public link receives ----
 export interface PublicNode { id: string; parentId: string | null; kind: PageKind; title: string; icon: string | null }
 export interface PublicShareDto { rootId: string; scope: ShareScope; tree: PublicNode[] }
+/** Instead of the above, for a signed-in account the link takes into the page itself: the app opens it there. */
+export interface AccountLinkDto { account: true }
 export interface PublicPageDto {
   page: { id: string; kind: PageKind; databaseId: string | null; title: string; icon: string | null; coverUrl: string | null; coverPosition: number; fullWidth: boolean; content: unknown[]; updatedAt: number };
   breadcrumbs: Breadcrumb[];

@@ -50,13 +50,14 @@ afterEach(() => { cleanup(); client.clear(); Reflect.deleteProperty(document, 'f
 
 describe('the share dialog', () => {
   const pageId = uuid(), memberId = uuid(), token = 'T'.repeat(43);
-  it('switches the public link, sets the scope and manages members', async () => {
-    const accountLink = () => screen.getAllByLabelText('知道連結的本站帳號').find(node => node.tagName === 'INPUT')!;
+  it('sets the scope, switches the public link with what it gives signed-in accounts, and manages members', async () => {
+    const accountLink = () => screen.queryAllByLabelText('知道連結的本站帳號').find(node => node.tagName === 'INPUT');
     let state: ShareStateDto = { share: null, inherited: [{ pageId: uuid(), title: '上層', scope: 'all', link: true, members: 2, accountRole: null }] };
     serve((method, path, body) => {
       const share: NonNullable<ShareStateDto['share']> = state.share ?? { pageId, scope: 'page', link: null, members: [], accountRole: null, visitors: [] };
       if (path === `/api/pages/${pageId}/share` && method === 'PUT') state = { ...state, share: { ...share, scope: (body as { scope: 'subpages' }).scope } };
-      else if (path === `/api/pages/${pageId}/share/link`) state = { ...state, share: { ...share, link: method === 'POST' ? { token, createdAt: 1 } : null } };
+      // Like the server: what the link gives accounts ends with the link.
+      else if (path === `/api/pages/${pageId}/share/link`) state = { ...state, share: method === 'POST' ? { ...share, link: { token, createdAt: 1 } } : { ...share, link: null, accountRole: null, visitors: [] } };
       else if (path === `/api/pages/${pageId}/share/account-link` && method === 'PUT') {
         const role = (body as { role: 'viewer' | 'editor' | null }).role;
         state = { ...state, share: { ...share, accountRole: role, visitors: role ? [{ userId: uuid(), displayName: '訪客帳號' }] : [] } };
@@ -75,18 +76,35 @@ describe('the share dialog', () => {
     expect(await screen.findByText(/上層.*分享範圍包含這個頁面（公開連結、2 位成員）/)).toBeTruthy();
     fireEvent.click(screen.getByLabelText('此頁面與子頁面'));
     await waitFor(() => expect(requests.some(request => request.method === 'PUT' && (request.body as { scope?: string }).scope === 'subpages')).toBe(true));
+    // What signed-in accounts may do is a setting of the public link: it is not offered until the link is on.
+    const address = `${window.location.origin}/s/${token}`;
+    expect(accountLink()).toBeUndefined();
     fireEvent.click(screen.getByRole('switch', { name: /公開連結/ }));
-    expect((await screen.findByLabelText('公開連結網址')).textContent).toBe(`${window.location.origin}/s/${token}`);
-    // Opening the page to every signed-in account that has its address: the address is shown, with who has opened it.
-    fireEvent.click(accountLink());
+    expect((await screen.findByLabelText('公開連結網址')).textContent).toBe(address);
+    await waitFor(() => expect((accountLink() as HTMLInputElement | undefined)?.value).toBe('與未登入相同（只能閱讀）'));
+    fireEvent.click(accountLink()!);
     fireEvent.click(await screen.findByRole('option', { name: '知道連結的人皆可編輯' }));
-    expect((await screen.findByLabelText('頁面網址')).textContent).toBe(`${window.location.origin}/p/${pageId}`);
-    expect(requests.at(-1)).toMatchObject({ method: 'PUT', path: `/api/pages/${pageId}/share/account-link`, body: { role: 'editor' } });
-    expect(screen.getByText(/目前有 1 個帳號開啟過：訪客帳號/)).toBeTruthy();
-    fireEvent.click(accountLink());
-    fireEvent.click(await screen.findByRole('option', { name: '不開放' }));
-    await waitFor(() => expect(screen.queryByLabelText('頁面網址')).toBeNull());
-    expect(requests.at(-1)).toMatchObject({ body: { role: null } });
+    await waitFor(() => expect(requests.at(-1)).toMatchObject({ method: 'PUT', path: `/api/pages/${pageId}/share/account-link`, body: { role: 'editor' } }));
+    expect(await screen.findByText(/目前有 1 個帳號開啟過：訪客帳號/)).toBeTruthy();
+    // Still the one link, and the page's own address is shown nowhere.
+    expect(screen.getAllByLabelText('公開連結網址').map(node => node.textContent)).toEqual([address]);
+    expect(document.body.textContent).not.toContain(`/p/${pageId}`);
+    fireEvent.click(accountLink()!);
+    fireEvent.click(await screen.findByRole('option', { name: '與未登入相同（只能閱讀）' }));
+    await waitFor(() => expect(requests.at(-1)).toMatchObject({ body: { role: null } }));
+    await waitFor(() => expect(screen.queryByText(/目前有 1 個帳號開啟過/)).toBeNull());
+    expect(screen.getByLabelText('公開連結網址').textContent).toBe(address);
+    // The link off: the setting goes with it. Back on, it starts from nothing.
+    fireEvent.click(accountLink()!);
+    fireEvent.click(await screen.findByRole('option', { name: '知道連結的人皆可唯讀' }));
+    await waitFor(() => expect(requests.at(-1)).toMatchObject({ body: { role: 'viewer' } }));
+    fireEvent.click(screen.getByRole('switch', { name: /公開連結/ }));
+    await waitFor(() => expect(screen.queryByLabelText('公開連結網址')).toBeNull());
+    expect(requests.at(-1)).toMatchObject({ method: 'DELETE', path: `/api/pages/${pageId}/share/link` });
+    expect(accountLink()).toBeUndefined();
+    fireEvent.click(screen.getByRole('switch', { name: /公開連結/ }));
+    expect((await screen.findByLabelText('公開連結網址')).textContent).toBe(address);
+    expect((accountLink() as HTMLInputElement).value).toBe('與未登入相同（只能閱讀）');
     // An unknown address is reported and nothing is added.
     fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'nobody@example.test' } });
     fireEvent.click(screen.getByRole('button', { name: '加入' }));
@@ -109,7 +127,8 @@ describe('the share dialog', () => {
 });
 
 describe('a public link in the browser', () => {
-  const token = 'P'.repeat(43), rootId = uuid(), childId = uuid(), databaseId = uuid(), rowId = uuid(), propertyId = uuid();
+  const token = 'P'.repeat(43), accountToken = 'A'.repeat(43), rootId = uuid(), childId = uuid(), databaseId = uuid(), rowId = uuid(), propertyId = uuid();
+  const me: UserDto = { id: uuid(), email: 'visitor@example.test', displayName: '訪客帳號', role: 'user' } as UserDto;
   const share: PublicShareDto = { rootId, scope: 'all', tree: [
     { id: rootId, parentId: null, kind: 'page', title: '公開筆記', icon: '📘' }, { id: childId, parentId: rootId, kind: 'page', title: '子頁', icon: null }, { id: databaseId, parentId: rootId, kind: 'database', title: '清單', icon: null }] };
   const root: PublicPageDto = { breadcrumbs: [{ id: rootId, title: '公開筆記', icon: '📘', kind: 'page' }], page: { id: rootId, kind: 'page', databaseId: null, title: '公開筆記', icon: '📘', coverUrl: null, coverPosition: 50, fullWidth: false, updatedAt: 1, content: [
@@ -120,9 +139,11 @@ describe('a public link in the browser', () => {
   const database: PublicPageDto = { breadcrumbs: [...root.breadcrumbs, { id: databaseId, title: '清單', icon: null, kind: 'database' }],
     page: { ...root.page, id: databaseId, kind: 'database', title: '清單', icon: null, content: [] }, database: { meta: { id: databaseId, version: 1, properties, views: [{ id: uuid(), name: '清單', type: 'list', config: { sorts: [], filters: [] } }] }, rows } };
   const open = (path: string) => {
-    serve((method, url) => method !== 'GET' ? undefined : url === `/api/public/${token}` ? reply(200, share) : url === `/api/public/${token}/pages/${rootId}` ? reply(200, root)
+    serve((method, url, body) => url === '/api/shares/open' && method === 'POST' ? ((body as { token: string }).token === accountToken ? reply(200, { pageId: (body as { pageId?: string }).pageId ?? rootId }) : reply(404, { error: { code: 'not_found', message: '找不到頁面。' } }))
+      : method !== 'GET' ? undefined : url === '/api/auth/me' ? reply(200, { user: me, csrfToken: 'synthetic-csrf' }) : url === '/api/shares' ? reply(200, { outgoing: [], incoming: [] })
+      : url === `/api/public/${accountToken}` ? reply(200, { account: true }) : url === `/api/public/${token}` ? reply(200, share) : url === `/api/public/${token}/pages/${rootId}` ? reply(200, root)
       : url === `/api/public/${token}/pages/${databaseId}` ? reply(200, database) : url.startsWith('/api/public/') ? reply(404, { error: { code: 'not_found', message: '找不到頁面。' } }) : undefined);
-    const router = createMemoryRouter([{ path: '/s/:token', element: <PublicView /> }, { path: '/s/:token/:pageId', element: <PublicView /> }], { initialEntries: [path] });
+    const router = createMemoryRouter([{ path: '/s/:token', element: <PublicView /> }, { path: '/s/:token/:pageId', element: <PublicView /> }, { path: '/p/:pageId', element: <p>應用程式內的頁面</p> }, { path: '/login', element: <p>登入頁</p> }], { initialEntries: [path] });
     render(wrap(<UiStateProvider><RouterProvider router={router} /></UiStateProvider>));
     return router;
   };
@@ -159,6 +180,17 @@ describe('a public link in the browser', () => {
     open(`/s/${'x'.repeat(43)}`);
     expect(await screen.findByText('這個連結無法開啟')).toBeTruthy();
     expect(requests.map(request => request.path)).toEqual([`/api/public/${'x'.repeat(43)}`]);
+  });
+
+  it('takes a signed-in account that the link is meant for into the page itself', async () => {
+    const router = open(`/s/${accountToken}/${childId}`);
+    expect(await screen.findByText('應用程式內的頁面')).toBeTruthy();
+    expect(router.state.location.pathname).toBe(`/p/${childId}`);
+    // Only after the server said so is the account asked for, and the link is opened with a write that carries the session's token.
+    expect(requests.slice(0, 3)).toEqual([{ method: 'GET', path: `/api/public/${accountToken}`, body: undefined }, { method: 'GET', path: '/api/auth/me', body: undefined },
+      { method: 'POST', path: '/api/shares/open', body: { token: accountToken, pageId: childId } }]);
+    expect(requests.some(request => request.path.includes('/pages/'))).toBe(false);
+    await forgetOfflineData();
   });
 });
 

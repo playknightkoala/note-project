@@ -41,7 +41,6 @@ export function ShareDialog({ page, onClose }: { page: ShareTarget; onClose: () 
   const scope = chosen.scope ?? share?.scope ?? 'page';
   const linkOn = chosen.link ?? !!share?.link;
   const accountLink = chosen.account ?? share?.accountRole ?? 'off';
-  const pageLink = `${window.location.origin}/p/${page.id}`;
   const add = () => {
     if (!email.trim() || busy) return;
     change.mutate({ type: 'member', email: email.trim(), role }, { onSuccess: () => setEmail('') });
@@ -66,23 +65,16 @@ export function ShareDialog({ page, onClose }: { page: ShareTarget; onClose: () 
             <Code style={{ flex: 1, overflowWrap: 'anywhere' }} aria-label="公開連結網址">{link}</Code>
             <CopyButton value={link}>{({ copied, copy }) => <Tooltip label={copied ? '已複製' : '複製連結'}><ActionIcon variant="subtle" onClick={copy} aria-label="複製公開連結">{copied ? <Check size={16} /> : <Copy size={16} />}</ActionIcon></Tooltip>}</CopyButton>
           </Group>
-          <Text size="xs" c="dimmed">關閉後這個網址永久失效；再次開啟會產生新的網址。把頁面移至垃圾桶也會關閉公開連結。</Text>
+          <Select label="知道連結的本站帳號" description="登入本站的帳號開啟這個連結時可以做什麼。沒有登入的人不受這個設定影響，一律只能閱讀。" data={accountLinks} value={accountLink} disabled={busy} allowDeselect={false} comboboxProps={{ withinPortal: false }}
+            onChange={value => { const next = (value ?? 'off') as MemberRole | 'off'; if (next === accountLink) return; setChosen({ account: next }); change.mutate({ type: 'account', role: next === 'off' ? null : next }, settled); }} />
+          {share.accountRole && <Text size="xs" c="dimmed">登入後開啟連結的帳號會直接進入這個頁面，可以留言與加表情{share.accountRole === 'editor' ? '、修改內容' : ''}，並在側欄「與我共用」看到它{share.visitors.length > 0 ? `；目前有 ${share.visitors.length} 個帳號開啟過：${share.visitors.map(visitor => visitor.displayName).join('、')}` : ''}。改回「{accountLinkLabels.off}」後，這些帳號立即失去這些權限。</Text>}
+          <Text size="xs" c="dimmed">關閉後這個網址永久失效，透過連結進來的帳號也立即無法再開啟；再次開啟會產生新的網址。把頁面移至垃圾桶也會關閉公開連結。</Text>
         </>}
       </Stack>
       <Divider />
       <Stack gap="xs">
         <Text fw={500} size="sm">與本站帳號共用</Text>
-        <Text size="xs" c="dimmed">唯讀與可編輯的帳號都能留言與加表情；可編輯的帳號還能修改內文、標題與資料列。</Text>
-        <Select label="知道連結的本站帳號" description="不必逐一加入：任何登入本站的帳號，只要有這個頁面的網址就能依此權限開啟。" data={accountLinks} value={accountLink} disabled={busy} allowDeselect={false} comboboxProps={{ withinPortal: false }}
-          onChange={value => { const next = (value ?? 'off') as MemberRole | 'off'; if (next === accountLink) return; setChosen({ account: next }); change.mutate({ type: 'account', role: next === 'off' ? null : next }, settled); }} />
-        {share?.accountRole && <>
-          <Group gap="xs" wrap="nowrap">
-            <Code style={{ flex: 1, overflowWrap: 'anywhere' }} aria-label="頁面網址">{pageLink}</Code>
-            <CopyButton value={pageLink}>{({ copied, copy }) => <Tooltip label={copied ? '已複製' : '複製連結'}><ActionIcon variant="subtle" onClick={copy} aria-label="複製頁面網址">{copied ? <Check size={16} /> : <Copy size={16} />}</ActionIcon></Tooltip>}</CopyButton>
-          </Group>
-          <Text size="xs" c="dimmed">對方需要登入本站。開啟過的帳號會在側欄「與我共用」看到這個頁面{share.visitors.length > 0 ? `；目前有 ${share.visitors.length} 個帳號開啟過：${share.visitors.map(visitor => visitor.displayName).join('、')}` : ''}。改為「不開放」後，這些帳號立即無法再開啟。</Text>
-        </>}
-        <Text size="xs" c="dimmed" mt={4}>或輸入對方註冊時使用的 email，個別指定權限（與上面的設定同時存在時，取權限較高者）。</Text>
+        <Text size="xs" c="dimmed">輸入對方註冊時使用的 email，個別指定權限；對方不需要連結，登入後就在「與我共用」看到。唯讀與可編輯的帳號都能留言與加表情；可編輯的帳號還能修改內文、標題與資料列。同一個帳號也透過公開連結進來時，取權限較高者。</Text>
         <Group gap="xs" align="flex-end" wrap="nowrap">
           <TextInput label="Email" type="email" placeholder="name@example.com" value={email} onChange={event => setEmail(event.currentTarget.value)} style={{ flex: 1 }}
             onKeyDown={event => { if (event.key === 'Enter' && !event.nativeEvent.isComposing) { event.preventDefault(); add(); } }} />
@@ -99,8 +91,8 @@ export function ShareDialog({ page, onClose }: { page: ShareTarget; onClose: () 
       </Stack>
       {(change.error || stop.error) && <Alert color="red" role="alert">{errorText(change.error ?? stop.error)}</Alert>}
       <Group justify="space-between">
-        {share && (share.link || share.members.length > 0 || share.accountRole)
-          ? <Button variant="subtle" color="red" disabled={busy} onClick={() => { if (window.confirm('停止分享這個頁面？公開連結會失效，所有成員與透過連結開啟的帳號都無法再存取。')) stop.mutate(page.id); }}>停止分享</Button> : <span />}
+        {share && (share.link || share.members.length > 0)
+          ? <Button variant="subtle" color="red" disabled={busy} onClick={() => { if (window.confirm('停止分享這個頁面？公開連結會失效，所有成員與透過連結進來的帳號都無法再存取。')) stop.mutate(page.id); }}>停止分享</Button> : <span />}
         <Button variant="default" onClick={onClose}>完成</Button>
       </Group>
     </Stack>}

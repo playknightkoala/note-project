@@ -1,16 +1,19 @@
 import { useEffect, useMemo, useState } from 'react';
+import type { ReactNode } from 'react';
 import type { PartialBlock } from '@blocknote/core';
 import { BlockNoteView } from '@blocknote/mantine';
 import { useCreateBlockNote } from '@blocknote/react';
 import { Anchor, Breadcrumbs, Button, Center, Group, Loader, Stack, Text, useComputedColorScheme } from '@mantine/core';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Database, FileText, Kanban, List, Table2 } from 'lucide-react';
-import { Link, useParams } from 'react-router';
+import { Link, Navigate, useParams } from 'react-router';
 import { evaluateRows } from '@shared/database';
 import type { ViewConfig } from '@shared/database';
 import { publicLinkPath } from '@shared/shares';
-import type { PublicNode, PublicPageDto, PublicShareDto } from '@shared/shares';
+import type { AccountLinkDto, PublicNode, PublicPageDto, PublicShareDto } from '@shared/shares';
 import { api, errorText, isApiError } from '../../api/client.ts';
+import { openShareLink, shareKeys } from '../../api/shares.ts';
+import { RequireAuth } from '../auth/RequireAuth.tsx';
 import { dictionary } from '../editor/dictionary.ts';
 import { schema } from '../editor/schema.ts';
 import { PageLinkContext } from '../editor/pageLink/PageLinkContext.ts';
@@ -29,25 +32,50 @@ const nothing = () => {};
 const resolved = () => Promise.resolve();
 
 /**
- * What the holder of a public link sees: the shared page, read-only, and the pages its scope reaches. It talks to
- * `/api/public/…` only. Nothing here asks who the visitor is: a request that needs an account would sign a
- * remembered account out of this device's offline data.
+ * Where a public link leads: the shared page, read-only, and the pages its scope reaches. It talks to
+ * `/api/public/…` only and never asks who the visitor is: a request that needs an account would sign a remembered
+ * account out of this device's offline data. Only when the server says that the visitor is signed in and the link
+ * takes their account into the page itself does it hand over to `AccountLink`.
  */
 export function PublicView() {
   const { token = '', pageId } = useParams();
-  const share = useQuery({ queryKey: ['public', token], queryFn: () => api<PublicShareDto>('GET', `/api/public/${token}`), retry: false, staleTime: 60_000 });
-  const id = pageId ?? share.data?.rootId;
-  const page = useQuery({ queryKey: ['public', token, id], queryFn: () => api<PublicPageDto>('GET', `/api/public/${token}/pages/${id}`), enabled: !!id, retry: false });
+  const share = useQuery({ queryKey: ['public', token], queryFn: () => api<PublicShareDto | AccountLinkDto>('GET', `/api/public/${token}`), retry: false, staleTime: 60_000 });
+  if (share.data && 'account' in share.data) return <RequireAuth><AccountLink token={token} pageId={pageId} /></RequireAuth>;
+  return <PublicPages token={token} pageId={pageId} share={share.data} error={share.error} />;
+}
+
+const LinkProblem = ({ title, children }: { title: string; children: ReactNode }) => <Center h="70vh" p="md"><Stack align="center" gap="xs">
+  <Text fw={600}>{title}</Text>
+  <Text c="dimmed" size="sm" ta="center">{children}</Text>
+</Stack></Center>;
+
+/** A signed-in account opens the link: the server remembers it where the link gives accounts a role, and the page opens in the app. */
+function AccountLink({ token, pageId }: { token: string; pageId: string | undefined }) {
+  const client = useQueryClient();
+  const opened = useQuery({ queryKey: ['share-open', token, pageId ?? null], queryFn: () => openShareLink(token, pageId), retry: false, staleTime: Infinity, gcTime: 0 });
+  const target = opened.data?.pageId;
+  // The page now belongs to what is shared with this account.
+  useEffect(() => { if (target) void client.invalidateQueries({ queryKey: shareKeys.all }); }, [target, client]);
+  if (target) return <Navigate to={`/p/${target}`} replace />;
+  if (opened.error) return <LinkProblem title={isApiError(opened.error, 404) ? '這個連結無法開啟' : '無法開啟連結'}>
+    {isApiError(opened.error, 404) ? '分享可能已經停止，或這個頁面已不存在。請向分享的人確認。' : errorText(opened.error)}
+  </LinkProblem>;
+  return <Center h="70vh"><Loader size="sm" /></Center>;
+}
+
+function PublicPages({ token, pageId, share, error: shareError }: { token: string; pageId: string | undefined; share: PublicShareDto | undefined; error: unknown }) {
+  // The page is asked for once the link has answered: an account the link takes into the app needs no public copy.
+  const id = pageId ?? share?.rootId;
+  const page = useQuery({ queryKey: ['public', token, id], queryFn: () => api<PublicPageDto>('GET', `/api/public/${token}/pages/${id}`), enabled: !!id && !!share, retry: false });
   const title = page.data?.page.title;
   useEffect(() => { if (title !== undefined) document.title = title || '無標題'; }, [title]);
-  const links = useMemo<PageLinks>(() => ({ pages: share.data?.tree ?? [], href: target => publicLinkPath(token, target) }), [share.data, token]);
+  const links = useMemo<PageLinks>(() => ({ pages: share?.tree ?? [], href: target => publicLinkPath(token, target) }), [share, token]);
   const databaseAccess = useMemo<DatabaseAccess>(() => ({ canEditRows: false, canManage: false, rowHref: target => publicLinkPath(token, target) }), [token]);
-  const error = share.error ?? page.error;
-  if (error) return <Center h="70vh" p="md"><Stack align="center" gap="xs">
-    <Text fw={600}>{isApiError(error, 404) ? '這個連結無法開啟' : '無法載入頁面'}</Text>
-    <Text c="dimmed" size="sm" ta="center">{isApiError(error, 404) ? '分享可能已經停止，或這個頁面已不存在。請向分享的人確認。' : errorText(error)}</Text>
-  </Stack></Center>;
-  if (!share.data || !page.data) return <Center h="70vh"><Loader size="sm" /></Center>;
+  const error = shareError ?? page.error;
+  if (error) return <LinkProblem title={isApiError(error, 404) ? '這個連結無法開啟' : '無法載入頁面'}>
+    {isApiError(error, 404) ? '分享可能已經停止，或這個頁面已不存在。請向分享的人確認。' : errorText(error)}
+  </LinkProblem>;
+  if (!share || !page.data) return <Center h="70vh"><Loader size="sm" /></Center>;
   const { page: shown, breadcrumbs } = page.data;
   return <div className="page public-page">
     <header className="topbar public-bar">
@@ -58,7 +86,7 @@ export function PublicView() {
       <Text size="xs" c="dimmed">唯讀分享</Text>
     </header>
     <div className="public-layout">
-      {share.data.tree.length > 1 && <PublicNav tree={share.data.tree} token={token} currentId={shown.id} />}
+      {share.tree.length > 1 && <PublicNav tree={share.tree} token={token} currentId={shown.id} />}
       <main className={`page-body${shown.kind === 'database' ? ' page-body--database' : ''}${shown.fullWidth ? ' page-body--full' : ''}`}>
         <PageHeader title={shown.title} icon={shown.icon} coverUrl={shown.coverUrl} coverPosition={shown.coverPosition} editable="none"
           onTitle={nothing} onIcon={nothing} onCover={nothing} onCoverPosition={nothing} onEnter={nothing} />

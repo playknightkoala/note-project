@@ -3,11 +3,12 @@ import type { Context } from 'hono';
 import type { AppEnv } from '../app.ts';
 import { AppError } from '../../shared/errors.ts';
 import { pageIdSchema } from '../../shared/api.ts';
-import { accountRoleSchema, memberAddSchema, memberRoleSchema, shareScopeSchema } from '../../shared/shares.ts';
-import type { SharesDto, ShareStateDto } from '../../shared/shares.ts';
+import { accountRoleSchema, memberAddSchema, memberRoleSchema, openLinkSchema, shareScopeSchema } from '../../shared/shares.ts';
+import type { OpenedLinkDto, SharesDto, ShareStateDto } from '../../shared/shares.ts';
 import { requireAuth, requireCsrf } from '../auth/middleware.ts';
 import { parseBody } from './validate.ts';
 import * as shares from '../services/shares.ts';
+import { openLink } from '../services/access.ts';
 
 const context = (c: Context<AppEnv>) => ({ db: c.get('deps').db, userId: c.get('auth')!.user.id, now: c.get('deps').now() });
 const uuid = (value: string | undefined): string => { if (!value || !pageIdSchema.safeParse(value).success) throw new AppError('not_found'); return value; };
@@ -57,6 +58,15 @@ export function shareRoutes(): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
   app.use('*', requireAuth, requireCsrf);
   app.get('/', c => { const { db, userId } = context(c); return c.json<SharesDto>({ outgoing: shares.outgoingShares(db, userId), incoming: shares.incomingShares(db, userId) }); });
+  // A signed-in account opens a public link: where the link gives accounts a role, this is what grants it.
+  app.post('/open', async c => {
+    const { db, userId, now } = context(c);
+    const deps = c.get('deps');
+    const limited = deps.rateLimiter.hit(`share-open:${userId}`, 120, 60_000, now);
+    if (!limited.allowed) throw new AppError('rate_limited', undefined, { retryAfterSeconds: limited.retryAfterSeconds });
+    const input = await parseBody(c, openLinkSchema);
+    return c.json<OpenedLinkDto>({ pageId: db.transaction(() => openLink(db, userId, input.token, input.pageId, now)) });
+  });
   app.delete('/incoming/:pageId', c => { const { db, userId } = context(c); shares.leaveShare(db, userId, uuid(c.req.param('pageId'))); return c.body(null, 204); });
   return app;
 }

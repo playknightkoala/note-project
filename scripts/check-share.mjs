@@ -1,7 +1,8 @@
 // 僅對全新、可拋棄的測試實例執行；會建立隨機合成帳號、筆記與資料庫。
 //   node scripts/check-share.mjs http://127.0.0.1:18090
-// 驗收 M10：擁有者設定分享；可編輯與唯讀成員依角色使用（含留言、資料庫與離線）；公開連結唯讀且可停用；
-// 「知道連結的本站帳號」可依設定唯讀或編輯，關閉後立即失效。
+// 驗收分享：擁有者設定分享；可編輯與唯讀成員依角色使用（含留言、資料庫與離線）；公開連結唯讀且可停用；
+// 開啟公開連結後可設定「知道連結的本站帳號」唯讀或編輯：登入的帳號開啟同一個連結即進入頁面
+// （頁面網址本身不給任何權限），改回或關閉公開連結後立即失效。
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 const { chromium } = await import(process.env.NOTES_PLAYWRIGHT_MODULE ?? 'playwright');
@@ -48,6 +49,7 @@ try {
   const editor = await account('編輯者', await invite());
   const viewer = await account('唯讀者', await invite());
   const passerby = await account('路人帳號', await invite());
+  const latecomer = await account('另一個帳號', await invite());
 
   // ---- 擁有者的內容：筆記（含圖片、範圍內外的頁面連結）、子頁、資料庫與不分享的頁面 ----
   const note = (await owner.post('/api/pages', { title: '分享的筆記' })).page;
@@ -217,14 +219,25 @@ try {
   assert.equal((await anonymous.request.get(`${origin}/api/public${firstLink.pathname.slice(2)}`)).status(), 404, '舊網址永久失效');
   console.log('PASS 停用公開連結後舊網址失效；重新開啟產生新網址');
 
-  // ---- 知道連結的本站帳號：不必加入名單，登入後有網址即可依設定存取 ----
+  // ---- 公開連結給登入的本站帳號：不必加入名單，登入後開啟同一個連結即可依設定存取 ----
+  const accountChoice = () => dialog.getByLabel('知道連結的本站帳號').first();
   assert.equal(await passerby.status(`/api/pages/${note.id}`), 404, '開放前，名單以外的帳號看不到');
+  // 還沒設定帳號權限時，登入的路人帳號開啟公開連結看到的是唯讀的公開版本。
+  await passerby.page.goto(secondLink.href);
+  await passerby.page.getByText('唯讀分享').waitFor();
+  assert.equal(new URL(passerby.page.url()).pathname, secondLink.pathname);
   await owner.page.getByRole('button', { name: '已分享' }).click();
-  await dialog.getByLabel('知道連結的本站帳號').first().click();
+  await accountChoice().click();
   await dialog.getByRole('option', { name: '知道連結的人皆可編輯' }).click();
-  assert.equal((await dialog.getByLabel('頁面網址', { exact: true }).innerText()).trim(), `${origin}/p/${note.id}`);
+  await dialog.getByText(/登入後開啟連結的帳號會直接進入這個頁面/).waitFor();
+  assert.equal(await dialog.getByLabel('公開連結網址').count(), 1, '只有一個連結');
+  assert.equal((await linkOf()).href, secondLink.href, '帳號與未登入的人共用同一個公開連結');
+  assert.doesNotMatch(await dialog.innerText(), new RegExp(`/p/${note.id}`), '分享視窗不再顯示頁面網址');
   await dialog.getByRole('button', { name: '完成' }).click();
-  await passerby.page.goto(`${origin}/p/${note.id}`);
+  // 頁面網址本身不給任何權限；開啟公開連結才會進入頁面。
+  assert.equal(await passerby.status(`/api/pages/${note.id}`), 404, '只知道頁面網址沒有用');
+  await passerby.page.goto(secondLink.href);
+  await passerby.page.waitForURL(`${origin}/p/${note.id}`);
   await passerby.page.getByText(/擁有者 與你共用這個頁面 · 可編輯/).waitFor();
   await passerby.page.getByText(/可以留言的文字/).click();
   await passerby.page.keyboard.press(process.platform === 'darwin' ? 'Meta+ArrowRight' : 'End');
@@ -234,16 +247,48 @@ try {
   await passerby.page.reload();
   await passerby.page.getByRole('treeitem', { name: /分享的筆記/ }).waitFor();
   assert.equal(await passerby.page.getByRole('button', { name: '分享', exact: true }).count(), 0);
+  // 連結裡的子頁網址同樣帶到應用程式內的那一頁。
+  await latecomer.page.goto(`${secondLink.href}/${child.id}`);
+  await latecomer.page.waitForURL(`${origin}/p/${child.id}`);
+  await latecomer.page.getByRole('textbox', { name: '頁面標題' }).waitFor();
+  // 沒有登入的人維持原本的方式：同一個連結，只能閱讀。
+  await visitor.goto(secondLink.href);
+  await visitor.getByRole('heading', { level: 1, name: '分享的筆記' }).waitFor();
+  assert.equal(new URL(visitor.url()).pathname, secondLink.pathname);
+  assert.equal(await visitor.locator('[contenteditable="true"]').count(), 0);
   assert.equal(await anonymous.request.get(`${origin}/api/pages/${note.id}`).then(response => response.status()), 401, '沒有登入仍然不行');
+  // 擁有者看得到誰透過連結進來；改回「與未登入相同」後這些帳號立即失效，公開連結不變。
   await owner.page.getByRole('button', { name: '已分享' }).click();
-  await dialog.getByText(/目前有 1 個帳號開啟過：路人帳號/).waitFor();
-  await dialog.getByLabel('知道連結的本站帳號').first().click();
-  await dialog.getByRole('option', { name: '不開放' }).click();
-  await dialog.getByLabel('頁面網址', { exact: true }).waitFor({ state: 'detached' });
-  await dialog.getByRole('button', { name: '完成' }).click();
-  assert.equal(await passerby.status(`/api/pages/${note.id}`), 404, '改為不開放後立即失效');
+  await dialog.getByText(/目前有 2 個帳號開啟過/).waitFor();
+  await accountChoice().click();
+  await dialog.getByRole('option', { name: '與未登入相同（只能閱讀）' }).click();
+  await dialog.getByText(/登入後開啟連結的帳號會直接進入這個頁面/).waitFor({ state: 'detached' });
+  assert.equal((await linkOf()).href, secondLink.href);
+  for (const who of [passerby, latecomer]) assert.equal(await who.status(`/api/pages/${note.id}`), 404, '改回後立即失效');
   assert.equal((await passerby.get('/api/shares')).incoming.length, 0);
-  console.log('PASS 知道連結的本站帳號：開放為可編輯後，名單以外的帳號登入即可開啟並修改，列入「與我共用」；擁有者看得到誰開啟過；改為不開放後立即失效');
+  await passerby.page.goto(secondLink.href);
+  await passerby.page.getByText('唯讀分享').waitFor();
+  // 關閉公開連結時，帳號的設定與存取一併結束；關閉後選項不再出現，重新開啟要重新設定。
+  await accountChoice().click();
+  await dialog.getByRole('option', { name: '知道連結的人皆可唯讀' }).click();
+  await dialog.getByText(/登入後開啟連結的帳號會直接進入這個頁面/).waitFor();
+  await passerby.page.goto(secondLink.href);
+  await passerby.page.waitForURL(`${origin}/p/${note.id}`);
+  await passerby.page.getByText(/擁有者 與你共用這個頁面 · 唯讀/).waitFor();
+  await dialog.getByRole('switch', { name: /公開連結/ }).uncheck();
+  await dialog.getByLabel('公開連結網址').waitFor({ state: 'detached' });
+  assert.equal(await dialog.getByLabel('知道連結的本站帳號').count(), 0, '公開連結關閉時沒有帳號選項');
+  assert.equal(await passerby.status(`/api/pages/${note.id}`), 404, '關閉公開連結後立即失效');
+  await visitor.goto(secondLink.href);
+  await visitor.getByText('這個連結無法開啟').waitFor();
+  await dialog.getByRole('switch', { name: /公開連結/ }).check();
+  const thirdLink = await linkOf();
+  assert.notEqual(thirdLink.pathname, secondLink.pathname);
+  assert.equal(await accountChoice().inputValue(), '與未登入相同（只能閱讀）');
+  await dialog.getByRole('button', { name: '完成' }).click();
+  assert.equal((await owner.get(`/api/pages/${note.id}/share`)).share.accountRole, null);
+  assert.equal((await editor.status(`/api/pages/${note.id}`)), 200, '個別指定的成員不受影響');
+  console.log('PASS 公開連結與本站帳號共用一個連結：開啟公開連結後才能設定帳號權限；登入的帳號開啟連結即可依設定使用並列入「與我共用」，只知道頁面網址沒有用；未登入者仍只能閱讀；改回或關閉公開連結後立即失效');
 
   // ---- 可編輯成員離線編輯共用筆記，連線後同步 ----
   await editor.page.goto(origin + `/p/${child.id}`);

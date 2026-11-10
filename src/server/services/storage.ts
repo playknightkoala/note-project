@@ -65,8 +65,8 @@ const missing = () => new AppError('not_found', '找不到檔案。');
 
 /**
  * A file as somebody may read it: their own, one they added to another person's page, or one that a page shared
- * with them shows (as its cover or in its content). "Shared with them" means a share that lists them, or one open to
- * every signed-in account whose link they have opened. Anything else is "not found".
+ * with them shows (as its cover or in its content). "Shared with them" means a share that lists them, or one whose
+ * link gives accounts a role and which they have opened. Anything else is "not found".
  */
 export function loadFileFor(db: Db, viewerId: string, id: string): FileRow {
   const row = db.get<FileRow>('SELECT * FROM files WHERE id = ?', id);
