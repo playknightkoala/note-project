@@ -51,11 +51,16 @@ afterEach(() => { cleanup(); client.clear(); Reflect.deleteProperty(document, 'f
 describe('the share dialog', () => {
   const pageId = uuid(), memberId = uuid(), token = 'T'.repeat(43);
   it('switches the public link, sets the scope and manages members', async () => {
-    let state: ShareStateDto = { share: null, inherited: [{ pageId: uuid(), title: '上層', scope: 'all', link: true, members: 2 }] };
+    const accountLink = () => screen.getAllByLabelText('知道連結的本站帳號').find(node => node.tagName === 'INPUT')!;
+    let state: ShareStateDto = { share: null, inherited: [{ pageId: uuid(), title: '上層', scope: 'all', link: true, members: 2, accountRole: null }] };
     serve((method, path, body) => {
-      const share = state.share ?? { pageId, scope: 'page' as const, link: null, members: [] };
+      const share: NonNullable<ShareStateDto['share']> = state.share ?? { pageId, scope: 'page', link: null, members: [], accountRole: null, visitors: [] };
       if (path === `/api/pages/${pageId}/share` && method === 'PUT') state = { ...state, share: { ...share, scope: (body as { scope: 'subpages' }).scope } };
       else if (path === `/api/pages/${pageId}/share/link`) state = { ...state, share: { ...share, link: method === 'POST' ? { token, createdAt: 1 } : null } };
+      else if (path === `/api/pages/${pageId}/share/account-link` && method === 'PUT') {
+        const role = (body as { role: 'viewer' | 'editor' | null }).role;
+        state = { ...state, share: { ...share, accountRole: role, visitors: role ? [{ userId: uuid(), displayName: '訪客帳號' }] : [] } };
+      }
       else if (path === `/api/pages/${pageId}/share/members` && method === 'PUT') {
         const input = body as { email: string; role: 'viewer' | 'editor' };
         if (input.email !== 'member@example.test') return reply(404, { error: { code: 'not_found', message: '找不到這個帳號，請確認對方註冊時使用的 email。' } });
@@ -72,6 +77,16 @@ describe('the share dialog', () => {
     await waitFor(() => expect(requests.some(request => request.method === 'PUT' && (request.body as { scope?: string }).scope === 'subpages')).toBe(true));
     fireEvent.click(screen.getByRole('switch', { name: /公開連結/ }));
     expect((await screen.findByLabelText('公開連結網址')).textContent).toBe(`${window.location.origin}/s/${token}`);
+    // Opening the page to every signed-in account that has its address: the address is shown, with who has opened it.
+    fireEvent.click(accountLink());
+    fireEvent.click(await screen.findByRole('option', { name: '知道連結的人皆可編輯' }));
+    expect((await screen.findByLabelText('頁面網址')).textContent).toBe(`${window.location.origin}/p/${pageId}`);
+    expect(requests.at(-1)).toMatchObject({ method: 'PUT', path: `/api/pages/${pageId}/share/account-link`, body: { role: 'editor' } });
+    expect(screen.getByText(/目前有 1 個帳號開啟過：訪客帳號/)).toBeTruthy();
+    fireEvent.click(accountLink());
+    fireEvent.click(await screen.findByRole('option', { name: '不開放' }));
+    await waitFor(() => expect(screen.queryByLabelText('頁面網址')).toBeNull());
+    expect(requests.at(-1)).toMatchObject({ body: { role: null } });
     // An unknown address is reported and nothing is added.
     fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'nobody@example.test' } });
     fireEvent.click(screen.getByRole('button', { name: '加入' }));

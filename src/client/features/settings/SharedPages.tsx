@@ -1,7 +1,7 @@
 import { ActionIcon, Alert, Anchor, Badge, Group, Loader, Table, Text, Tooltip } from '@mantine/core';
 import { Settings2, X } from 'lucide-react';
 import { Link } from 'react-router';
-import { databaseScopeLabels, scopeLabels } from '@shared/shares';
+import { accountLinkLabels, databaseScopeLabels, scopeLabels } from '@shared/shares';
 import { errorText } from '../../api/client.ts';
 import { useShares, useStopSharing } from '../../api/shares.ts';
 import { useShareDialog } from '../share/ShareDialog.tsx';
@@ -17,7 +17,7 @@ export function SharedPages() {
   if (shares.error) return <Alert color="red">{errorText(shares.error)}</Alert>;
   const outgoing = shares.data.outgoing;
   return <>
-    <Text size="sm" c="dimmed" mb="sm">這裡列出你開放給其他人的頁面。公開連結任何知道網址的人都能閱讀；成員是本站的其他帳號。</Text>
+    <Text size="sm" c="dimmed" mb="sm">這裡列出你開放給其他人的頁面。公開連結任何知道網址的人都能閱讀；「知道連結的人」是任何登入本站且有頁面網址的帳號；成員是個別指定的本站帳號。</Text>
     {stop.error && <Alert color="red" mb="sm">{errorText(stop.error)}</Alert>}
     <Table striped highlightOnHover withTableBorder>
       <Table.Thead><Table.Tr><Table.Th>頁面</Table.Th><Table.Th>範圍</Table.Th><Table.Th>開放方式</Table.Th><Table.Th>更新</Table.Th><Table.Th></Table.Th></Table.Tr></Table.Thead>
@@ -25,7 +25,7 @@ export function SharedPages() {
         {outgoing.map(share => <Table.Tr key={share.pageId}>
           <Table.Td><Anchor component={Link} to={`/p/${share.pageId}`} size="sm">{share.icon ? `${share.icon} ` : ''}{share.title || '無標題'}</Anchor></Table.Td>
           <Table.Td>{(share.kind === 'database' ? databaseScopeLabels : scopeLabels)[share.scope]}</Table.Td>
-          <Table.Td><Group gap={4}>{share.link && <Badge color="orange" variant="light">公開連結</Badge>}{share.members > 0 && <Badge color="blue" variant="light">{share.members} 位成員</Badge>}</Group></Table.Td>
+          <Table.Td><Group gap={4}>{share.link && <Badge color="orange" variant="light">公開連結</Badge>}{share.accountRole && <Badge color="grape" variant="light">{accountLinkLabels[share.accountRole]}</Badge>}{share.members > 0 && <Badge color="blue" variant="light">{share.members} 位成員</Badge>}</Group></Table.Td>
           <Table.Td>{formatTime(share.updatedAt)}</Table.Td>
           <Table.Td><Group gap={2} wrap="nowrap" justify="flex-end">
             <Tooltip label="管理分享"><ActionIcon variant="subtle" color="gray" aria-label={`管理分享：${share.title || '無標題'}`} onClick={() => openShare({ id: share.pageId, kind: share.kind, title: share.title })}><Settings2 size={16} /></ActionIcon></Tooltip>

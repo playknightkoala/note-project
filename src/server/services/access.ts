@@ -23,6 +23,8 @@ export interface Access {
   /** For a member: the path from the shared page they reach it through down to the page itself. */
   chain: Breadcrumb[];
   member?: PageAccess;
+  /** Shared pages the reader reaches only because every signed-in account with the link may; see `recordVisit`. */
+  linkRoots?: string[];
 }
 export type Need = 'view' | 'comment' | 'edit';
 
@@ -44,7 +46,10 @@ function ancestry(db: Db, pageId: string): Step[] {
 }
 const crumbs = (steps: Step[]): Breadcrumb[] => steps.map(step => ({ id: step.id, title: step.title, icon: step.icon, kind: step.kind })).reverse();
 
-/** Anybody but the owner gets "not found" unless a share on the page or above it lists them and reaches the page. */
+/**
+ * Anybody but the owner gets "not found" unless a share on the page or above it reaches the page and either lists
+ * them or is open to every signed-in account that has the link (the page's address).
+ */
 export function resolveAccess(db: Db, viewerId: string, pageId: string): Access {
   const steps = ancestry(db, pageId);
   const page = steps[0];
@@ -53,18 +58,29 @@ export function resolveAccess(db: Db, viewerId: string, pageId: string): Access 
   // Somebody else's page: never from the trash, and never once the owner's account is disabled.
   if (steps.some(step => step.trashed_at !== null || step.user_id !== page.user_id)) throw notFound();
   let role: MemberRole | undefined, top = -1;
+  const linkRoots: string[] = [];
   for (let index = 0; index < steps.length; index++) {
-    const share = db.get<{ scope: ShareScope; role: MemberRole }>(
-      'SELECT s.scope, m.role FROM page_shares s JOIN share_members m ON m.page_id = s.page_id WHERE s.page_id = ? AND s.user_id = ? AND m.user_id = ?', steps[index]!.id, page.user_id, viewerId);
-    if (!share || !scopeCovers(share.scope, steps.slice(0, index).reverse().map(step => step.kind))) continue;
-    if (!role || rank(share.role) > rank(role)) role = share.role;
+    const share = db.get<{ scope: ShareScope; account_role: MemberRole | null; member_role: MemberRole | null }>(
+      `SELECT s.scope, s.account_role, (SELECT m.role FROM share_members m WHERE m.page_id = s.page_id AND m.user_id = ?) AS member_role
+       FROM page_shares s WHERE s.page_id = ? AND s.user_id = ?`, viewerId, steps[index]!.id, page.user_id);
+    if (!share || (!share.member_role && !share.account_role) || !scopeCovers(share.scope, steps.slice(0, index).reverse().map(step => step.kind))) continue;
+    for (const granted of [share.member_role, share.account_role]) if (granted && (!role || rank(granted) > rank(role))) role = granted;
+    if (!share.member_role) linkRoots.push(steps[index]!.id);
     top = index;
   }
   if (!role) throw notFound();
   const owner = db.get<{ display_name: string; disabled_at: number | null }>('SELECT display_name, disabled_at FROM users WHERE id = ?', page.user_id);
   if (!owner || owner.disabled_at !== null) throw notFound();
   const chain = crumbs(steps.slice(0, top + 1));
-  return { ownerId: page.user_id, role, chain, member: { role, rootId: steps[top]!.id, owner: { id: page.user_id, name: owner.display_name } } };
+  return { ownerId: page.user_id, role, chain, member: { role, rootId: steps[top]!.id, owner: { id: page.user_id, name: owner.display_name } }, ...(linkRoots.length ? { linkRoots } : {}) };
+}
+
+/**
+ * Remembers that an account opened a page through "anyone signed in with the link". From then on the shared page is
+ * listed with what is shared with them and kept on their devices; knowing the address alone already gave access.
+ */
+export function recordVisit(db: Db, viewerId: string, access: Access, now: number): void {
+  for (const pageId of access.linkRoots ?? []) db.run('INSERT OR IGNORE INTO share_visitors (page_id, user_id, created_at) VALUES (?, ?, ?)', pageId, viewerId, now);
 }
 
 /** A stranger gets 404 (the page does not exist for them); a member whose role is too low gets 403. */

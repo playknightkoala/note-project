@@ -1,6 +1,6 @@
 {
   "name": "notes",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "private": true,
   "description": "Notion 式筆記網站：自有帳號、BlockNote 區塊編輯、SQLite 單容器部署",
   "type": "module",

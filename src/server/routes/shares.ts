@@ -3,7 +3,7 @@ import type { Context } from 'hono';
 import type { AppEnv } from '../app.ts';
 import { AppError } from '../../shared/errors.ts';
 import { pageIdSchema } from '../../shared/api.ts';
-import { memberAddSchema, memberRoleSchema, shareScopeSchema } from '../../shared/shares.ts';
+import { accountRoleSchema, memberAddSchema, memberRoleSchema, shareScopeSchema } from '../../shared/shares.ts';
 import type { SharesDto, ShareStateDto } from '../../shared/shares.ts';
 import { requireAuth, requireCsrf } from '../auth/middleware.ts';
 import { parseBody } from './validate.ts';
@@ -25,6 +25,11 @@ export function pageShareRoutes(): Hono<AppEnv> {
   app.delete('/:id/share', c => { const { db, userId } = context(c); shares.removeShare(db, userId, uuid(c.req.param('id'))); return c.body(null, 204); });
   app.post('/:id/share/link', c => { const { db, userId, now } = context(c); return c.json<ShareStateDto>(shares.enableLink(db, userId, uuid(c.req.param('id')), now)); });
   app.delete('/:id/share/link', c => { const { db, userId, now } = context(c); return c.json<ShareStateDto>(shares.disableLink(db, userId, uuid(c.req.param('id')), now)); });
+  app.put('/:id/share/account-link', async c => {
+    const { db, userId, now } = context(c);
+    const input = await parseBody(c, accountRoleSchema);
+    return c.json<ShareStateDto>(shares.setAccountRole(db, userId, uuid(c.req.param('id')), input.role, now));
+  });
   app.put('/:id/share/members', async c => {
     const { db, userId, now } = context(c);
     const pageId = uuid(c.req.param('id'));

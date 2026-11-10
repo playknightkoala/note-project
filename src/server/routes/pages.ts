@@ -6,7 +6,7 @@ import type { PageResponse, TreeDto } from '../../shared/api.ts';
 import { AppError } from '../../shared/errors.ts';
 import { requireAuth, requireCsrf } from '../auth/middleware.ts';
 import * as pages from '../services/pages.ts';
-import { pageResponse, requireAccess } from '../services/access.ts';
+import { pageResponse, recordVisit, requireAccess } from '../services/access.ts';
 import { parseBody } from './validate.ts';
 
 /** `If-Match: "<version>"` is required for content writes so two tabs never overwrite each other silently. */
@@ -34,8 +34,9 @@ export function pageRoutes(): Hono<AppEnv> {
 
   // The four routes below also serve members of a share: access is resolved first, then the page is read as its owner.
   app.get('/:id', c => {
-    const { db, userId } = ctx(c);
+    const { db, userId, now } = ctx(c);
     const access = requireAccess(db, userId, c.req.param('id'), 'view');
+    recordVisit(db, userId, access, now);
     // Only the owner may open a page that is in the trash.
     const row = pages.loadPage(db, access.ownerId, c.req.param('id'), { allowTrashed: access.role === 'owner' });
     c.header('ETag', `"${row.version}"`);

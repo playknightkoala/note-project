@@ -1,6 +1,7 @@
 // 僅對全新、可拋棄的測試實例執行；會建立隨機合成帳號、筆記與資料庫。
 //   node scripts/check-share.mjs http://127.0.0.1:18090
-// 驗收 M10：擁有者設定分享；可編輯與唯讀成員依角色使用（含留言、資料庫與離線）；公開連結唯讀且可停用。
+// 驗收 M10：擁有者設定分享；可編輯與唯讀成員依角色使用（含留言、資料庫與離線）；公開連結唯讀且可停用；
+// 「知道連結的本站帳號」可依設定唯讀或編輯，關閉後立即失效。
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 const { chromium } = await import(process.env.NOTES_PLAYWRIGHT_MODULE ?? 'playwright');
@@ -46,6 +47,7 @@ try {
   const invite = async () => (await owner.post('/api/admin/invites', { expiresInHours: 1 })).code;
   const editor = await account('編輯者', await invite());
   const viewer = await account('唯讀者', await invite());
+  const passerby = await account('路人帳號', await invite());
 
   // ---- 擁有者的內容：筆記（含圖片、範圍內外的頁面連結）、子頁、資料庫與不分享的頁面 ----
   const note = (await owner.post('/api/pages', { title: '分享的筆記' })).page;
@@ -214,6 +216,34 @@ try {
   await visitor.getByRole('heading', { level: 1, name: '分享的筆記' }).waitFor();
   assert.equal((await anonymous.request.get(`${origin}/api/public${firstLink.pathname.slice(2)}`)).status(), 404, '舊網址永久失效');
   console.log('PASS 停用公開連結後舊網址失效；重新開啟產生新網址');
+
+  // ---- 知道連結的本站帳號：不必加入名單，登入後有網址即可依設定存取 ----
+  assert.equal(await passerby.status(`/api/pages/${note.id}`), 404, '開放前，名單以外的帳號看不到');
+  await owner.page.getByRole('button', { name: '已分享' }).click();
+  await dialog.getByLabel('知道連結的本站帳號').first().click();
+  await dialog.getByRole('option', { name: '知道連結的人皆可編輯' }).click();
+  assert.equal((await dialog.getByLabel('頁面網址', { exact: true }).innerText()).trim(), `${origin}/p/${note.id}`);
+  await dialog.getByRole('button', { name: '完成' }).click();
+  await passerby.page.goto(`${origin}/p/${note.id}`);
+  await passerby.page.getByText(/擁有者 與你共用這個頁面 · 可編輯/).waitFor();
+  await passerby.page.getByText(/可以留言的文字/).click();
+  await passerby.page.keyboard.press(process.platform === 'darwin' ? 'Meta+ArrowRight' : 'End');
+  await passerby.page.keyboard.type('路人帳號加的字');
+  await passerby.page.waitForFunction(() => globalThis.document.querySelector('.save-status')?.getAttribute('data-status') === 'clean', null, { timeout: 60_000 });
+  assert.match(JSON.stringify((await owner.get(`/api/pages/${note.id}`)).page.content), /路人帳號加的字/);
+  await passerby.page.reload();
+  await passerby.page.getByRole('treeitem', { name: /分享的筆記/ }).waitFor();
+  assert.equal(await passerby.page.getByRole('button', { name: '分享', exact: true }).count(), 0);
+  assert.equal(await anonymous.request.get(`${origin}/api/pages/${note.id}`).then(response => response.status()), 401, '沒有登入仍然不行');
+  await owner.page.getByRole('button', { name: '已分享' }).click();
+  await dialog.getByText(/目前有 1 個帳號開啟過：路人帳號/).waitFor();
+  await dialog.getByLabel('知道連結的本站帳號').first().click();
+  await dialog.getByRole('option', { name: '不開放' }).click();
+  await dialog.getByLabel('頁面網址', { exact: true }).waitFor({ state: 'detached' });
+  await dialog.getByRole('button', { name: '完成' }).click();
+  assert.equal(await passerby.status(`/api/pages/${note.id}`), 404, '改為不開放後立即失效');
+  assert.equal((await passerby.get('/api/shares')).incoming.length, 0);
+  console.log('PASS 知道連結的本站帳號：開放為可編輯後，名單以外的帳號登入即可開啟並修改，列入「與我共用」；擁有者看得到誰開啟過；改為不開放後立即失效');
 
   // ---- 可編輯成員離線編輯共用筆記，連線後同步 ----
   await editor.page.goto(origin + `/p/${child.id}`);

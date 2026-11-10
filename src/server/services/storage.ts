@@ -65,7 +65,8 @@ const missing = () => new AppError('not_found', '找不到檔案。');
 
 /**
  * A file as somebody may read it: their own, one they added to another person's page, or one that a page shared
- * with them shows (as its cover or in its content). Anything else is "not found".
+ * with them shows (as its cover or in its content). "Shared with them" means a share that lists them, or one open to
+ * every signed-in account whose link they have opened. Anything else is "not found".
  */
 export function loadFileFor(db: Db, viewerId: string, id: string): FileRow {
   const row = db.get<FileRow>('SELECT * FROM files WHERE id = ?', id);
@@ -73,8 +74,9 @@ export function loadFileFor(db: Db, viewerId: string, id: string): FileRow {
   if (row.user_id === viewerId || row.uploaded_by === viewerId) return row;
   if (!FILE_ID.test(id)) throw missing();
   const shares = db.all<{ page_id: string; scope: ShareScope }>(
-    `SELECT s.page_id, s.scope FROM share_members m JOIN page_shares s ON s.page_id = m.page_id
-     JOIN users u ON u.id = s.user_id AND u.disabled_at IS NULL WHERE m.user_id = ? AND s.user_id = ?`, viewerId, row.user_id);
+    `SELECT s.page_id, s.scope FROM page_shares s JOIN users u ON u.id = s.user_id AND u.disabled_at IS NULL
+     WHERE s.user_id = ? AND (EXISTS(SELECT 1 FROM share_members m WHERE m.page_id = s.page_id AND m.user_id = ?)
+       OR (s.account_role IS NOT NULL AND EXISTS(SELECT 1 FROM share_visitors v WHERE v.page_id = s.page_id AND v.user_id = ?)))`, row.user_id, viewerId, viewerId);
   if (!shares.some(share => scopeShowsFile(db, row.user_id, share.page_id, share.scope, id))) throw missing();
   return row;
 }

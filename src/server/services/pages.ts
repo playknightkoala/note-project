@@ -51,7 +51,7 @@ export function listTree(db: Db, userId: string): PageNode[] {
   const rows = db.all<PageRow & { has_children: number; shared: number }>(
     `SELECT p.id, p.parent_id, p.kind, p.title, p.icon, p.position, p.is_favorite, p.favorite_position, p.updated_at,
      EXISTS(SELECT 1 FROM pages c WHERE c.parent_id = p.id AND c.user_id = p.user_id AND c.trashed_at IS NULL AND c.kind <> 'row') AS has_children,
-     EXISTS(SELECT 1 FROM page_shares s WHERE s.page_id = p.id AND (s.link_token IS NOT NULL OR EXISTS(SELECT 1 FROM share_members m WHERE m.page_id = s.page_id))) AS shared
+     EXISTS(SELECT 1 FROM page_shares s WHERE s.page_id = p.id AND (s.link_token IS NOT NULL OR s.account_role IS NOT NULL OR EXISTS(SELECT 1 FROM share_members m WHERE m.page_id = s.page_id))) AS shared
      FROM pages p WHERE p.user_id = ? AND p.trashed_at IS NULL AND p.kind <> 'row' ORDER BY p.parent_id, p.position, p.created_at`, userId);
   return rows.map(row => ({ id: row.id, parentId: row.parent_id, kind: row.kind, title: row.title, icon: row.icon, position: row.position,
     isFavorite: row.is_favorite === 1, favoritePosition: row.favorite_position, hasChildren: row.has_children === 1, updatedAt: row.updated_at,

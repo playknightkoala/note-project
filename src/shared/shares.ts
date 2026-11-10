@@ -12,6 +12,8 @@ export const databaseScopeLabels: Record<ShareScope, string> = { page: '此資�
 export const MEMBER_ROLES = ['viewer', 'editor'] as const;
 export type MemberRole = typeof MEMBER_ROLES[number];
 export const roleLabels: Record<MemberRole, string> = { viewer: '唯讀', editor: '可編輯' };
+/** What every signed-in account that has the page's address may do. */
+export const accountLinkLabels: Record<MemberRole | 'off', string> = { off: '不開放', viewer: '知道連結的人皆可唯讀', editor: '知道連結的人皆可編輯' };
 
 /**
  * Whether a share placed on some page reaches a page below it. `below` lists the kinds on the way down, the shared
@@ -26,15 +28,23 @@ export function scopeCovers(scope: ShareScope, below: readonly PageKind[]): bool
 export const shareScopeSchema = z.object({ scope: z.enum(SHARE_SCOPES) });
 export const memberAddSchema = z.object({ email: emailSchema, role: z.enum(MEMBER_ROLES) });
 export const memberRoleSchema = z.object({ role: z.enum(MEMBER_ROLES) });
+/** What every signed-in account that has the page's address may do; null closes that again. */
+export const accountRoleSchema = z.object({ role: z.enum(MEMBER_ROLES).nullable() });
 /** 32 random bytes, base64url. */
 export const linkTokenSchema = z.string().regex(/^[A-Za-z0-9_-]{43}$/);
 
 export interface ShareMemberDto { userId: string; email: string; displayName: string; role: MemberRole }
-export interface ShareDto { pageId: string; scope: ShareScope; link: { token: string; createdAt: number } | null; members: ShareMemberDto[] }
+export interface ShareDto {
+  pageId: string; scope: ShareScope; link: { token: string; createdAt: number } | null; members: ShareMemberDto[];
+  /** The role of every signed-in account that has the page's address, when that is switched on. */
+  accountRole: MemberRole | null;
+  /** Accounts that opened the page that way. */
+  visitors: { userId: string; displayName: string }[];
+}
 /** A share on a page above this one that also reaches it. */
-export interface InheritedShareDto { pageId: string; title: string; scope: ShareScope; link: boolean; members: number }
+export interface InheritedShareDto { pageId: string; title: string; scope: ShareScope; link: boolean; members: number; accountRole: MemberRole | null }
 export interface ShareStateDto { share: ShareDto | null; inherited: InheritedShareDto[] }
-export interface OutgoingShareDto { pageId: string; title: string; icon: string | null; kind: PageKind; scope: ShareScope; link: boolean; members: number; updatedAt: number }
+export interface OutgoingShareDto { pageId: string; title: string; icon: string | null; kind: PageKind; scope: ShareScope; link: boolean; members: number; accountRole: MemberRole | null; updatedAt: number }
 /** Something shared with the reader: the shared page and what the scope reaches below it (rows excluded). */
 export interface IncomingShareDto { pageId: string; role: MemberRole; scope: ShareScope; owner: { id: string; name: string }; tree: PageNode[] }
 export interface SharesDto { outgoing: OutgoingShareDto[]; incoming: IncomingShareDto[] }

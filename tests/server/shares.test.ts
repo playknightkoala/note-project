@@ -77,7 +77,7 @@ describe('managing a share', () => {
     const state = await json<ShareStateDto>(owner.client.request('GET', `/api/pages/${A}/share`));
     expect(state.share).toMatchObject({ pageId: A, scope: 'subpages', link: { token }, members: [{ userId: viewer.id, email: viewer.email, displayName: '唯讀者', role: 'viewer' }] });
     // A page below sees that it is reached from above; one outside the scope does not.
-    expect((await json<ShareStateDto>(owner.client.request('GET', `/api/pages/${C}/share`))).inherited).toEqual([{ pageId: A, title: '甲', scope: 'subpages', link: true, members: 1 }]);
+    expect((await json<ShareStateDto>(owner.client.request('GET', `/api/pages/${C}/share`))).inherited).toEqual([{ pageId: A, title: '甲', scope: 'subpages', link: true, members: 1, accountRole: null }]);
     expect((await json<ShareStateDto>(owner.client.request('GET', `/api/pages/${D}/share`))).inherited).toEqual([]);
     // Role change, removal.
     expect((await json<ShareStateDto>(owner.client.request('PATCH', `/api/pages/${A}/share/members/${viewer.id}`, { json: { role: 'editor' } }))).share!.members[0]!.role).toBe('editor');
@@ -315,6 +315,81 @@ describe('what a member may do', () => {
     expect(t.deps.db.get<{ user_id: string }>('SELECT user_id FROM pages WHERE id = ?', added)?.user_id).toBe(owner.id);
     expect(await status(save(editor, added, [text('p', '列內文')]))).toBe(200);
     expect((await json<{ total: number }>(owner.client.request('GET', `/api/databases/${D}/rows`))).total).toBe(2);
+  });
+});
+
+describe('a page open to every signed-in account that has its link', () => {
+  const open = (id: string, role: MemberRole | null) => owner.client.request('PUT', `/api/pages/${id}/share/account-link`, { json: { role } });
+  const incoming = async (who: Person) => (await json<SharesDto>(who.client.request('GET', '/api/shares'))).incoming;
+  const manifest = async (who: Person) => await json<OfflineManifest>(who.client.request('GET', '/api/offline/manifest'));
+
+  it('gives the chosen role to any account that opens the address, within the scope, and to nobody without an account', async () => {
+    await share(A, 'subpages');
+    for (const who of [stranger, editor]) expect(await status(open(A, 'viewer').then(() => who.client.request('PUT', `/api/pages/${A}/share/account-link`, { json: { role: 'editor' } })))).toBe(404);
+    expect((await json<ShareStateDto>(owner.client.request('GET', `/api/pages/${A}/share`))).share).toMatchObject({ accountRole: 'viewer', visitors: [] });
+    // Until the address is opened, nothing of it is listed for anybody.
+    expect(await incoming(stranger)).toEqual([]);
+    expect((await manifest(stranger)).pages).toEqual([]);
+    const first = await page(stranger, B);
+    expect(first).toMatchObject({ page: { id: B, isFavorite: false }, access: { role: 'viewer', rootId: A, owner: { id: owner.id } } });
+    expect(first.breadcrumbs.map(crumb => crumb.id)).toEqual([A, B]);
+    // The scope applies exactly as for members, and reading is all a viewer may do.
+    for (const id of [D, R, X]) expect(await status(get(stranger, id))).toBe(404);
+    expect(await status(save(stranger, B, [text('p', '不能改')]))).toBe(403);
+    expect(await status(op(stranger, { type: 'annotation.create', pageId: B, annotationId: uuid(), messageId: uuid(), quote: '乙', blockIds: ['p'], text: '可以留言', at: 1, floating: true }))).toBe(200);
+    // Having opened it, the account finds the shared page in its list and on its devices; the owner sees who opened it.
+    expect(await incoming(stranger)).toMatchObject([{ pageId: A, role: 'viewer', scope: 'subpages', owner: { id: owner.id } }]);
+    expect((await manifest(stranger)).pages.map(item => item.page.id).sort()).toEqual([A, B, C].sort());
+    expect((await manifest(stranger)).pages.find(item => item.page.id === B)).toEqual(summarizePage(await page(stranger, B)));
+    expect((await json<ShareStateDto>(owner.client.request('GET', `/api/pages/${A}/share`))).share!.visitors).toEqual([{ userId: stranger.id, displayName: '陌生人' }]);
+    expect((await json<TreeDto>(owner.client.request('GET', '/api/pages/tree'))).pages.find(node => node.id === A)?.shared).toBe(true);
+    expect((await json<SharesDto>(owner.client.request('GET', '/api/shares'))).outgoing).toMatchObject([{ pageId: A, accountRole: 'viewer', link: false, members: 0 }]);
+    // No account, no access: this is not the public link.
+    expect(await status(t.client().request('GET', `/api/pages/${B}`))).toBe(401);
+    expect(await incoming(viewer)).toEqual([]);
+  });
+
+  it('lets everybody edit when set so, combines with a member\'s own role, and ends at once when switched off', async () => {
+    await share(A, 'all', [[viewer, 'viewer']]);
+    await open(A, 'editor');
+    // Listed as a viewer, but the link gives more: the higher role counts.
+    expect((await page(viewer, B)).access?.role).toBe('editor');
+    expect(await status(save(stranger, B, [text('p', '任何帳號都能改')]))).toBe(200);
+    expect((await page(owner, B)).page.content).toEqual([text('p', '任何帳號都能改')]);
+    expect((await json<OfflineOpResult>(op(stranger, { type: 'row.update', databaseId: D, rowId: R, title: { base: '列', value: '連結改名' }, values: {} }))).row?.title).toBe('連結改名');
+    // Still the owner's alone: structure, sub-pages, the trash, the share itself.
+    expect(await status(op(stranger, { type: 'property.add', databaseId: D, propertyId: uuid(), baseVersion: 1, input: { name: '欄', type: 'text', choices: [] } }))).toBe(403);
+    expect(await status(stranger.client.request('POST', '/api/pages', { json: { parentId: B, title: '子頁' } }))).toBe(404);
+    expect(await status(stranger.client.request('DELETE', `/api/pages/${B}`))).toBe(404);
+    expect(await status(stranger.client.request('GET', `/api/pages/${A}/share`))).toBe(404);
+    // A file is readable through the link only by an account that has opened a page of the share.
+    const file = await json<{ id: string; url: string }>(upload(owner, {}));
+    await save(owner, C, [{ id: 'i', type: 'image', props: { url: file.url, name: '合成.png' }, children: [] }]);
+    expect(await status(editor.client.request('GET', file.url))).toBe(404);
+    await get(editor, C);
+    expect(await status(editor.client.request('GET', file.url))).toBe(200);
+    expect(await status(upload(editor, { pageId: C }))).toBe(201);
+    // Leaving takes it off my list; the address still works and brings it back.
+    await get(stranger, A);
+    expect(await status(stranger.client.request('DELETE', `/api/shares/incoming/${A}`))).toBe(204);
+    expect(await incoming(stranger)).toEqual([]);
+    await get(stranger, B);
+    expect((await incoming(stranger)).map(item => item.pageId)).toEqual([A]);
+    // Switched off: gone for everyone who came through the link, kept for the listed member with their own role.
+    expect((await json<ShareStateDto>(open(A, null))).share).toMatchObject({ accountRole: null, visitors: [] });
+    for (const who of [stranger, editor]) {
+      expect(await status(get(who, B))).toBe(404);
+      expect(await incoming(who)).toEqual([]);
+      expect((await manifest(who)).pages).toEqual([]);
+      expect(await status(who.client.request('GET', file.url))).toBe(404);
+    }
+    expect((await page(viewer, B)).access?.role).toBe('viewer');
+    expect(t.deps.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM share_visitors')?.n).toBe(0);
+    // Switched on again, nobody is remembered from before; the trash and a disabled owner end it like any share.
+    await open(A, 'viewer');
+    expect(await incoming(stranger)).toEqual([]);
+    await owner.client.request('DELETE', `/api/pages/${A}`);
+    expect(await status(get(stranger, B))).toBe(404);
   });
 });
 

@@ -2,6 +2,12 @@ import type { VersionInfo } from '../shared/version.ts';
 import { isNewerVersion } from '../shared/version.ts';
 
 const releases: VersionInfo['releases'] = [
+  { version: '1.1.1', title: '知道連結的本站帳號可唯讀或編輯', changes: [
+    '分享視窗的「與本站帳號共用」新增「知道連結的本站帳號」：可設為不開放、皆可唯讀或皆可編輯。',
+    '不必逐一輸入 email：任何登入本站、且有頁面網址的帳號都能依設定開啟。',
+    '開啟過的帳號會在側欄「與我共用」看到該頁面，擁有者看得到有哪些帳號開啟過。',
+    '改為不開放後立即失效；沒有登入的人仍只能使用唯讀的公開連結。',
+  ] },
   { version: '1.1.0', title: '分享筆記：公開連結與站內帳號共用', changes: [
     '頁面選單與頂端新增「分享」：可開啟公開連結，或以 email 加入本站的其他帳號。',
     '公開連結不需登入即可閱讀，一律唯讀、看不到留言；可隨時關閉，再次開啟會換新網址。',
