@@ -5,10 +5,9 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useBlocker, useParams } from 'react-router';
 import { pageKeys, usePage, usePatchPage } from '../../api/pages.ts';
 import { errorText, isApiError } from '../../api/client.ts';
-import { loadNote, offlineNote, syncNotes } from '../../offline/notes.ts';
+import { hasDraft, loadNote, offlineNote, syncNotes } from '../../offline/notes.ts';
 import type { LocalPageResponse } from '../../offline/notes.ts';
 import { exportPageDraft } from '../../offline/exportDraft.ts';
-import { useOnline } from '../../offline/useOnline.ts';
 import { useUiState } from '../../app/uiState.tsx';
 import { BlockEditor } from '../editor/BlockEditor.tsx';
 import type { AppEditor } from '../editor/schema.ts';
@@ -38,7 +37,6 @@ export function PageRoute() {
 
 function PageView({ initial }: { initial: LocalPageResponse }) {
   const pageId = initial.page.id;
-  const online = useOnline();
   const queryClient = useQueryClient();
   const patch = usePatchPage();
   const { rememberPage, expandMany } = useUiState();
@@ -54,6 +52,8 @@ function PageView({ initial }: { initial: LocalPageResponse }) {
   const pageRef = useRef<HTMLDivElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
   useTableBleed(pageRef, bodyRef);
+  /** The title as last sent from here or received; a row's rename says which title it started from. */
+  const sentTitle = useRef(initial.page.title);
   const [meta, setMeta] = useState({ title: initial.page.title, icon: initial.page.icon, fullWidth: initial.page.fullWidth, coverUrl: initial.page.coverUrl, coverPosition: initial.page.coverPosition });
   useEffect(() => { rememberPage(pageId); expandMany(initial.breadcrumbs.slice(0, -1).map(b => b.id)); }, [pageId, rememberPage, expandMany, initial.breadcrumbs]);
 
@@ -78,6 +78,7 @@ function PageView({ initial }: { initial: LocalPageResponse }) {
           // Typing while this GET was pending must keep the local draft and its old If-Match.
           if (localRevisionRef.current !== revision) return;
           replaceContent(fresh.page.content);
+          sentTitle.current = fresh.page.title;
           setMeta({ title: fresh.page.title, icon: fresh.page.icon, fullWidth: fresh.page.fullWidth, coverUrl: fresh.page.coverUrl, coverPosition: fresh.page.coverPosition });
           autosave.setVersion(fresh.page.version, fresh.localRevision);
         }).catch(error => setRefreshError(errorText(error)));
@@ -95,8 +96,8 @@ function PageView({ initial }: { initial: LocalPageResponse }) {
   const onComposingChange = useCallback(() => { if (replacingRef.current) return; localRevisionRef.current++; autosave.markComposing(); }, [autosave]);
   const [actionError, setActionError] = useState<string | null>(null);
 
-  // A conflict blocks saving. Before the page is left, an ordinary note stores its draft on this device; where that
-  // is not possible (rows, or a newer draft from another tab) the user decides whether to give the edits up.
+  // A conflict blocks saving. Before the page is left, the draft is stored on this device; where that is not
+  // possible (no local copy, or a newer draft from another tab) the user decides whether to give the edits up.
   const autosaveRef = useRef(autosave); autosaveRef.current = autosave;
   const blocker = useBlocker(useCallback(() => autosaveRef.current.unsavedConflict(), []));
   const blockerRef = useRef(blocker); blockerRef.current = blocker;
@@ -114,7 +115,7 @@ function PageView({ initial }: { initial: LocalPageResponse }) {
   /** Everything typed here must be on the server before a history restore replaces the content. */
   const prepareRestore = useCallback(async (): Promise<number> => {
     await autosave.settle();
-    if (initial.page.kind === 'page') {
+    if (hasDraft(initial.page.kind)) {
       await syncNotes({ force: true });
       const note = await offlineNote(pageId).catch(() => undefined);
       if (note?.pending) throw new Error('這裡還有尚未同步到伺服器的修改。請先完成同步或處理衝突，再還原歷史版本。');
@@ -123,7 +124,10 @@ function PageView({ initial }: { initial: LocalPageResponse }) {
     if (autosave.hasUnsaved()) throw new Error('這裡還有尚未儲存的修改，請先完成儲存再還原歷史版本。');
     return autosave.version();
   }, [autosave, initial.page.kind, pageId]);
-  const saveTitle = useCallback((title: string) => { localRevisionRef.current++; setMeta(m => ({ ...m, title })); patch.mutate({ id: pageId, title, localRevision: autosave.localRevision() }); }, [patch, pageId, autosave]);
+  const saveTitle = useCallback((title: string) => {
+    const baseTitle = sentTitle.current; sentTitle.current = title;
+    localRevisionRef.current++; setMeta(m => ({ ...m, title })); patch.mutate({ id: pageId, title, baseTitle, localRevision: autosave.localRevision() });
+  }, [patch, pageId, autosave]);
   const saveIcon = useCallback((icon: string | null) => { setMeta(m => ({ ...m, icon })); patch.mutate({ id: pageId, icon }); }, [patch, pageId]);
   const saveCover = useCallback((cover: string | null) => {
     if (cover === null) { setMeta(m => ({ ...m, coverUrl: null })); patch.mutate({ id: pageId, coverFileId: null, coverPreset: null }); return; }
@@ -131,7 +135,8 @@ function PageView({ initial }: { initial: LocalPageResponse }) {
     patch.mutate({ id: pageId, coverFileId: cover, coverPosition: 50 }, { onSuccess: response => setMeta(m => ({ ...m, coverUrl: response.page.coverUrl, coverPosition: 50 })) });
   }, [patch, pageId]);
   const saveCoverPosition = useCallback((coverPosition: number) => { setMeta(m => ({ ...m, coverPosition })); patch.mutate({ id: pageId, coverPosition }); }, [patch, pageId]);
-  const upload = useCallback(async (file: File) => (await uploadFile(file)).url, []);
+  // Without a connection the file waits on this device under its final address and is uploaded before the note.
+  const upload = useCallback(async (file: File) => (await uploadFile(file, { offline: true })).url, []);
   const focusEditor = useCallback(() => {
     const editor = editorRef.current; if (!editor) return;
     const first = editor.document[0]; if (first) editor.setTextCursorPosition(first, 'start');
@@ -167,10 +172,10 @@ function PageView({ initial }: { initial: LocalPageResponse }) {
       <PageHeader title={meta.title} icon={meta.icon} coverUrl={meta.coverUrl} coverPosition={meta.coverPosition}
         onTitle={saveTitle} onIcon={saveIcon} onCover={saveCover} onCoverPosition={saveCoverPosition} onEnter={focusEditor} />
       {initial.page.kind === 'database'
-        ? online ? <DatabaseView databaseId={pageId} /> : <Alert title="資料庫需要連線">一般筆記仍可離線編輯，資料庫視圖請恢復連線後開啟。</Alert>
+        ? <DatabaseView databaseId={pageId} />
         : <>
-          {initial.page.kind === 'row' && initial.page.databaseId && (online ? <RowPropertiesPanel rowId={pageId} databaseId={initial.page.databaseId} /> : <Alert title="資料列需要連線">已下載的內文可閱讀，編輯請恢復連線後進行。</Alert>)}
-          <BlockEditor pageId={pageId} initialContent={initialContent} onReady={onReady} onChange={onChange} onCompositionSettled={onCompositionSettled} onComposingChange={onComposingChange} onError={setActionError} fullWidth={meta.fullWidth} uploadFile={upload} editable={online || initial.page.kind === 'page'} annotationsEnabled={online && autosave.state.version > 0} />
+          {initial.page.kind === 'row' && initial.page.databaseId && <RowPropertiesPanel rowId={pageId} databaseId={initial.page.databaseId} />}
+          <BlockEditor pageId={pageId} initialContent={initialContent} onReady={onReady} onChange={onChange} onCompositionSettled={onCompositionSettled} onComposingChange={onComposingChange} onError={setActionError} fullWidth={meta.fullWidth} uploadFile={upload} />
         </>}
     </div>
   </div>}

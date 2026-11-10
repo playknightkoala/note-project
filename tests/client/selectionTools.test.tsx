@@ -7,6 +7,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BlockNoteEditor } from '@blocknote/core';
 import { api, ApiError } from '../../src/client/api/client.ts';
 import type { Annotation } from '../../src/shared/annotations.ts';
+import type { OfflineOp } from '../../src/shared/offline.ts';
 import { schema } from '../../src/client/features/editor/schema.ts';
 import { SelectionTools } from '../../src/client/features/editor/SelectionTools.tsx';
 
@@ -28,6 +29,8 @@ beforeEach(() => {
     return { annotation: { ...annotation, version: 2, reactions: ['👍'] } } as never;
   });
 });
+/** The operations sent so far. Every change to a discussion is one repeatable operation with ids chosen by the client. */
+const sentOps = () => vi.mocked(api).mock.calls.filter(([method, path]) => method === 'POST' && path === '/api/offline/ops').map(([, , options]) => (options!.json as { op: OfflineOp }).op);
 afterEach(() => { cleanup(); client.clear(); editor._tiptapEditor.destroy(); Reflect.deleteProperty(document, 'fonts'); vi.unstubAllGlobals(); vi.clearAllMocks(); });
 async function openReply() {
   render(<MantineProvider env="test"><QueryClientProvider client={client}><SelectionTools editor={editor} pageId="page-example" /></QueryClientProvider></MantineProvider>);
@@ -48,16 +51,17 @@ it('lets the user cancel and then confirm deletion of a saved discussion', async
   await openReply();
   const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
   fireEvent.click(screen.getByRole('button', { name: '刪除整則討論' }));
-  expect(vi.mocked(api).mock.calls.some(([method]) => method === 'DELETE')).toBe(false);
+  expect(sentOps()).toEqual([]);
   confirm.mockReturnValue(true);
-  vi.mocked(api).mockImplementation(async method => method === 'DELETE' ? undefined as never : { annotations: [annotation] } as never);
+  vi.mocked(api).mockImplementation(async method => method === 'POST' ? { deletedId: annotation.id } as never : { annotations: [] } as never);
   fireEvent.click(screen.getByRole('button', { name: '刪除整則討論' }));
-  await waitFor(() => expect(vi.mocked(api).mock.calls.some(([method, path, options]) => method === 'DELETE' && path.endsWith(`/${annotation.id}`) && options?.headers?.['If-Match'] === '"1"')).toBe(true));
+  // The deletion says how many comments were on screen, so a reply this device has not seen is not deleted with it.
+  await waitFor(() => expect(sentOps()).toEqual([{ type: 'annotation.delete', pageId: 'page-example', annotationId: annotation.id, messages: 1 }]));
   await waitFor(() => expect(screen.queryByText('原留言')).toBeNull());
   confirm.mockRestore();
 });
 
-it('retains comments and the reply draft when deletion conflicts with another tab', async () => {
+it('retains comments and the reply draft when the deletion is refused', async () => {
   editor.replaceBlocks(editor.document, [{ id: 'b', type: 'paragraph', content: [{ type: 'text', text: '原文', styles: { annotation: annotation.id } }] }]);
   const content = JSON.stringify(editor.document);
   await openReply();
@@ -74,7 +78,7 @@ it('retains comments and the reply draft when deletion conflicts with another ta
   confirm.mockRestore();
 });
 
-it('keeps a rejected reply draft and reports a version conflict', async () => {
+it('keeps a rejected reply draft and reports why it was refused', async () => {
   await openReply();
   vi.mocked(api).mockImplementation(async method => {
     if (method === 'GET') return { annotations: [{ ...annotation, version: 2 }] } as never;
@@ -94,8 +98,8 @@ it('reuses the existing discussion when reacting to the same marked text again',
   expect(screen.getByText('原留言')).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: '反應 👍' }));
   await screen.findByRole('button', { name: '移除反應 👍' });
-  expect(vi.mocked(api).mock.calls.some(([method, path]) => method === 'PATCH' && path.endsWith(`/${annotation.id}`))).toBe(true);
-  expect(vi.mocked(api).mock.calls.some(([method]) => method === 'POST')).toBe(false);
+  // A reaction says whether it is switched on or off, so sending it twice cannot toggle it back.
+  expect(sentOps()).toEqual([{ type: 'annotation.reaction', pageId: 'page-example', annotationId: annotation.id, emoji: '👍', on: true }]);
 });
 
 it('opens a discussion by clicking its text after the editor mounts', async () => {

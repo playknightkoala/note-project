@@ -1,5 +1,16 @@
 # 驗證紀錄
 
+## M9 離線擴充：資料庫、留言與附件（2026-11-10，工作版 1.0.8，尚未發布）
+
+- 範圍：使用者指示將新附件上傳、留言與反應、資料庫離線閱讀、資料列離線編輯（值、新增列、列內文）與資料庫結構／視圖離線修改全部列入 M9。新增 migration `0008_offline_receipts`；沒有新增或升級任何依賴。
+- 本機檢查（Node 22.23.1／npm 10.9.8，安裝於暫存目錄後以 `PATH=<暫存>/node_modules/node/bin:<暫存>/node_modules/.bin:$PATH npm run check` 執行）：`npm run typecheck`、`npm run lint`、`npm test`（**33 檔／231 tests**）、`npm run build` 全部通過。開發期間另以本機預設的 Node 24.22.1 反覆執行同一組命令，結果相同。保留既有的 SQLite experimental 與 Vite 大 bundle 提示。
+- 新增測試：`tests/server/offlineOps.test.ts`（操作只執行一次與重送、逐格合併與衝突、`force`、結構版本、留言附加／表情開關／重複刪除、驗證與 CSRF、他人帳號一律 404、manifest stamp、資料庫快照與批次頁面、附件自選 ID 重送）；`tests/shared/offlineOps.test.ts`（裝置畫面的套用規則可重複套用且與伺服器的視圖修剪一致、操作格式驗證、檔案類型判定與標頭）；`tests/client/outbox.test.ts`（連線直接送出並併入裝置副本、拒絕不保留、離線入列與畫面顯示、斷線以同一 operationId 入列、同範圍排隊、拒絕後擋住同範圍而其他範圍照常、覆蓋與捨棄、結構版本接續且不越過他處的修改、離線新增頁面上的留言等頁面上傳、stamp 變動才下載、線上刪除的處理、有未同步內文的列頁面不被覆蓋、附件先存裝置再上傳一次、不安全類型以沙箱下載、內容遺失會回報、換帳號保留他人未同步的修改）；`tests/client/databaseViews.test.tsx` 增加離線開啟資料庫並修改、新增列與欄位的元件測試。既有測試依新行為更新：儲存格改回報「開始編輯時的值」、留言改送操作、資料列頁面內文改存本機。
+- 容器：為了不動到本機既有的 `notes_notes-data` volume，以獨立專案執行 `NOTES_PORT=18090 docker compose -p notes-m9-check up -d --build --wait`（映像以 Dockerfile 的 Node 22.23.1 建置），容器 healthy；`curl http://127.0.0.1:18090/healthz` 回 200，`/api/version` 回報 1.0.8 與更新說明。`node scripts/check-app.mjs http://127.0.0.1:18090`：**31 項 PASS**。每支瀏覽器腳本前都以 `docker compose -p notes-m9-check down -v` 重建全新資料。
+- 真實 Chrome（桌面 1280×900、localhost 安全環境例外；`NOTES_PLAYWRIGHT_MODULE=<暫存>/node_modules/playwright-core/index.mjs NOTES_CHROME_PATH='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' node scripts/check-offline-m9.mjs http://127.0.0.1:18090`），新腳本 8 段全部 PASS：(1) 首次同步自動下載資料庫結構、資料列與列頁面；(2) 離線開啟資料庫、修改儲存格、新增資料列與欄位，顯示「3 項修改待同步」；(3) 離線開啟此裝置新增的資料列頁面，編輯列內文與屬性；(4) 離線新增留言與表情並標記原文，離線貼上圖片後由 Service Worker 以正式網址顯示（此時伺服器回 404）；(5) 離線重新載入後修改、標記與附件仍在，伺服器資料未變；(6) 恢復連線自動同步，以 API 核對資料列（沿用裝置產生的 ID）、欄位、列內文、留言、反應、筆記內的標記與附件網址、附件 200 `image/png`，佇列清空；(7) 同一格在兩邊都被修改時伺服器保留另一台的值並列為衝突，確認「以我的修改覆蓋」後才寫入；(8) 再次離線修改後恢復連線自動送出，全程沒有未捕捉的前端錯誤。
+- 回歸（同一映像、各自全新資料）：`scripts/check-offline-sync.mjs`（3 段）、`scripts/check-annotation-removal.mjs`（3 段，刪除討論的等待條件改為新端點）、`scripts/check-sidebar-menu.mjs`、`scripts/check-app-update.mjs`（4 段，1.0.8 → 暫存測試版 1.0.9）全部 PASS。
+- 獨立審查：實作完成後由另一個 Claude 工作階段唯讀審查整份差異（未執行測試，以閱讀程式路徑為準）。結論是沒有重大缺陷；提出六項中低風險與數項小問題，其中會影響資料的都已修正並補測試：刪除討論改為比對留言數（有沒看過的回覆則 409）、斷線後對剛顯示的討論留言不再誤報失敗、捨棄新增列的確認與匯出涵蓋列內文與留言、新列的本機頁面改在入列前建立且下載時會解除卡住的標記、附件被拒時引用它的筆記留在裝置、401／CSRF 中止整輪同步而不記為個別錯誤、核取方塊 false 與空值視為相同、舊版離線介面下離線加入附件會明確拒絕。修正後重新建置映像，上述瀏覽器腳本與 `check-app.mjs` 全部重跑通過，測試數由 228 增為 231。審查未涵蓋：資料格與視圖對話框的介面接線差異、測試與腳本本身、更新過程中新舊離線介面並存、快取媒體的 Range 請求。
+- 沒有驗證的部分：iOS Safari／Android 實體手機、手機 HTTPS、真實鍵盤與輸入法；看板拖曳與 5,000 列等級資料庫的離線效能；大檔（數十 MB）附件的離線保存與上傳只有單元測試與極小圖片的瀏覽器實測；多分頁同時同步只做了程式路徑檢查，沒有瀏覽器實測。正式環境尚未部署，migration 只在測試資料庫與可拋棄容器套用過。
+
 ## 1.0.6 正式發布前檢查（2026-11-09）
 
 - 使用者指定發布 1.0.6，將未發布工作版 1.0.7 的版號／更新功能與留言修正整併為同一正式版本。package.json、lockfile 根版本、版本 API、更新說明與正式發布文件統一為 **1.0.6**；不建立 v1.0.7 Release。下方工作紀錄中的 1.0.7／1.0.8 保留為當時實測數據，不代表正式發布。

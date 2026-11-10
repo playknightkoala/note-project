@@ -11,7 +11,7 @@ import { NewRowInput } from './NewRowInput.tsx';
 
 interface Props {
   rows: DatabaseRow[]; properties: DatabaseProperty[]; config: ViewConfig;
-  onSave: (row: DatabaseRow, propertyId: string, value: CellValue, version: number) => Promise<unknown>;
+  onSave: (row: DatabaseRow, propertyId: string, value: CellValue, base: CellValue) => Promise<unknown>;
   onCreate: (title: string, values: Record<string, CellValue>) => Promise<unknown>;
   onTrash: (row: DatabaseRow) => void; onReload: () => void; adding: boolean; onCloseAdd: () => void;
 }
@@ -25,8 +25,8 @@ export function ListView(props: Props) {
   const visible = props.properties.filter(property => !props.config.columns || props.config.columns.includes(property.id));
   return <div className="database-list" aria-label="資料庫清單">
     {props.rows.map(row => <div className="database-list-row" key={row.id}>
-      <FileText size={16} className="database-list-icon" /><div className="database-list-title"><EditableCell property={null} value={row.title} version={row.version} label={`${row.title || '無標題'}／名稱`} onReload={props.onReload} onSave={(value, version) => props.onSave(row, 'title', value, version)} /></div>
-      <div className="database-list-properties">{visible.map(property => <div className="database-list-property" key={property.id} title={property.name}><EditableCell property={property} value={row.values[property.id] ?? null} version={row.version} label={`${row.title || '無標題'}／${property.name}`} onReload={props.onReload} onSave={(value, version) => props.onSave(row, property.id, value, version)} /></div>)}</div>
+      <FileText size={16} className="database-list-icon" /><div className="database-list-title"><EditableCell property={null} value={row.title} label={`${row.title || '無標題'}／名稱`} onReload={props.onReload} onSave={(value, base) => props.onSave(row, 'title', value, base)} /></div>
+      <div className="database-list-properties">{visible.map(property => <div className="database-list-property" key={property.id} title={property.name}><EditableCell property={property} value={row.values[property.id] ?? null} label={`${row.title || '無標題'}／${property.name}`} onReload={props.onReload} onSave={(value, base) => props.onSave(row, property.id, value, base)} /></div>)}</div>
       <RowActions row={row} onTrash={props.onTrash} />
     </div>)}
     {props.rows.length === 0 && <Text size="sm" c="dimmed" p="sm">尚無符合條件的資料列。</Text>}
@@ -70,7 +70,7 @@ function BoardCard({ row, group, props }: { row: DatabaseRow; group: DatabasePro
   const visible = props.properties.filter(property => property.id !== group.id && (!props.config.columns || props.config.columns.includes(property.id)));
   return <div ref={setNodeRef} className={`database-board-card${isDragging ? ' database-board-card--dragging' : ''}`}>
     <div className="database-board-card-title"><button type="button" className="database-drag-handle" aria-label={`拖曳卡片：${row.title || '無標題'}`} {...attributes} {...listeners}><GripVertical size={14} /></button>
-      <EditableCell property={null} value={row.title} version={row.version} label={`${row.title || '無標題'}／名稱`} onReload={props.onReload} onSave={(value, version) => props.onSave(row, 'title', value, version)} />
+      <EditableCell property={null} value={row.title} label={`${row.title || '無標題'}／名稱`} onReload={props.onReload} onSave={(value, base) => props.onSave(row, 'title', value, base)} />
       <Menu withinPortal><Menu.Target><ActionIcon size="sm" color="gray" variant="subtle" aria-label={`卡片選單：${row.title || '無標題'}`}><MoreHorizontal size={14} /></ActionIcon></Menu.Target>
         <Menu.Dropdown><Menu.Item component={Link} to={`/p/${row.id}`}>開啟為頁面</Menu.Item><Menu.Label>移至</Menu.Label>{[...group.choices.map(choice => ({ id: choice.id, label: choice.label })), { id: '', label: '未設定' }].map(choice => <Menu.Item key={choice.id} disabled={props.moving || (row.values[group.id] ?? '') === choice.id} onClick={() => props.onMove(row, group.id, choice.id || null)}>{choice.label}</Menu.Item>)}
           <Menu.Divider /><Menu.Item color="red" onClick={() => props.onTrash(row)}>移至垃圾桶</Menu.Item></Menu.Dropdown>

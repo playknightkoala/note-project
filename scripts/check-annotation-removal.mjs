@@ -59,7 +59,8 @@ try {
   assert.ok((await (await context.request.get(origin + path)).json()).annotations.some(item => item.id === annotation.id));
   page.once('dialog', dialog => dialog.accept());
   await Promise.all([
-    page.waitForResponse(response => response.url() === origin + `${path}/${annotation.id}` && response.request().method() === 'DELETE' && response.status() === 204),
+    // Every change to a discussion is one repeatable operation sent to the offline queue endpoint.
+    page.waitForResponse(response => response.url() === origin + '/api/offline/ops' && response.request().postDataJSON()?.op?.type === 'annotation.delete' && response.status() === 200),
     page.getByRole('button', { name: '刪除整則討論', exact: true }).click(),
   ]);
   await page.waitForFunction(async ({ noteId, removedId }) => {

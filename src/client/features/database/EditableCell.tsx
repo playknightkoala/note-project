@@ -7,7 +7,9 @@ import { CellDisplay, CellValueInput } from './CellValueInput.tsx';
 import { useUpdateGuard } from '../../updates/guards.ts';
 
 export interface EditableCellProps {
-  property: DatabaseProperty | null; value: CellValue; version: number; label: string; onSave: (value: CellValue, version: number) => Promise<unknown>; onReload: () => void;
+  property: DatabaseProperty | null; value: CellValue; label: string;
+  /** `base` is the value the cell showed when this edit began, so a change made elsewhere meanwhile is noticed for this cell only. */
+  onSave: (value: CellValue, base: CellValue) => Promise<unknown>; onReload: () => void;
   tabIndex?: number; rowIndex?: number; columnIndex?: number; onFocus?: () => void; emptyLabel?: string;
 }
 export function EditableCell(props: EditableCellProps) {
@@ -15,14 +17,14 @@ export function EditableCell(props: EditableCellProps) {
   if (props.property.type === 'checkbox') return <CheckboxCell {...props} />;
   return <PopoverCell {...props} />;
 }
-function CheckboxCell({ value, version, label, onSave, onReload, tabIndex = 0, rowIndex, columnIndex, onFocus }: EditableCellProps) {
+function CheckboxCell({ value, label, onSave, onReload, tabIndex = 0, rowIndex, columnIndex, onFocus }: EditableCellProps) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const busy = useRef(false);
   const toggle = async () => {
     if (busy.current || error) return;
     busy.current = true; setPending(true);
-    try { await onSave(value !== true, version); }
+    try { await onSave(value !== true, value); }
     catch (error) { setError(error); }
     finally { busy.current = false; setPending(false); }
   };
@@ -30,10 +32,10 @@ function CheckboxCell({ value, version, label, onSave, onReload, tabIndex = 0, r
     {!!error && <div role="alert" className="database-cell-error">{errorText(error)}<Button mt="xs" size="compact-xs" onClick={() => { setError(null); onReload(); }}>重新載入資料</Button></div>}
   </div>;
 }
-function InlineCell({ property, value, version, label, onSave, onReload, tabIndex = 0, rowIndex, columnIndex, onFocus, emptyLabel }: EditableCellProps) {
+function InlineCell({ property, value, label, onSave, onReload, tabIndex = 0, rowIndex, columnIndex, onFocus, emptyLabel }: EditableCellProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
-  const [baseVersion, setBaseVersion] = useState(version);
+  const [base, setBase] = useState<CellValue>(value);
   const [original, setOriginal] = useState('');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<unknown>(null);
@@ -51,14 +53,14 @@ function InlineCell({ property, value, version, label, onSave, onReload, tabInde
     const next = property?.type === 'number' && draft.trim() ? Number(draft) : draft || null;
     if (property && !valueSchema(property).safeParse(next).success) { setError(new Error('輸入值與欄位型別不符，請檢查後再儲存。')); return; }
     busy.current = true; setPending(true); setError(null);
-    try { await onSave(next, baseVersion); setEditing(false); }
+    try { await onSave(next, base); setEditing(false); }
     catch (error) { setError(error); }
     finally { busy.current = false; setPending(false); }
   };
   if (!editing) return <button ref={button} type="button" role={rowIndex === undefined ? undefined : 'gridcell'} tabIndex={tabIndex} className="database-cell" aria-label={label}
     data-row={rowIndex} data-col={columnIndex} onFocus={onFocus} onClick={() => {
       const text = value === null ? '' : String(value);
-      setDraft(text); setOriginal(text); setBaseVersion(version); setError(null); cancelled.current = false; setEditing(true);
+      setDraft(text); setOriginal(text); setBase(value); setError(null); cancelled.current = false; setEditing(true);
     }}>{emptyLabel !== undefined && (value === null || value === '') ? emptyLabel : <CellDisplay property={property} value={value} />}</button>;
   return <div className="database-inline-editor" onKeyDown={event => event.stopPropagation()}>
     <input className="database-cell database-cell-input" aria-label={property?.name ?? '名稱'} value={draft} autoFocus disabled={pending}
@@ -75,10 +77,10 @@ function InlineCell({ property, value, version, label, onSave, onReload, tabInde
     </Group></div>}
   </div>;
 }
-function PopoverCell({ property, value, version, label, onSave, onReload, tabIndex = 0, rowIndex, columnIndex, onFocus, emptyLabel }: EditableCellProps) {
+function PopoverCell({ property, value, label, onSave, onReload, tabIndex = 0, rowIndex, columnIndex, onFocus, emptyLabel }: EditableCellProps) {
   const [opened, setOpened] = useState(false);
   const [draft, setDraft] = useState<CellValue>(value);
-  const [baseVersion, setBaseVersion] = useState(version);
+  const [base, setBase] = useState<CellValue>(value);
   const [error, setError] = useState<unknown>(null);
   const [pending, setPending] = useState(false);
   const [composing, setComposing] = useState(false);
@@ -89,13 +91,13 @@ function PopoverCell({ property, value, version, label, onSave, onReload, tabInd
     try {
       const value = property?.type === 'number' && typeof draft === 'string' && draft.trim() ? Number(draft) : draft;
       if (property && !valueSchema(property).safeParse(value).success) throw new Error('輸入值與欄位型別不符，請檢查後再儲存。');
-      await onSave(value, baseVersion); setOpened(false);
+      await onSave(value, base); setOpened(false);
     } catch (error) { setError(error); } finally { setPending(false); }
   };
   return <Popover opened={opened} onChange={next => { if (!pending) setOpened(next); }} position="bottom-start" width={320} shadow="md" trapFocus withinPortal closeOnEscape={!composing && !pending}>
     <Popover.Target><button type="button" role={rowIndex === undefined ? undefined : 'gridcell'} tabIndex={tabIndex} className="database-cell" aria-label={label}
       data-row={rowIndex} data-col={columnIndex} onFocus={onFocus}
-      onClick={() => { setDraft(value); setBaseVersion(version); setError(null); setOpened(true); }}>{emptyLabel !== undefined && (value === null || value === '') ? emptyLabel : <CellDisplay property={property} value={value} />}</button></Popover.Target>
+      onClick={() => { setDraft(value); setBase(value); setError(null); setOpened(true); }}>{emptyLabel !== undefined && (value === null || value === '') ? emptyLabel : <CellDisplay property={property} value={value} />}</button></Popover.Target>
     <Popover.Dropdown><form onSubmit={event => { event.preventDefault(); void save(); }} onCompositionStart={() => setComposing(true)} onCompositionEnd={() => setComposing(false)}>
       <Stack gap="sm">
         <CellValueInput property={property} label={property?.name ?? '名稱'} value={draft} onChange={setDraft} autoFocus />

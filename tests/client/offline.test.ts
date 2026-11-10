@@ -35,7 +35,7 @@ beforeEach(async () => {
 });
 
 function pullNetwork(pages: PageResponse[]) {
-  const manifest: OfflineManifest = { userId: account.id, tree: [], pages: pages.map(summarizePage), maxUploadBytes: 90 * 1024 * 1024 };
+  const manifest: OfflineManifest = { userId: account.id, tree: [], pages: pages.map(summarizePage), maxUploadBytes: 90 * 1024 * 1024, databases: [], annotations: [] };
   const fetcher = vi.fn(async (path: string) => {
     if (path === '/api/auth/me') return reply(200, { user: account, csrfToken: crypto.randomUUID() });
     if (path === '/api/offline/manifest') return reply(200, manifest);

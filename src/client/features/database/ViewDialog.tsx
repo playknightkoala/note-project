@@ -21,7 +21,7 @@ export function ViewDialog({ meta, view, onClose, onSelect }: { meta: DatabaseDt
     delete config.groupBy;
     if (type === 'board' && groupBy) config.groupBy = groupBy;
     mutation.mutate({ ...(view ? { action: 'view' as const, id: view.id } : { action: 'addView' as const }), input: { name, type, config }, version }, {
-      onSuccess: next => { onSelect(view?.id ?? next.views.at(-1)!.id); onClose(); },
+      onSuccess: next => { onSelect(view?.id ?? next.createdViewId ?? next.views.at(-1)!.id); onClose(); },
     });
   };
   return <Modal opened onClose={() => { if (!mutation.isPending) onClose(); }} title={view ? '編輯視圖' : '新增視圖'}>

@@ -15,7 +15,8 @@ export type PropertyPatch = z.infer<typeof propertyPatchSchema>;
 export interface DatabaseProperty extends PropertyInput { id: string; position: number }
 export type CellValue = string | number | boolean | string[] | null;
 export interface DatabaseRow { id: string; databaseId: string; title: string; icon: string | null; version: number; values: Record<string, CellValue>; updatedAt: number }
-export const rowInputSchema = z.object({ title: z.string().max(500).optional(), values: z.record(z.string().uuid(), z.union([z.string().max(2000), z.number().finite(), z.boolean(), z.array(z.string()).max(100), z.null()])).refine(values => Object.keys(values).length <= 50, '一次最多更新 50 個欄位。').default({}) });
+export const cellValueSchema = z.union([z.string().max(2000), z.number().finite(), z.boolean(), z.array(z.string()).max(100), z.null()]);
+export const rowInputSchema = z.object({ title: z.string().max(500).optional(), values: z.record(z.string().uuid(), cellValueSchema).refine(values => Object.keys(values).length <= 50, '一次最多更新 50 個欄位。').default({}) });
 export type RowInput = z.infer<typeof rowInputSchema>;
 
 export const fieldIdSchema = z.union([z.literal('title'), z.string().uuid()]);
@@ -83,8 +84,27 @@ export function validateView(config: ViewConfig, properties: DatabaseProperty[])
   return null;
 }
 
+/**
+ * Drops references to a property from a saved view. `validChoices` narrows this to filters that name a choice which
+ * no longer exists, so adding or renaming a choice leaves sorts and the remaining filters alone.
+ */
+export function pruneViewConfig(view: ViewConfig, propertyId: string, options: { remove: boolean; clearGrouping: boolean; validChoices?: Set<string> }): ViewConfig {
+  const { remove, clearGrouping, validChoices } = options;
+  const config: ViewConfig = { ...view,
+    sorts: validChoices ? view.sorts : view.sorts.filter(sort => sort.propertyId !== propertyId),
+    filters: view.filters.filter(filter => filter.propertyId !== propertyId || (validChoices !== undefined && (typeof filter.value !== 'string' || validChoices.has(filter.value)))),
+    ...(remove && view.columns ? { columns: view.columns.filter(col => col !== propertyId) } : {}) };
+  if (clearGrouping && config.groupBy === propertyId) delete config.groupBy;
+  return config;
+}
+
 const collator = new Intl.Collator('zh-Hant', { numeric: true, sensitivity: 'base' });
 const empty = (value: CellValue | undefined) => value === undefined || value === null || value === '' || (Array.isArray(value) && value.length === 0);
+/** A cleared cell is stored as no value at all, whichever empty form the editor produced. */
+export const isEmptyValue = empty;
+const blank = (value: CellValue | undefined) => empty(value) || value === false;
+/** Whether two cell values are the same stored value; every empty form counts as one, and so does an unticked checkbox. */
+export const sameValue = (a: CellValue | undefined, b: CellValue | undefined): boolean => blank(a) ? blank(b) : !blank(b) && JSON.stringify(a) === JSON.stringify(b);
 function valueOf(row: DatabaseRow, id: string, properties: DatabaseProperty[]): CellValue {
   if (id === 'title') return row.title;
   return row.values[id] ?? (properties.find(p => p.id === id)?.type === 'checkbox' ? false : null);

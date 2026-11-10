@@ -1,6 +1,6 @@
 # 架構與里程碑
 
-更新：2026-11-09。接手請先讀 [HANDOFF.md](HANDOFF.md)。
+更新：2026-11-10。接手請先讀 [HANDOFF.md](HANDOFF.md)。
 
 ## 決策
 
@@ -32,6 +32,7 @@
 | M6 Joplin 匯入 | 管線、進度頁、報告 | 已取消（使用者決定不做；`import_jobs` 表與 `markdown-it`、`tar`、`fflate` 依賴保留但未使用） |
 | M7 收尾 | 頁面歷史、手機版、快捷鍵、小字體、帳號稽核修正、備份 CLI、靜態檢查、CSP 稽核、HTTPS 冒煙、文件 | 已完成並驗證（見 VALIDATION 的 M7 段落） |
 | M8 離線筆記（使用者追加授權） | PWA 離線介面、一般筆記本機保存／新增／標題與內文編輯、前景自動同步、版本衝突與草稿救援 | 已實作，驗證結果見 VALIDATION 的 M8 段落 |
+| M9 離線擴充（使用者 2026-11-10 追加授權，全部項目） | 新附件上傳、留言與反應、資料庫離線閱讀、資料列值／新增列／列內文離線編輯、資料庫結構與視圖離線修改；可重送的操作佇列、逐格衝突比對、待同步清單的重試／覆蓋／匯出／捨棄 | 已實作，驗證結果見 VALIDATION 的 M9 段落 |
 
 ## 驗證紀錄
 
@@ -48,7 +49,18 @@
 - 可見頁面恢復連線、重新開啟與切回前景時自動上傳及下載更新。`GET /api/offline/manifest` 依 user_id 回傳樹、一般筆記版本／metadata／麵包屑、帳號 ID 與實際上傳上限，不讀取筆記內文；前端比對後只 GET 新增或變動的筆記，每分鐘檢查一次，待上傳佇列每 15 秒檢查。傳輸序列化，失敗以 15 秒起算指數退避至 5 分鐘（或更長的伺服器 retryAfterSeconds）；手動重試可立即檢查。沒有假設 `navigator.onLine` 等於伺服器可達，也不依賴 Background Sync，不保證關閉或鎖屏後即時同步。
 - 自動下載不覆蓋 pending 草稿；伺服器已移除的乾淨筆記標記 removed，離線讀取回 404，保留基準供尚未 flush 的編輯器救援。有衝突的草稿保留並停止該篇自動上傳。只有全部下載成功、無 pending 草稿且沒有儲存錯誤時，才記錄完整同步時間並顯示完成；網路失敗不誤報為本機儲存錯誤，也不顯示舊成功狀態冒充本輪完成。
 - Vite 建置輸出 manifest 與版本化 Service Worker，預快取主介面及所有本機動態資源。API JSON 不進共用 Cache Storage。附件只在成功授權且擁有者一致時寫入帳號獨立快取，改採每裝置／每帳號 500 MB 預設總容量，可調 100–10,000 MB（IndexedDB `attachments:<userId>`），不限制 20 MB／檔或 100 檔。Service Worker 序列化寫入，依 Content-Length 加總並清除較早快取，降低設定容量後以 message 觸發清理；單檔大於預算只在線上提供。401／404 不回退快取，下載與 sandbox 標頭保持原樣。檔案 HTTP 快取為 `private, no-cache`，避免不同登入共用未重新授權的瀏覽器快取。上傳預設 90 MB，與裝置快取設定獨立。
-- 一般筆記以外的頁面操作、資料庫、列屬性、搜尋、留言與新附件上傳仍需伺服器，不納入離線修改佇列。手機正式使用必須 HTTPS；私人瀏覽、手動清除網站資料與裝置空間不足可能導致本機內容不可用。更多操作限制見 [OFFLINE.md](OFFLINE.md)。
+- M8 當時一般筆記以外的操作都需伺服器；資料庫、列屬性、留言與新附件上傳已由 M9 納入離線（見下節），搜尋、歷史、最愛、搬移、垃圾桶、圖示／封面與新增資料庫仍需伺服器。手機正式使用必須 HTTPS；私人瀏覽、手動清除網站資料與裝置空間不足可能導致本機內容不可用。更多操作限制見 [OFFLINE.md](OFFLINE.md)。
+
+## M9 離線擴充協定（1.0.8）
+
+- **操作，不是草稿**：資料庫與留言的修改是小而可重送的操作（`src/shared/offline.ts` 的 `offlineOpSchema`：`row.create`／`row.update`、`property.*`、`view.*`、`annotation.*`）。新資料列、欄位、視圖、討論、留言與附件的 ID 一律由用戶端產生。`POST /api/offline/ops` 帶 `operationId`、`force` 與一項操作；migration `0008_offline_receipts` 記錄各帳號已執行的 operationId（保留 30 天），與操作在同一交易提交。重送同一 operationId 不再執行，只回傳目標目前的狀態；失敗的操作不留紀錄。所有服務仍以 `user_id` 查詢，他人資料回 404。
+- **衝突判定**：`row.update` 每格帶 `{ base, value }`，伺服器值等於 `value` 視為已套用、等於 `base` 則寫入，否則 409 並列出衝突欄位，整項操作不寫入；列名稱同理。結構操作帶 `baseVersion`（`schema_version`）。`force` 只在使用者於待同步清單明確選擇「以我的修改覆蓋」時設定，略過上述比對但仍驗證內容。留言操作不比對版本：留言以用戶端 `messageId` 附加一次、表情帶明確的 `on`、已解決取最後一次；刪除帶使用者看到的留言數，伺服器上留言較多（有沒看過的回覆）則 409，已不存在的討論可重複刪除；既有 REST 端點（`If-Match`）行為不變。
+- **用戶端佇列**（`src/client/offline/outbox.ts`）：`submitOp` 在連線且同一範圍（`db:<id>` 或 `ann:<pageId>`）沒有待送操作時直接送出，拒絕會回報給呼叫端且不保留；連線失敗則以同一 operationId 存入 IndexedDB（`op:<userId>:<排序鍵>`）。同一範圍的操作序列化送出；被拒絕的操作留下原因並擋住同範圍後續操作，其他範圍照常。結構操作成功後，接續其後、以前一版為基準的操作改用新版本；基準更舊的操作不改寫，輪到時回報衝突。
+- **裝置副本與畫面**：`db:<userId>:<id>` 保存 `{ stamp, meta, rows }`，`annotations:<userId>:<pageId>` 保存討論。顯示時以 `applyDatabaseOp`／`applyAnnotationOp`（純函式、可重複套用、不拋例外）把待送操作疊在副本上。伺服器確認的操作會併入副本並以回應為準。資料庫與留言的查詢在沒有待送操作且連得上時讀伺服器，否則讀裝置副本並標示；排序與篩選用共用的 `evaluateRows`。
+- **下載**：manifest 增加 `databases: { id, stamp }[]` 與 `annotations: { pageId, stamp }[]`（stamp 由結構版本、列數、列的屬性／內文版本總和與最後更新時間組成）。stamp 改變才 `GET /api/offline/databases/:id`（結構、全部資料列、資料庫頁面、列頁面摘要），再以 `GET /api/offline/pages?ids=`（每批 50）下載摘要不同的列頁面；全部存好才記錄 stamp。有待同步內文的列頁面不被覆蓋；線上刪除的乾淨副本標記 removed。
+- **列頁面**：`kind='row'` 的內文與一般筆記同樣先寫入 IndexedDB 再經 `PUT /api/offline/pages/:id` 同步；列名稱屬於儲存格，走 `row.update`，該端點對列不比對也不修改標題。離線新增的列先建立 `localOnly` 的本機頁面（基準版本 1，與伺服器新列相同），`row.create` 執行後才同步其內文。
+- **附件**（`src/client/offline/uploads.ts`）：`POST /api/files` 接受用戶端指定的 `id`，重送回傳同一檔案（200），他人已用的 ID 回 409。離線時檔案存入 Cache Storage `notes-uploads-<userId>`，鍵為正式網址，標頭由共用的 `src/shared/files.ts`（magic bytes 判定、只有四種圖片 inline、其餘 attachment＋`sandbox`）決定；Service Worker 只在伺服器回 404 或連線失敗、且目前登入者是擁有者時由此回應。上傳成功後移入一般附件快取。
+- **同步順序**：附件 → 操作佇列 → 筆記／列內文草稿 → 再跑一次操作佇列（離線新增頁面上的留言須等頁面建立）→ 下載。被伺服器拒絕而仍留在裝置上的附件，引用它的筆記不會送出。連線失敗、401 或 CSRF 被拒（同步途中換了登入）會中止整輪同步稍後重試，不記為個別項目的錯誤。任何待送項目存在時不宣稱同步完成，並阻止登出；換帳號時保留他人尚未同步的操作與附件，只清除乾淨副本。
 
 ## 介面版號與更新協定（1.0.6）
 

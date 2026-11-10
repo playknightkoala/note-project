@@ -1,6 +1,6 @@
 import type { Db } from '../db/driver.ts';
 import type { DatabaseDto, DatabaseProperty, DatabaseRow, PropertyInput, PropertyPatch, RowInput, CellValue, ViewConfig, ViewInput, RowsDto, ViewType } from '../../shared/database.ts';
-import { evaluateRows, propertyInputSchema, validateView, valueSchema, viewConfigSchema } from '../../shared/database.ts';
+import { evaluateRows, propertyInputSchema, pruneViewConfig, sameValue, validateView, valueSchema, viewConfigSchema } from '../../shared/database.ts';
 import { emptyParagraph } from '../../shared/blocks.ts';
 import { AppError } from '../../shared/errors.ts';
 import { loadPage } from './pages.ts';
@@ -15,8 +15,9 @@ function database(db: Db, userId: string, id: string): DatabasePage {
   if (row.kind !== 'database') throw new AppError('not_found', '找不到資料庫。');
   return row;
 }
-function assertVersion(actual: number, expected: number): void {
-  if (actual !== expected) throw new AppError('version_conflict', '資料已在其他地方更新，請重新載入後再修改。', { current: { version: actual } });
+/** `expected` is null only for a change the user explicitly chose to apply on top of whatever is there now. */
+function assertVersion(actual: number, expected: number | null): void {
+  if (expected !== null && actual !== expected) throw new AppError('version_conflict', '資料已在其他地方更新，請重新載入後再修改。', { current: { version: actual } });
 }
 function properties(db: Db, userId: string, id: string): DatabaseProperty[] {
   return db.all<PropertyRow>(`SELECT pr.* FROM db_properties pr JOIN pages p ON p.id = pr.database_id WHERE p.id = ? AND p.user_id = ? ORDER BY pr.position, pr.id`, id, userId)
@@ -35,34 +36,32 @@ function checkChoices(input: PropertyInput): void {
   if (!['select', 'multi_select'].includes(input.type) && input.choices.length) throw new AppError('bad_request', '只有單選與多選欄位能設定選項。');
   if (new Set(input.choices.map(choice => choice.label.toLowerCase())).size !== input.choices.length) throw new AppError('bad_request', '選項名稱不可重複。');
 }
-export function addProperty(db: Db, userId: string, id: string, input: PropertyInput, version: number, now: number): DatabaseDto {
+/** An id chosen by the client (`propertyId`, `viewId`, `rowId` below) makes the request repeatable: the second time nothing is added. */
+function alreadyThere(db: Db, table: 'db_properties' | 'db_views', id: string | undefined, databaseId: string): boolean {
+  if (!id) return false;
+  const existing = db.get<{ database_id: string }>(`SELECT database_id FROM ${table} WHERE id = ?`, id);
+  if (existing && existing.database_id !== databaseId) throw new AppError('conflict', '識別碼無法使用。');
+  return !!existing;
+}
+export function addProperty(db: Db, userId: string, id: string, input: PropertyInput, version: number | null, now: number, propertyId?: string): DatabaseDto {
   return db.transaction(() => {
-    assertVersion(database(db, userId, id).schema_version, version);
+    const page = database(db, userId, id);
+    if (alreadyThere(db, 'db_properties', propertyId, id)) return getDatabase(db, userId, id);
+    assertVersion(page.schema_version, version);
     checkChoices(input);
     const current = properties(db, userId, id);
     if (current.length >= 50) throw new AppError('conflict', '每個資料庫最多 50 個屬性。');
     db.run('INSERT INTO db_properties (id, database_id, name, type, options, position, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      crypto.randomUUID(), id, input.name, input.type, JSON.stringify({ choices: input.choices }), (current.at(-1)?.position ?? 0) + 1024, now);
+      propertyId ?? crypto.randomUUID(), id, input.name, input.type, JSON.stringify({ choices: input.choices }), (current.at(-1)?.position ?? 0) + 1024, now);
     return bumpSchema(db, userId, id, now);
   });
 }
-/**
- * Drops references to a property from saved views. `validChoices` narrows this to filters that name a choice which
- * no longer exists, so adding or renaming a choice leaves sorts and the remaining filters alone.
- */
 function pruneViews(db: Db, userId: string, id: string, propertyId: string, options: { remove: boolean; clearGrouping: boolean; validChoices?: Set<string> }): void {
-  const { remove, clearGrouping, validChoices } = options;
-  const views = getDatabase(db, userId, id).views;
-  for (const view of views) {
-    const config = { ...view.config,
-      sorts: validChoices ? view.config.sorts : view.config.sorts.filter(sort => sort.propertyId !== propertyId),
-      filters: view.config.filters.filter(filter => filter.propertyId !== propertyId || (validChoices !== undefined && (typeof filter.value !== 'string' || validChoices.has(filter.value)))),
-      ...(remove && view.config.columns ? { columns: view.config.columns.filter(col => col !== propertyId) } : {}) };
-    if (clearGrouping && config.groupBy === propertyId) delete config.groupBy;
-    db.run('UPDATE db_views SET config = ? WHERE id = ? AND database_id = ? AND EXISTS (SELECT 1 FROM pages WHERE id = db_views.database_id AND user_id = ?)', JSON.stringify(config), view.id, id, userId);
+  for (const view of getDatabase(db, userId, id).views) {
+    db.run('UPDATE db_views SET config = ? WHERE id = ? AND database_id = ? AND EXISTS (SELECT 1 FROM pages WHERE id = db_views.database_id AND user_id = ?)', JSON.stringify(pruneViewConfig(view.config, propertyId, options)), view.id, id, userId);
   }
 }
-export function updateProperty(db: Db, userId: string, id: string, propertyId: string, patch: PropertyPatch, version: number, now: number): DatabaseDto {
+export function updateProperty(db: Db, userId: string, id: string, propertyId: string, patch: PropertyPatch, version: number | null, now: number): DatabaseDto {
   return db.transaction(() => {
     assertVersion(database(db, userId, id).schema_version, version);
     const current = properties(db, userId, id).find(property => property.id === propertyId);
@@ -79,7 +78,7 @@ export function updateProperty(db: Db, userId: string, id: string, propertyId: s
     return bumpSchema(db, userId, id, now);
   });
 }
-export function deleteProperty(db: Db, userId: string, id: string, propertyId: string, version: number, now: number): DatabaseDto {
+export function deleteProperty(db: Db, userId: string, id: string, propertyId: string, version: number | null, now: number): DatabaseDto {
   return db.transaction(() => {
     assertVersion(database(db, userId, id).schema_version, version);
     if (!properties(db, userId, id).some(p => p.id === propertyId)) throw new AppError('not_found');
@@ -88,9 +87,11 @@ export function deleteProperty(db: Db, userId: string, id: string, propertyId: s
     return bumpSchema(db, userId, id, now);
   });
 }
-export function addView(db: Db, userId: string, id: string, input: ViewInput, version: number, now: number): DatabaseDto {
+export function addView(db: Db, userId: string, id: string, input: ViewInput, version: number | null, now: number, viewId?: string): DatabaseDto {
   return db.transaction(() => {
-    assertVersion(database(db, userId, id).schema_version, version);
+    const page = database(db, userId, id);
+    if (alreadyThere(db, 'db_views', viewId, id)) return getDatabase(db, userId, id);
+    assertVersion(page.schema_version, version);
     const meta = getDatabase(db, userId, id);
     if (meta.views.length >= 20) throw new AppError('conflict', '每個資料庫最多 20 個視圖。');
     const config = { ...input.config };
@@ -110,11 +111,11 @@ export function addView(db: Db, userId: string, id: string, input: ViewInput, ve
       config.groupBy = group.id;
     }
     const last = db.get<{ position: number }>('SELECT MAX(v.position) AS position FROM db_views v JOIN pages p ON p.id = v.database_id WHERE p.id = ? AND p.user_id = ?', id, userId)?.position ?? 0;
-    db.run('INSERT INTO db_views (id, database_id, name, type, config, position, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)', crypto.randomUUID(), id, input.name, input.type ?? 'table', JSON.stringify(config), last + 1024, now);
+    db.run('INSERT INTO db_views (id, database_id, name, type, config, position, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)', viewId ?? crypto.randomUUID(), id, input.name, input.type ?? 'table', JSON.stringify(config), last + 1024, now);
     return bumpSchema(db, userId, id, now);
   });
 }
-export function deleteView(db: Db, userId: string, id: string, viewId: string, version: number, now: number): DatabaseDto {
+export function deleteView(db: Db, userId: string, id: string, viewId: string, version: number | null, now: number): DatabaseDto {
   return db.transaction(() => {
     assertVersion(database(db, userId, id).schema_version, version);
     const views = getDatabase(db, userId, id).views;
@@ -124,7 +125,7 @@ export function deleteView(db: Db, userId: string, id: string, viewId: string, v
     return bumpSchema(db, userId, id, now);
   });
 }
-export function updateView(db: Db, userId: string, id: string, viewId: string, input: ViewInput, version: number, now: number): DatabaseDto {
+export function updateView(db: Db, userId: string, id: string, viewId: string, input: ViewInput, version: number | null, now: number): DatabaseDto {
   return db.transaction(() => {
     assertVersion(database(db, userId, id).schema_version, version);
     const error = validateView(input.config, properties(db, userId, id));
@@ -175,12 +176,18 @@ function writeValues(db: Db, userId: string, page: DatabasePage, values: Record<
     }
   }
 }
-export function addRow(db: Db, userId: string, id: string, input: RowInput, version: number, now: number): DatabaseRow {
+/** `version` is the structure the client built the row for; null when the values are checked against the current structure only. */
+export function addRow(db: Db, userId: string, id: string, input: RowInput, version: number | null, now: number, rowId: string = crypto.randomUUID()): DatabaseRow {
   return db.transaction(() => {
-    assertVersion(database(db, userId, id).schema_version, version);
+    const page = database(db, userId, id);
+    const existing = db.get<{ user_id: string; database_id: string | null; kind: string }>('SELECT user_id, database_id, kind FROM pages WHERE id = ?', rowId);
+    if (existing) {
+      if (existing.user_id !== userId || existing.kind !== 'row' || existing.database_id !== id) throw new AppError('conflict', '識別碼無法使用。');
+      return getRow(db, userId, rowId);
+    }
+    assertVersion(page.schema_version, version);
     const { n = 0, last = 0 } = db.get<{ n: number; last: number }>('SELECT COUNT(*) AS n, COALESCE(MAX(position),0) AS last FROM pages WHERE database_id = ? AND user_id = ?', id, userId) ?? {};
     if (n >= MAX_ROWS) throw new AppError('conflict', '每個資料庫最多 5,000 列（包含垃圾桶），請先永久刪除不需要的列。');
-    const rowId = crypto.randomUUID();
     db.run(`INSERT INTO pages (id,user_id,parent_id,database_id,kind,position,title,content,created_at,updated_at) VALUES (?,?,?,?,'row',?,?,?,?,?)`,
       rowId, userId, id, id, last + 1024, input.title ?? '', JSON.stringify([emptyParagraph()]), now, now);
     writeValues(db, userId, rowPage(db, userId, rowId), input.values, now);
@@ -196,14 +203,67 @@ export function updateRow(db: Db, userId: string, id: string, input: RowInput, v
     return getRow(db, userId, id);
   });
 }
+export interface CellChange { base: CellValue; value: CellValue }
+/**
+ * A change made without knowing the row's latest version (typically offline). Each cell says what it held when it was
+ * edited: a cell that still holds that value is updated, one that already holds the new value is left alone, anything
+ * else is a conflict naming the cells. With `force` the user has seen the conflict and chose their own values.
+ */
+export function changeRow(db: Db, userId: string, id: string, change: { title?: { base: string; value: string } | undefined; values: Record<string, CellChange> }, force: boolean, now: number): DatabaseRow {
+  return db.transaction(() => {
+    const page = rowPage(db, userId, id);
+    const current = getRow(db, userId, id);
+    const names = new Map(properties(db, userId, page.database_id!).map(property => [property.id, property.name]));
+    const conflicts: Record<string, CellValue> = {}, labels: string[] = [], values: Record<string, CellValue> = {};
+    for (const [propertyId, cell] of Object.entries(change.values)) {
+      if (!names.has(propertyId)) throw new AppError('not_found', '找不到屬性；欄位可能已在其他地方刪除。');
+      const actual = current.values[propertyId] ?? null;
+      if (sameValue(actual, cell.value)) continue;
+      if (!force && !sameValue(actual, cell.base)) { conflicts[propertyId] = actual; labels.push(names.get(propertyId)!); continue; }
+      values[propertyId] = cell.value;
+    }
+    let title = page.title;
+    if (change.title && change.title.value !== page.title) {
+      if (!force && change.title.base !== page.title) { conflicts.title = page.title; labels.unshift('名稱'); }
+      else title = change.title.value;
+    }
+    if (labels.length) throw new AppError('version_conflict', `「${labels.join('」、「')}」已在其他地方更新。`, { current: conflicts });
+    if (title === page.title && Object.keys(values).length === 0) return current;
+    writeValues(db, userId, page, values, now);
+    db.run('UPDATE pages SET title = ?, attributes_version = attributes_version + 1, updated_at = ? WHERE id = ? AND user_id = ?', title, now, id, userId);
+    return getRow(db, userId, id);
+  });
+}
+function allRows(db: Db, userId: string, id: string): DatabasePage[] {
+  const pages = db.all<DatabasePage>("SELECT * FROM pages WHERE database_id = ? AND user_id = ? AND kind = 'row' AND trashed_at IS NULL ORDER BY position, id LIMIT 5001", id, userId);
+  if (pages.length > MAX_ROWS) throw new AppError('conflict', '資料庫超過 5,000 列，請先整理資料。');
+  return pages;
+}
 export function listRows(db: Db, userId: string, id: string, config: ViewConfig, offset: number, limit: number): RowsDto {
   database(db, userId, id);
   const props = properties(db, userId, id);
   const error = validateView(config, props);
   if (error) throw new AppError('bad_request', error);
-  const pages = db.all<DatabasePage>("SELECT * FROM pages WHERE database_id = ? AND user_id = ? AND kind = 'row' AND trashed_at IS NULL ORDER BY position, id LIMIT 5001", id, userId);
-  if (pages.length > MAX_ROWS) throw new AppError('conflict', '資料庫超過 5,000 列，請先整理資料。');
   const values = readValues(db, userId, id);
-  const rows = evaluateRows(pages.map(page => rowDto(page, values.get(page.id) ?? {})), props, config);
+  const rows = evaluateRows(allRows(db, userId, id).map(page => rowDto(page, values.get(page.id) ?? {})), props, config);
   return { rows: rows.slice(offset, offset + limit), total: rows.length, limit, offset };
+}
+
+/** One entry per database; the stamp changes with its structure, its title and any row (values, title, content, count). */
+export function databaseStamps(db: Db, userId: string, id?: string): { id: string; stamp: string }[] {
+  return db.all<{ id: string; s: number; du: number; n: number; a: number; v: number; u: number }>(`SELECT d.id, d.schema_version AS s, d.updated_at AS du, COUNT(r.id) AS n,
+      COALESCE(SUM(r.attributes_version), 0) AS a, COALESCE(SUM(r.version), 0) AS v, COALESCE(MAX(r.updated_at), 0) AS u
+    FROM pages d LEFT JOIN pages r ON r.database_id = d.id AND r.user_id = d.user_id AND r.kind = 'row' AND r.trashed_at IS NULL
+    WHERE d.user_id = ? AND d.kind = 'database' AND d.trashed_at IS NULL ${id ? 'AND d.id = ?' : ''} GROUP BY d.id`, ...(id ? [userId, id] : [userId]))
+    .map(row => ({ id: row.id, stamp: [row.s, row.du, row.n, row.a, row.v, row.u].join('.') }));
+}
+
+/** The whole database in its stored order, for a device to keep: structure, every row, and the row pages without content. */
+export function snapshot(db: Db, userId: string, id: string): { stamp: string; meta: DatabaseDto; rows: DatabaseRow[]; pages: PageRow[] } {
+  return db.transaction(() => {
+    const meta = getDatabase(db, userId, id);
+    const values = readValues(db, userId, id);
+    const pages = allRows(db, userId, id);
+    return { stamp: databaseStamps(db, userId, id)[0]!.stamp, meta, rows: pages.map(page => rowDto(page, values.get(page.id) ?? {})), pages: pages.map(page => ({ ...page, content: '[]' })) };
+  });
 }

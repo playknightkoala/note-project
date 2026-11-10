@@ -11,7 +11,7 @@ import { NewRowInput } from './NewRowInput.tsx';
 
 interface Props {
   databaseId: string; properties: DatabaseProperty[]; rows: DatabaseRow[]; total: number; config: ViewConfig;
-  onSave: (row: DatabaseRow, propertyId: string, value: CellValue, version: number) => Promise<unknown>;
+  onSave: (row: DatabaseRow, propertyId: string, value: CellValue, base: CellValue) => Promise<unknown>;
   onReload: () => void; onEditProperty: (property: DatabaseProperty) => void; onConfig: (config: ViewConfig) => void;
   onFilter: (property: DatabaseProperty | null) => void;
   onTrash: (row: DatabaseRow) => void; hasMore: boolean; loadingMore: boolean; onMore: () => void;
@@ -88,9 +88,9 @@ export function DataGrid({ databaseId, properties, rows, total, config, onSave, 
         const rowItems = <><Menu.Item leftSection={<ExternalLink size={14} />} onClick={() => navigate(`/p/${row.id}`)}>開啟為頁面</Menu.Item><Menu.Item component="a" href={`/p/${row.id}`} target="_blank" rel="noopener noreferrer">在新分頁開啟</Menu.Item><Menu.Item color="red" leftSection={<Trash2 size={14} />} onClick={() => onTrash(row)}>移至垃圾桶</Menu.Item></>;
         return <ContextMenu key={row.id} label="資料列右鍵選單" items={rowItems}>{handlers => <div role="row" aria-rowindex={item.index + 2} className="database-grid-row" style={{ gridTemplateColumns: template, transform: `translateY(${item.start}px)` }} {...handlers}>
           {columns.map((column, col) => <div className="database-grid-slot" key={column.id}>
-            <EditableCell property={column.property} value={column.id === 'title' ? row.title : row.values[column.id] ?? null} version={row.version}
+            <EditableCell property={column.property} value={column.id === 'title' ? row.title : row.values[column.id] ?? null}
               label={`${row.title || '無標題'}／${column.name}`} rowIndex={item.index} columnIndex={col} tabIndex={active.row === item.index && active.col === col ? 0 : -1}
-              onFocus={() => { setActive({ row: item.index, col }); setActiveId(row.id); }} onSave={(value, version) => onSave(row, column.id, value, version)} onReload={onReload} />
+              onFocus={() => { setActive({ row: item.index, col }); setActiveId(row.id); }} onSave={(value, base) => onSave(row, column.id, value, base)} onReload={onReload} />
             {column.id === 'title' && <ActionIcon size="xs" className="database-open-row" variant="subtle" aria-label={`開啟資料列：${row.title || '無標題'}`} onClick={() => navigate(`/p/${row.id}`)}><ExternalLink size={13} /></ActionIcon>}
           </div>)}
           <Menu withinPortal position="bottom-end"><Menu.Target><ActionIcon variant="subtle" color="gray" aria-label={`資料列選單：${row.title || '無標題'}`}><MoreHorizontal size={16} /></ActionIcon></Menu.Target>
@@ -100,7 +100,7 @@ export function DataGrid({ databaseId, properties, rows, total, config, onSave, 
       })}
     </div>
     {Array.from({ length: blanks }, (_, index) => <div className="database-grid-row database-draft-row" key={`blank-${index}`} role="row" aria-rowindex={total + index + 2} style={{ gridTemplateColumns: template }}>
-      {columns.map(column => <div className="database-grid-slot" key={column.id}><EditableCell property={column.property} value={null} version={0} label={`空白列 ${index + 1}／${column.name}`} emptyLabel="" onReload={onReload}
+      {columns.map(column => <div className="database-grid-slot" key={column.id}><EditableCell property={column.property} value={null} label={`空白列 ${index + 1}／${column.name}`} emptyLabel="" onReload={onReload}
         onSave={value => value === null || value === '' ? Promise.resolve() : onCreate(column.id === 'title' && typeof value === 'string' ? value : '', column.id === 'title' ? {} : { [column.id]: value })} /></div>)}<div />
     </div>)}
     {rows.length === 0 && !blanks && <Text size="sm" c="dimmed" p="xl">沒有符合條件的資料列。</Text>}

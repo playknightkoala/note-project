@@ -1,7 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { PageDto, PageHeadDto, PageNode, PageResponse, TrashItemDto, VersionDto } from '@shared/api';
 import { api } from './client.ts';
-import { cachePage, createLocalNote, loadNote, loadTree, offlineNote, offlineStorageError, saveLocalContent, saveLocalTitle } from '../offline/notes.ts';
+import { cachePage, createLocalNote, hasDraft, loadNote, loadTree, offlineNote, offlineStorageError, renameLocalRow, saveLocalContent, saveLocalTitle } from '../offline/notes.ts';
+import { submitOp } from '../offline/outbox.ts';
 import { applyFavorite, applyMove, applyRename, applyTrash } from '../features/shell/treeIndex.ts';
 
 export const pageKeys = {
@@ -86,9 +87,16 @@ export function usePatchPage() {
   const queryClient = useQueryClient();
   return useMutation({
     networkMode: 'always',
-    mutationFn: async (input: { id: string; title?: string; localRevision?: string; icon?: string | null; coverFileId?: string | null; coverPreset?: string | null; coverPosition?: number; fullWidth?: boolean }) => {
-      const { id, localRevision, ...body } = input;
-      if (body.title !== undefined && (await offlineNote(id).catch(() => undefined))?.local.page.kind === 'page') return saveLocalTitle(id, body.title, localRevision);
+    mutationFn: async (input: { id: string; title?: string; /** The title this edit started from (rows only). */ baseTitle?: string; localRevision?: string; icon?: string | null; coverFileId?: string | null; coverPreset?: string | null; coverPosition?: number; fullWidth?: boolean }) => {
+      const { id, localRevision, baseTitle, ...body } = input;
+      const page = body.title !== undefined ? (await offlineNote(id).catch(() => undefined))?.local.page : undefined;
+      if (page?.kind === 'page') return saveLocalTitle(id, body.title!, localRevision);
+      if (page?.kind === 'row' && page.databaseId) {
+        // A row's name is one of its cells, so it travels with the row's other changes and also works offline.
+        await submitOp({ type: 'row.update', databaseId: page.databaseId, rowId: id, title: { base: baseTitle ?? page.title, value: body.title! }, values: {} });
+        const renamed = await renameLocalRow(id, body.title!);
+        if (renamed) return renamed;
+      }
       return api<PageResponse>('PATCH', `/api/pages/${id}`, { json: body });
     },
     onMutate: async input => {
@@ -118,7 +126,7 @@ export function useDuplicatePage() {
 const KEEPALIVE_LIMIT_BYTES = 60 * 1024;
 export async function saveContent(id: string, version: number, content: unknown[], { overwrite = false, localRevision, ...options }: { keepalive?: boolean; signal?: AbortSignal; overwrite?: boolean; localRevision?: string } = {}) {
   const note = await offlineNote(id).catch(() => undefined);
-  if (note?.local.page.kind === 'page') return saveLocalContent(id, content, localRevision);
+  if (note && hasDraft(note.local.page.kind)) return saveLocalContent(id, content, localRevision);
   // Browsers refuse keepalive requests above 64 KB outright; a plain request at least has a chance to complete.
   const { keepalive, ...rest } = options;
   const small = keepalive === true && new TextEncoder().encode(JSON.stringify(content)).length < KEEPALIVE_LIMIT_BYTES;

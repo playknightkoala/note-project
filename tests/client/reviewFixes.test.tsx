@@ -73,24 +73,49 @@ describe('autosave while an IME composition is open', () => {
 });
 
 describe('autosave on database row pages', () => {
-  it('does not mistake its own save, or unrelated local writes, for a remote update', async () => {
+  it('keeps the text on this device like a note, without mistaking its own save or unrelated local writes for a remote update', async () => {
     const response = pageOf('row'), initial = await cachePage(response);
-    const calls = stubApi((method, path) => method === 'PUT' && path === `/api/pages/${response.page.id}/content` ? { json: { version: 5, updatedAt: 2, title: '標題' } } : undefined);
+    const calls = stubApi(() => undefined);
     const reload = vi.fn();
     const { result } = renderHook(() => useAutosave({ pageId: response.page.id, initialVersion: 4, initialLocalRevision: initial.localRevision, getContent: () => [{ id: 'row-body' }], onRemoteUpdate: reload }));
     await act(async () => { result.current.markDirty(); await result.current.saveNow(); });
-    expect(calls.filter(call => call.method === 'PUT')).toHaveLength(1);
-    expect(result.current.state).toMatchObject({ status: 'clean', version: 5 });
+    // Offline: nothing is sent, the draft is stored and waits for the next sync.
+    expect(calls.filter(call => call.method === 'PUT')).toHaveLength(0);
+    expect(await offlineNote(response.page.id)).toMatchObject({ pending: true, local: { page: { kind: 'row', content: [{ id: 'row-body' }] } } });
+    expect(result.current.state).toMatchObject({ status: 'local', version: 4 });
     // Any write to the local store (the sync loop does one a minute) notifies every open editor.
     await act(async () => { await updateLocal(`tree:${me.id}`, () => []); });
     await tick();
     expect(reload).not.toHaveBeenCalled();
-    expect(result.current.state).toMatchObject({ status: 'clean', version: 5 });
+    expect(result.current.state).toMatchObject({ status: 'local', version: 4 });
     act(() => result.current.markDirty());
     await act(async () => { await updateLocal(`tree:${me.id}`, () => []); });
     await tick();
     expect(result.current.state.status).toBe('dirty');
-    expect(result.current.version()).toBe(5);
+    expect(result.current.version()).toBe(4);
+  });
+
+  it('syncs a row’s text through the offline endpoint, never its name, and only after a row made on this device exists on the server', async () => {
+    const response = pageOf('row', 1), initial = await cachePage(response);
+    await updateLocal<OfflineNote>(key(me.id, response.page.id), current => ({ ...current!, localOnly: true }));
+    await saveLocalContent(response.page.id, [{ id: 'row-body' }], initial.localRevision);
+    online(true);
+    const calls = stubApi((method, path, body) => {
+      if (path === '/api/auth/me') return { json: { user: me, csrfToken: 'synthetic-token' } };
+      if (path === '/api/offline/manifest') return { json: { userId: me.id, tree: [], pages: [], maxUploadBytes: 1, databases: [], annotations: [] } };
+      if (method === 'PUT') return { json: { page: { ...response.page, version: 2, content: (body as { content: unknown[] }).content }, breadcrumbs: [] } };
+      return undefined;
+    });
+    await syncNotes({ force: true });
+    expect(calls.filter(call => call.method === 'PUT')).toHaveLength(0);
+    expect(await offlineNote(response.page.id)).toMatchObject({ pending: true, localOnly: true });
+    // The queued "create row" has been carried out: now the page is an ordinary edit on version 1.
+    await updateLocal<OfflineNote>(key(me.id, response.page.id), current => ({ ...current!, localOnly: undefined }));
+    await syncNotes({ force: true });
+    const sent = calls.filter(call => call.method === 'PUT');
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ path: `/api/offline/pages/${response.page.id}`, body: { baseVersion: 1, content: [{ id: 'row-body' }] } });
+    expect(await offlineNote(response.page.id)).toMatchObject({ pending: false, base: { page: { version: 2 } } });
   });
 });
 
@@ -103,8 +128,8 @@ describe('edits made while a conflict is unresolved', () => {
     return { response, ...hook };
   }
 
-  it('keeps an ordinary note’s draft on the device, also when the page is left right away', async () => {
-    const { response, result, unmount } = await conflicted('page');
+  it.each(['page', 'row'] as const)('keeps the draft of a %s on the device, also when the page is left right away', async kind => {
+    const { response, result, unmount } = await conflicted(kind);
     await act(async () => { await updateLocal<OfflineNote>(key(me.id, response.page.id), current => ({ ...current!, pending: true, problem: '此頁面已在其他地方更新。', conflict: { version: 9, updatedAt: 3, title: '標題' } })); });
     await waitFor(() => expect(result.current.state.status).toBe('conflict'));
     act(() => result.current.markDirty());
@@ -113,8 +138,10 @@ describe('edits made while a conflict is unresolved', () => {
     await waitFor(async () => expect(await offlineNote(response.page.id)).toMatchObject({ pending: true, problem: '此頁面已在其他地方更新。', local: { page: { content: draft } } }));
   });
 
-  it('reports that a row’s edits cannot be stored, so leaving can be confirmed first', async () => {
-    const { response, result } = await conflicted('row');
+  it('reports that edits cannot be stored where this device has no copy of the page, so leaving can be confirmed first', async () => {
+    const response = pageOf('row');
+    const { result } = renderHook(() => useAutosave({ pageId: response.page.id, initialVersion: 4, getContent: () => draft, onRemoteUpdate: vi.fn() }));
+    await tick();
     stubApi((method, path) => method === 'PUT' && path.endsWith('/content') ? { status: 409, json: { error: { code: 'version_conflict', message: '此頁面已在其他地方更新。', details: { current: { version: 9, updatedAt: 3, title: '標題' } } } } } : undefined);
     await act(async () => { result.current.markDirty(); await result.current.saveNow(); });
     expect(result.current.state.status).toBe('conflict');
@@ -123,7 +150,7 @@ describe('edits made while a conflict is unresolved', () => {
     await act(async () => { kept = await result.current.keepDraft(true); });
     expect(kept).toBe(false);
     expect(result.current.unsavedConflict()).toBe(true);
-    expect((await offlineNote(response.page.id))?.local.page.content).toEqual([]);
+    expect(await offlineNote(response.page.id)).toBeUndefined();
   });
 });
 

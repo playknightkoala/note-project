@@ -6,27 +6,49 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { MessageSquare } from 'lucide-react';
 import { useMediaQuery } from '@mantine/hooks';
 import type { Annotation, ChangeAnnotation, CreateAnnotation } from '@shared/annotations';
+import type { OfflineOp } from '@shared/offline';
+import { newId } from '@shared/ids';
 import { isActiveAnnotation, REACTION_EMOJIS } from '@shared/annotations';
+import { applyAnnotationOp } from '@shared/offline';
 import { api, errorText } from '../../api/client.ts';
 import { useMe } from '../../api/auth.ts';
 import { IconPicker } from '../page/PageHeader.tsx';
 import { markAnnotation, removeAnnotation, updateAnnotationHighlights } from './annotationStyle.ts';
 import { readLocal, updateLocal } from '../../offline/storage.ts';
+import { hasQueued, localAnnotations, OUTBOX_EVENT, rememberAnnotations, submitOp, transient } from '../../offline/outbox.ts';
 import type { AppEditor } from './schema.ts';
 import { SelectionToolbar } from './SelectionToolbar.tsx';
 import { MobileSelectionTools } from './MobileSelectionTools.tsx';
 import { useUpdateGuard } from '../../updates/guards.ts';
 
 type Bookmark = ReturnType<AppEditor['prosemirrorState']['selection']['getBookmark']>;
+/** `local`: read from this device (offline, or while changes to this page's discussions wait to be synced). */
+interface Discussions { annotations: Annotation[]; local?: boolean }
+async function loadDiscussions(pageId: string, signal: AbortSignal): Promise<Discussions> {
+  if (!await hasQueued(`ann:${pageId}`)) {
+    try {
+      const loaded = await api<Discussions>('GET', `/api/pages/${pageId}/annotations`, { signal });
+      // What was just shown is what a change made right after a dropped connection has to be applied to.
+      void rememberAnnotations(pageId, loaded.annotations);
+      return loaded;
+    } catch (error) { if (!transient(error) || signal.aborted) throw error; }
+  }
+  return { annotations: await localAnnotations(pageId), local: true };
+}
 interface Pending { quote: string; blockIds: string[]; mode: 'comment' | 'reaction' }
 
 export function SelectionTools({ editor, pageId, composing = false, annotationsEnabled = true }: { editor: AppEditor; pageId: string; composing?: boolean; annotationsEnabled?: boolean }) {
   const mobile = useMediaQuery('(max-width: 767px), (pointer: coarse)', undefined, { getInitialValueInEffect: false });
   const client = useQueryClient();
   const me = useMe();
-  const path = `/api/pages/${pageId}/annotations`;
-  const queryKey = ['annotations', me.data?.id, pageId];
-  const annotations = useQuery({ queryKey, queryFn: ({ signal }) => api<{ annotations: Annotation[] }>('GET', path, { signal }), enabled: !!me.data && annotationsEnabled, refetchInterval: 15_000 });
+  const queryKey = useMemo(() => ['annotations', me.data?.id, pageId], [me.data?.id, pageId]);
+  const annotations = useQuery({ queryKey, queryFn: ({ signal }) => loadDiscussions(pageId, signal), enabled: !!me.data && annotationsEnabled, refetchInterval: 15_000, networkMode: 'always', retry: false });
+  useEffect(() => {
+    const refresh = () => { void client.invalidateQueries({ queryKey }); };
+    const changed = (event: Event) => { if ((event as CustomEvent<string>).detail === `ann:${pageId}`) refresh(); };
+    window.addEventListener(OUTBOX_EVENT, changed); window.addEventListener('online', refresh);
+    return () => { window.removeEventListener(OUTBOX_EVENT, changed); window.removeEventListener('online', refresh); };
+  }, [client, queryKey, pageId]);
   const highlightKey = me.data ? `annotation-highlights:${me.data.id}:${pageId}` : null;
   const [cachedHighlights, setCachedHighlights] = useState<{ key: string; ids: string[] } | null>(null);
   const highlightIds = useMemo(() => annotations.data
@@ -111,24 +133,34 @@ export function SelectionTools({ editor, pageId, composing = false, annotationsE
     networkMode: 'always',
     onMutate: () => client.cancelQueries({ queryKey }),
     mutationFn: async ({ create, change, remove }: { create?: CreateAnnotation; change?: { annotation: Annotation; input: ChangeAnnotation }; remove?: Annotation }): Promise<{ annotation?: Annotation; deletedId?: string }> => {
-      if (!annotationsEnabled) throw new Error('留言與反應需要連線，且筆記須先完成同步。');
-      if (remove) {
-        await api<void>('DELETE', `${path}/${remove.id}`, { headers: { 'If-Match': `"${remove.version}"` } });
-        return { deletedId: remove.id };
-      }
-      if (create) return api<{ annotation: Annotation }>('POST', path, { json: create });
-      if (!change) throw new Error('請選擇討論。');
-      return api<{ annotation: Annotation }>('PATCH', `${path}/${change.annotation.id}`, { json: change.input, headers: { 'If-Match': `"${change.annotation.version}"` } });
+      if (!annotationsEnabled) throw new Error('此頁面目前無法加入留言與反應。');
+      // Every change is a small operation with ids chosen here: sent now when possible, otherwise kept on this
+      // device and sent at the next sync, where a repeat cannot add a second copy.
+      const target = { pageId, annotationId: remove?.id ?? change?.annotation.id ?? newId() };
+      let op: OfflineOp;
+      if (remove) op = { type: 'annotation.delete', ...target, messages: remove.messages.length };
+      else if (create) op = { type: 'annotation.create', ...target, messageId: newId(), quote: create.quote, blockIds: create.blockIds, ...(create.text ? { text: create.text } : {}), ...(create.emoji ? { emoji: create.emoji } : {}), at: Date.now() };
+      else if (!change) throw new Error('請選擇討論。');
+      else if (change.input.action === 'comment') op = { type: 'annotation.comment', ...target, messageId: newId(), text: change.input.text, at: Date.now() };
+      else if (change.input.action === 'reaction') op = { type: 'annotation.reaction', ...target, emoji: change.input.emoji, on: !change.annotation.reactions.includes(change.input.emoji) };
+      else op = { type: 'annotation.resolve', ...target, resolved: change.input.resolved };
+      const result = await submitOp(op);
+      if (remove) return { deletedId: remove.id };
+      if (result.annotation) return { annotation: result.annotation };
+      // Stored on this device, but its discussion is not in the copy kept here: show the change on what is displayed.
+      const shown = result.queued ? applyAnnotationOp(change ? [change.annotation] : [], op).find(item => item.id === target.annotationId) : undefined;
+      if (!shown) throw new Error('這則討論已不存在，請重新載入。');
+      return { annotation: shown };
     },
     onSuccess: ({ annotation, deletedId }, variables) => {
       if (deletedId) {
-        client.setQueryData<{ annotations: Annotation[] }>(queryKey, current => ({ annotations: current?.annotations.filter(item => item.id !== deletedId) ?? [] }));
+        client.setQueryData<Discussions>(queryKey, current => ({ ...current, annotations: current?.annotations.filter(item => item.id !== deletedId) ?? [] }));
         removeAnnotation(editor, deletedId);
         setSelectedId(null); setDraft(''); setFailure(null); setPickerOpen(false);
         return;
       }
       if (!annotation) return;
-      client.setQueryData<{ annotations: Annotation[] }>(queryKey, current => ({ annotations: [...(current?.annotations.filter(item => item.id !== annotation.id) ?? []), annotation] }));
+      client.setQueryData<Discussions>(queryKey, current => ({ ...current, annotations: [...(current?.annotations.filter(item => item.id !== annotation.id) ?? []), annotation] }));
       if (variables.create && bookmark.current) {
         const selection = bookmark.current.resolve(editor.prosemirrorState.doc);
         if (!selection.empty) markAnnotation(editor, selection.from, selection.to, annotation.id);
@@ -161,7 +193,8 @@ export function SelectionTools({ editor, pageId, composing = false, annotationsE
     {mobile ? <MobileSelectionTools editor={editor} composing={composing} suspended={opened} onAnnotate={begin} /> : !composing && !opened && <DesktopFormattingToolbarController formattingToolbar={toolbar} />}
     <div className="selection-discussions"><Button variant="subtle" color="gray" size="compact-xs" leftSection={<MessageSquare size={14} />} onClick={() => { setPending(null); setSelectedId(null); setOpened(true); }}>留言與反應 {annotations.data?.annotations.filter(isActiveAnnotation).length || ''}</Button></div>
     <Drawer opened={opened} onClose={close} title="留言與表情反應" position="right" size="sm" keepMounted={false} closeOnClickOutside={false} closeButtonProps={{ 'aria-label': '關閉留言' }}>
-      {!annotationsEnabled && <Alert color="orange">留言與反應需要連線，且筆記須先完成同步。內文格式仍可離線編輯。</Alert>}
+      {!annotationsEnabled && <Alert color="orange">此頁面目前無法加入留言與反應。</Alert>}
+      {annotations.data?.local && <Text size="xs" c="orange" role="status" mb="xs">目前顯示此裝置上的留言；新增與修改已存此裝置，連線後自動同步。</Text>}
       <Stack gap="sm">
         {annotations.isError && <Alert color="red">{errorText(annotations.error)}<Button variant="subtle" onClick={() => { void annotations.refetch(); }}>重新載入</Button></Alert>}
         {failure && <Alert color="red" role="alert">{failure}</Alert>}

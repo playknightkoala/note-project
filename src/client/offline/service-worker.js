@@ -4,6 +4,8 @@ const VERSION = '__NOTES_VERSION__';
 const ASSETS = /* __NOTES_ASSETS__ */ [];
 const clientVersions = new Map();
 const FILE_PREFIX = 'notes-files-';
+/** Files added offline wait here, under their final address, until the page has uploaded them. Never trimmed. */
+const UPLOAD_PREFIX = 'notes-uploads-';
 const DEFAULT_FILE_BUDGET = 500 * 1024 * 1024;
 let fileCacheTask = Promise.resolve();
 function serializeFileCache(task) {
@@ -119,12 +121,20 @@ async function storeFile(owner, request, response) {
   finally { if (!stored) void response.body?.cancel().catch(() => {}); }
 }
 
+/** The signed-in account's own file that has not reached the server yet. The page stored it with download-safe headers. */
+async function pendingUpload(owner, request) {
+  if (!owner || await currentUser() !== owner) return undefined;
+  return (await caches.open(UPLOAD_PREFIX + owner)).match(request.url);
+}
+
 async function fileResponse(event) {
   const request = event.request;
   const owner = await currentUser();
   try {
     // The browser's HTTP cache may revalidate with the ETag (304), so an unchanged file is not downloaded again.
     const response = await fetch(request);
+    // The server does not know a file that is still waiting on this device; that is the only 404 answered locally.
+    if (response.status === 404) return await pendingUpload(owner, request) ?? response;
     if (owner && response.ok && response.status === 200 && response.headers.get('x-notes-user') === owner && response.headers.has('content-length')) {
       const work = storeFile(owner, request, response.clone());
       if (event.waitUntil) event.waitUntil(work);
@@ -133,7 +143,7 @@ async function fileResponse(event) {
     return response;
   } catch {
     if (owner && await currentUser() === owner) {
-      const cached = await (await caches.open(FILE_PREFIX + owner)).match(request);
+      const cached = await (await caches.open(FILE_PREFIX + owner)).match(request) ?? await pendingUpload(owner, request);
       if (cached) return cached;
     }
     return new Response('此附件尚未下載至此裝置，請連線後再開啟。', { status: 503, headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' } });

@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { AdminUserDto, AuthStatusDto, InviteDto, LoginInput, RegisterInput, SessionDto, UserDto } from '@shared/api';
 import { api, isApiError, setCsrfToken } from './client.ts';
-import { cachedUser, forgetOfflineData, offlineNotes, rememberUser, revokeOfflineEntry, transient } from '../offline/notes.ts';
+import { cachedUser, forgetOfflineData, rememberUser, revokeOfflineEntry, transient, unsyncedWork } from '../offline/notes.ts';
 
 export const authKeys = { me: ['me'] as const, status: ['auth', 'status'] as const, users: ['admin', 'users'] as const, invites: ['admin', 'invites'] as const };
 
@@ -47,7 +47,7 @@ export function useLogout() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async () => {
-      if ((await offlineNotes()).some(note => note.pending)) throw new Error('此裝置仍有尚未同步的筆記，請先同步或匯出草稿，再登出。');
+      if ((await unsyncedWork()).total > 0) throw new Error('此裝置仍有尚未同步的筆記、資料庫或留言修改，或待上傳的附件。請先同步，或在「離線與同步」匯出並捨棄後，再登出。');
       await api<void>('POST', '/api/auth/logout');
       await forgetOfflineData();
     },

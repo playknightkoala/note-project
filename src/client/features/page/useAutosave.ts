@@ -2,7 +2,7 @@ import { useCallback, useEffect, useReducer, useRef } from 'react';
 import type { PageHeadDto } from '@shared/api';
 import { fetchHead, saveContent } from '../../api/pages.ts';
 import { isApiError } from '../../api/client.ts';
-import { isLocalWriter, offlineNote, resolveLocalNote, saveLocalContent, syncNotes } from '../../offline/notes.ts';
+import { hasDraft, isLocalWriter, offlineNote, resolveLocalNote, saveLocalContent, syncNotes } from '../../offline/notes.ts';
 import type { LocalHead } from '../../offline/notes.ts';
 import { OFFLINE_EVENT } from '../../offline/storage.ts';
 import { useUpdateGuard } from '../../updates/guards.ts';
@@ -63,9 +63,9 @@ export function useAutosave({ pageId, initialVersion, initialLocalRevision, getC
   const clearTimers = () => { const r = ref.current; if (r.timer) clearTimeout(r.timer); if (r.retry) clearTimeout(r.retry); r.timer = null; r.retry = null; };
 
   /**
-   * While a conflict is unresolved nothing is uploaded, but the text must not exist only in memory: ordinary notes
-   * keep their draft on this device. Returns false when the draft could not be stored (online-only pages, or another
-   * tab owns the newer local draft).
+   * While a conflict is unresolved nothing is uploaded, but the text must not exist only in memory: notes and rows
+   * keep their draft on this device. Returns false when the draft could not be stored (no copy of the page on this
+   * device, or another tab owns the newer local draft).
    */
   const keepDraft = useCallback(async (force = false): Promise<boolean> => {
     const r = ref.current;
@@ -75,7 +75,8 @@ export function useAutosave({ pageId, initialVersion, initialLocalRevision, getC
     if (!content) { arm(COMPOSING_RETRY_MS); return false; }
     r.inFlight = true; clearTimers();
     try {
-      if ((await offlineNote(pageId).catch(() => undefined))?.local.page.kind !== 'page') return false;
+      const kind = (await offlineNote(pageId).catch(() => undefined))?.local.page.kind;
+      if (!kind || !hasDraft(kind)) return false;
       r.dirty = false;
       const head = await saveLocalContent(pageId, content, localRevision.current);
       localRevision.current = head.localRevision;
@@ -147,7 +148,7 @@ export function useAutosave({ pageId, initialVersion, initialLocalRevision, getC
     const r = ref.current;
     clearTimers();
     const local = await offlineNote(pageId).catch(() => undefined);
-    if (local?.local.page.kind === 'page') {
+    if (local && hasDraft(local.local.page.kind)) {
       try {
         if (localConflict.current && choice === 'reload') {
           // Another tab's unsynced draft is the latest local version, not something to discard on the server.
@@ -184,9 +185,8 @@ export function useAutosave({ pageId, initialVersion, initialLocalRevision, getC
     const refresh = () => { void offlineNote(pageId).then(note => {
       const r = ref.current;
       if (!active || !note || r.inFlight) return;
-      // Only ordinary notes are edited through the local store. Rows and databases are cached there for reading
-      // but saved through the API, so their cached copy says nothing about this editor's state.
-      if (note.local.page.kind !== 'page') return;
+      // Notes and rows are edited through the local store. A database page has no text and is only cached there.
+      if (!hasDraft(note.local.page.kind)) return;
       if (note.removed && !note.pending) { dispatch({ type: 'error', message: '此筆記已在線上刪除；若有本機修改，請先保存或匯出草稿。', offline: false }); return; }
       if (note.problem) {
         if (note.conflict) { localConflict.current = false; dispatch({ type: 'conflict', head: note.conflict }); }
@@ -240,7 +240,7 @@ export function useAutosave({ pageId, initialVersion, initialLocalRevision, getC
   }, [pageId]);
 
   const setVersion = useCallback((version: number, revision?: string) => { ref.current.version = version; localRevision.current = revision; dispatch({ type: 'version', version }); }, []);
-  /** Saves pending edits and resolves once they are stored (locally for notes, on the server for rows). */
+  /** Saves pending edits and resolves once they are stored on this device (or on the server, where there is no local copy). */
   const settle = useCallback(async () => {
     const deadline = now() + 10_000;
     while (ref.current.inFlight && now() < deadline) await new Promise(resolve => setTimeout(resolve, 25));

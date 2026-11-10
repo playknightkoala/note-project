@@ -5,7 +5,9 @@ import type { AppEnv } from '../app.ts';
 import { AppError } from '../../shared/errors.ts';
 import { requireAuth, requireCsrf } from '../auth/middleware.ts';
 import { requestBodyLimit } from './validate.ts';
-import { blobPath, deleteFile, fileDto, loadFile, saveFile, servesInline } from '../services/storage.ts';
+import { blobPath, deleteFile, fileDto, loadFile, saveFile } from '../services/storage.ts';
+import { fileHeaders } from '../../shared/files.ts';
+import { pageIdSchema } from '../../shared/api.ts';
 
 /** Boundary lines and part headers around the single `file` field. */
 const MULTIPART_OVERHEAD_BYTES = 16 * 1024;
@@ -29,9 +31,12 @@ export function fileRoutes(): Hono<AppEnv> {
     const part = form.get('file');
     if (!(part instanceof File)) throw new AppError('bad_request', '缺少 file 欄位。');
     if (part.size > deps.config.maxUploadBytes) throw new AppError('payload_too_large', `檔案超過 ${Math.round(deps.config.maxUploadBytes / 1024 / 1024)} MB。`);
+    // An id chosen by the client makes the upload repeatable: a file queued on a device may be sent more than once.
+    const id = form.get('id');
+    if (id !== null && (typeof id !== 'string' || !pageIdSchema.safeParse(id).success)) throw new AppError('bad_request', '檔案識別碼格式不正確。');
     const bytes = new Uint8Array(await part.arrayBuffer());
-    const row = saveFile(deps.db, deps.config.dataDir, userId, { bytes, originalName: part.name, declaredMime: part.type || undefined }, deps.now());
-    return c.json(fileDto(row), 201);
+    const row = saveFile(deps.db, deps.config.dataDir, userId, { bytes, originalName: part.name, declaredMime: part.type || undefined, ...(id ? { id } : {}) }, deps.now());
+    return c.json(fileDto(row), row.created ? 201 : 200);
   });
 
   app.get('/:id/:name?', c => {
@@ -42,13 +47,10 @@ export function fileRoutes(): Hono<AppEnv> {
     const path = blobPath(deps.config.dataDir, row.sha256);
     let size: number;
     try { size = statSync(path).size; } catch { throw new AppError('not_found', '檔案內容遺失。'); }
-    const inline = servesInline(row.mime);
-    const disposition = `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(row.original_name)}`;
     const headers: Record<string, string> = {
-      'Content-Type': row.mime, 'Content-Length': String(size), ETag: etag, 'Cache-Control': 'private, no-cache', 'X-Notes-User': c.get('auth')!.user.id,
-      'Content-Disposition': disposition, 'X-Content-Type-Options': 'nosniff', 'Cross-Origin-Resource-Policy': 'same-origin', 'Referrer-Policy': 'no-referrer',
+      ...fileHeaders(row.mime, row.original_name),
+      'Content-Length': String(size), ETag: etag, 'Cache-Control': 'private, no-cache', 'X-Notes-User': c.get('auth')!.user.id,
     };
-    if (!inline) headers['Content-Security-Policy'] = 'sandbox';
     if (c.req.method === 'HEAD') return c.body(null, 200, headers);
     return c.body(Readable.toWeb(createReadStream(path)) as ReadableStream, 200, headers);
   });
