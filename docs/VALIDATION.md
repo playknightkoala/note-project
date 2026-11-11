@@ -1,5 +1,16 @@
 # 驗證紀錄
 
+## 瀏覽器分頁的標題與圖示跟著頁面（2026-11-11，版本 1.1.6）
+
+- 範圍：只改前端（新增 `src/client/app/documentHead.ts`，接入 `PageRoute.tsx` 與 `PublicView.tsx`）。沒有 API、migration，沒有新增或升級任何依賴，CSP 不變。以下實測在版號仍為 1.1.5 時完成；使用者指定 1.1.6 後只改了版號、更新資訊與文件，並重跑本機檢查與容器檢查（見本段最後的「發布前檢查」）。
+- 自動化測試：新增 `tests/client/documentHead.test.tsx` 6 項（標題的寫法與空標題；表情圖示的 SVG 可解析、圖示文字中的標記符號當成文字；標題與圖示跟著變、移除圖示回到 LOGO 且不動 manifest 連結；沒有圖示時保留原本的 LOGO 連結；載入中不動；離開後還原）。
+- 實際命令（Node 22.23.1）：`npm run check`（typecheck、lint、**39 檔／293 tests**、build）全部通過。
+- 瀏覽器實測：新增 `scripts/check-tab-title.mjs`（playwright-core 驅動系統 Chrome，headless，macOS），對「建置後以空資料目錄啟動的 `dist/server/index.js`」與下述容器各跑一次，皆 **11 項通過**、沒有頁面錯誤：首頁是「Notes」與 LOGO；有圖示的頁面是「Welcome to Notes | Notes」與 👋，圖示連結只有一個、瀏覽器可以解碼；在頁面上改標題後分頁標題跟著變；用圖示選擇器換圖示、移除圖示（回到 LOGO）、再新增圖示都跟著變；從側邊欄切到沒有圖示的頁面是「TEST | Notes」與 LOGO；清空標題是「無標題 | Notes」；資料庫頁面相同；進垃圾桶後還原為「Notes」與 LOGO；公開連結頁相同。headless 沒有分頁列，另把圖示以 16／32／64 px 與 LOGO 並排畫出來截圖，已人工檢視。既有的 `scripts/check-edited-time.mjs`（7 項）與 `scripts/check-find.mjs`（11 項）對本機建置重跑通過。
+- 實測中調整：表情符號原本畫得比 LOGO 小一圈，比較幾種排法後改為置中並放大到接近填滿（`font-size` 96、`dominant-baseline="central"`）。
+- 容器：`NOTES_PORT=18090 docker compose -p notes-tab-check up -d --build --wait`（獨立專案與暫用 volume，不動 `notes_notes-data`）healthy，`/healthz` 200；`node scripts/check-tab-title.mjs http://127.0.0.1:18090` 11 項通過；`node scripts/check-app.mjs http://127.0.0.1:18090` 40 項檢查通過（exit 0）。驗證後 `down -v --rmi local` 移除。
+- 沒有驗證的部分：真正的分頁列外觀（headless 沒有分頁列，只確認標題、圖示連結與圖示可以畫出來）；表情符號在 Windows／Linux／Android 字型下的大小與位置（實測機為 macOS）；Safari、Firefox、實體手機與正式環境；別人共用的頁面（站內成員）沒有另外跑瀏覽器實測（與自己的頁面同一個元件）；其他既有瀏覽器腳本（`check-share.mjs` 等）這次沒有重跑。正式環境尚未部署。
+- 發布前檢查（版號 1.1.6，Node 22.23.1）：`package.json` 與 `package-lock.json` 以 `npm version 1.1.6 --no-git-tag-version` 更新，沒有調整任何依賴版本；`src/server/releases.ts` 新增 1.1.6 的更新資訊，發布說明見 `docs/releases/1.1.6.md`。`npm run check`（typecheck、lint、39 檔／293 tests、build）全部通過，建置出的 `sw.js` 版號為 1.1.6。容器：`NOTES_PORT=18090 docker compose -p notes-release-check up -d --build --wait`（獨立專案，不動 `notes_notes-data`）healthy，`/healthz` 200，`GET /api/version` 回報 1.1.6 與本版更新資訊，`scripts/check-tab-title.mjs` 11 項通過，`scripts/check-app.mjs` 40 項檢查通過；驗證後已移除。
+
 ## 頂列顯示最後編輯時間（2026-11-11，版本 1.1.5）
 
 - 範圍：只改前端（新增 `src/client/features/page/relativeTime.ts`、`EditedTime.tsx`，接入 `PageRoute.tsx`、`TopBar.tsx`，樣式在 `editor.css`）。沒有 API、migration，沒有新增或升級任何依賴。以下實測在版號仍為 1.1.4 時完成；使用者指定 1.1.5 後只改了版號、更新資訊與文件，並重跑本機檢查與容器檢查（見本段最後的「發布前檢查」）。

@@ -27,6 +27,7 @@ import { CellDisplay } from '../database/CellValueInput.tsx';
 import { PageHeader } from '../page/PageHeader.tsx';
 import { AttachmentList } from './AttachmentList.tsx';
 import { ErrorBoundary } from '../../app/ErrorBoundary.tsx';
+import { useDocumentHead } from '../../app/documentHead.ts';
 
 type Blocks = PartialBlock<typeof schema.blockSchema, typeof schema.inlineContentSchema, typeof schema.styleSchema>[];
 const nothing = () => {};
@@ -69,7 +70,7 @@ function PublicPages({ token, pageId, share, error: shareError }: { token: strin
   const id = pageId ?? share?.rootId;
   const page = useQuery({ queryKey: ['public', token, id], queryFn: () => api<PublicPageDto>('GET', `/api/public/${token}/pages/${id}`), enabled: !!id && !!share, retry: false });
   const title = page.data?.page.title;
-  useEffect(() => { if (title !== undefined) document.title = title || '無標題'; }, [title]);
+  useDocumentHead(title, page.data?.page.icon);
   const links = useMemo<PageLinks>(() => ({ pages: share?.tree ?? [], href: target => publicLinkPath(token, target) }), [share, token]);
   const databaseAccess = useMemo<DatabaseAccess>(() => ({ canEditRows: false, canManage: false, rowHref: target => publicLinkPath(token, target) }), [token]);
   const error = shareError ?? page.error;

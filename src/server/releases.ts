@@ -2,6 +2,11 @@ import type { VersionInfo } from '../shared/version.ts';
 import { isNewerVersion } from '../shared/version.ts';
 
 const releases: VersionInfo['releases'] = [
+  { version: '1.1.6', title: '瀏覽器分頁的標題與圖示跟著頁面', changes: [
+    '開啟頁面時，瀏覽器分頁標題是「頁面標題 | Notes」，不再固定顯示「Notes」。',
+    '分頁圖示跟著頁面的圖示；換圖示或移除圖示時立刻更新，沒有圖示的頁面顯示 Notes 的 LOGO。',
+    '公開連結頁的分頁也是同樣的標題與圖示。',
+  ] },
   { version: '1.1.5', title: '頁面頂列顯示最後編輯時間', changes: [
     '筆記頁頂列在「已同步」旁顯示最後編輯時間，例如「已於 4 小時前 編輯」；滑鼠停留可看完整時間。',
     '頁面開著時會自動更新；在這裡編輯後立刻變成「剛剛編輯」。超過 7 天改顯示日期。',

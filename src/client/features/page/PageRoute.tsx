@@ -9,6 +9,7 @@ import { hasDraft, loadNote, offlineNote, syncNotes } from '../../offline/notes.
 import type { LocalPageResponse } from '../../offline/notes.ts';
 import { exportPageDraft } from '../../offline/exportDraft.ts';
 import { useUiState } from '../../app/uiState.tsx';
+import { useDocumentHead } from '../../app/documentHead.ts';
 import { BlockEditor } from '../editor/BlockEditor.tsx';
 import { FindBar } from '../editor/FindBar.tsx';
 import type { FindBarHandle } from '../editor/FindBar.tsx';
@@ -80,6 +81,7 @@ function PageView({ initial }: { initial: LocalPageResponse }) {
   const editedAt = Math.max(editedHere, initial.page.updatedAt);
   const touch = useCallback(() => setEditedAt(Date.now()), []);
   const [meta, setMeta] = useState({ title: initial.page.title, icon: initial.page.icon, fullWidth: initial.page.fullWidth, coverUrl: initial.page.coverUrl, coverPosition: initial.page.coverPosition });
+  useDocumentHead(meta.title, meta.icon);
   useEffect(() => { rememberPage(pageId); expandMany(initial.breadcrumbs.slice(0, -1).map(b => b.id)); }, [pageId, rememberPage, expandMany, initial.breadcrumbs]);
 
   const replaceContent = useCallback((content: unknown[]) => {

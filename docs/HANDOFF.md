@@ -4,7 +4,19 @@
 
 桌面側欄「…」選單滑鼠移入即消失已修正：Portal 選單離開頁面列的 hover／focus 區域後，原本會讓定位按鈕 display:none，Mantine 因此隱藏選單。現在以 `menuOpened`／`data-menu-open` 在開啟期間保留按鈕可見。`scripts/check-sidebar-menu.mjs` 已先重現失敗再驗證通過，包含滑鼠、實際選單動作、右鍵、Escape、鍵盤與點外關閉；129 tests、typecheck、lint、build、容器及 30 項靜態檢查通過。詳見 VALIDATION 對應段落。
 
-## 本輪工作：頂列顯示最後編輯時間，版本 1.1.5（2026-11-11，已發布 v1.1.5；正式環境尚未部署）
+## 本輪工作：瀏覽器分頁的標題與圖示跟著頁面，版本 1.1.6（2026-11-11，已發布 v1.1.6；正式環境尚未部署）
+
+使用者附 Notion 的分頁截圖（「Welcome to Notion | Notion」與 👋；沒有圖示的頁面是「TEST | Notion」與 Notion 的 LOGO），要求比照：分頁圖示跟著筆記的圖示，沒有圖示時顯示原本的 LOGO。
+
+- 開啟頁面時分頁標題是「頁面標題 | Notes」（沒有標題是「無標題 | Notes」），分頁圖示是頁面的表情圖示；沒有圖示時是 `/notes-icon.svg`。改標題、換圖示、移除圖示時立刻跟著變。離開頁面（首頁、垃圾桶、設定）還原為「Notes」與 LOGO。
+- 實作在 `src/client/app/documentHead.ts`（`useDocumentHead`），由 `PageRoute.tsx` 的 `PageView` 與 `PublicView.tsx` 的公開連結頁呼叫；細節見 ARCHITECTURE 的「瀏覽器分頁的標題與圖示」。
+- 公開連結頁原本的分頁標題只有頁面標題，現在也是「頁面標題 | Notes」並帶圖示（計畫中列明，使用者已核准計畫）。
+- 首頁、垃圾桶、設定、登入頁維持「Notes」，沒有各自的標題（使用者沒有要求）。
+- 新增瀏覽器驗收腳本 `scripts/check-tab-title.mjs`（需要全新的測試實例）。
+- 版號 1.1.6 由使用者指定（實作完成時維持 1.1.5 未動，使用者下達「commit+push+release 1.1.6」後才更新 `package.json`／lock、`src/server/releases.ts` 與 `docs/releases/1.1.6.md`）。
+- 驗證見 VALIDATION 最上方段落。
+
+## 前輪工作：頂列顯示最後編輯時間，版本 1.1.5（2026-11-11，已發布 v1.1.5；正式環境尚未部署）
 
 使用者指出頁面頂列目前只顯示「已同步」，並附 Notion「已於 4 小時前 編輯」的截圖，問能不能也顯示。
 
