@@ -2,6 +2,11 @@ import type { VersionInfo } from '../shared/version.ts';
 import { isNewerVersion } from '../shared/version.ts';
 
 const releases: VersionInfo['releases'] = [
+  { version: '1.1.5', title: '頁面頂列顯示最後編輯時間', changes: [
+    '筆記頁頂列在「已同步」旁顯示最後編輯時間，例如「已於 4 小時前 編輯」；滑鼠停留可看完整時間。',
+    '頁面開著時會自動更新；在這裡編輯後立刻變成「剛剛編輯」。超過 7 天改顯示日期。',
+    '手機的頂列放不下，改列在頁面選單（⋯）最底部。',
+  ] },
   { version: '1.1.4', title: '頁面內尋找與取代', changes: [
     '在筆記頁按 Ctrl+F（macOS ⌘F）或頁面選單「尋找與取代」，右上角出現尋找列，標出所有結果與目前第幾筆。',
     'Enter／Shift+Enter 或箭頭切換結果，會自動捲到該處並展開收合的折疊列表。',

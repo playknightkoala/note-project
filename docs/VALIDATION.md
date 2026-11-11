@@ -1,5 +1,16 @@
 # 驗證紀錄
 
+## 頂列顯示最後編輯時間（2026-11-11，版本 1.1.5）
+
+- 範圍：只改前端（新增 `src/client/features/page/relativeTime.ts`、`EditedTime.tsx`，接入 `PageRoute.tsx`、`TopBar.tsx`，樣式在 `editor.css`）。沒有 API、migration，沒有新增或升級任何依賴。以下實測在版號仍為 1.1.4 時完成；使用者指定 1.1.5 後只改了版號、更新資訊與文件，並重跑本機檢查與容器檢查（見本段最後的「發布前檢查」）。
+- 自動化測試：新增 `tests/client/editedTime.test.tsx` 4 項（分鐘／小時／天的邊界與無條件捨去、滿 7 天顯示日期與跨年、時間比裝置時鐘晚視為剛剛；元件每 30 秒重算並跟著新的編輯時間更新）。
+- 實際命令（Node 22.23.1）：`npm run check`（typecheck、lint、**38 檔／287 tests**、build）全部通過。
+- 瀏覽器實測：新增 `scripts/check-edited-time.mjs`（playwright-core 驅動系統 Chrome，headless，macOS；把瀏覽器時鐘撥快 4 小時 5 分來模擬舊筆記），對「建置後以空資料目錄啟動的 `dist/server/index.js`」與下述容器各跑一次，皆 **7 項通過**、沒有頁面錯誤：頂列在「已同步」左邊同一列顯示「已於 4 小時前 編輯」，滑鼠停留有完整時間；頁面開著一小時後自動變成「已於 5 小時前 編輯」；在內文打字後立刻變成「剛剛編輯」，保存完成後仍與「已同步」並列；三分鐘後變成「已於 3 分鐘前 編輯」；資料庫頁面不顯示；390 寬的頂列不顯示、改列在頁面選單底部；電腦寬度的頁面選單不重複顯示。截圖（淺色、深色、手機選單）已人工檢視。既有的 `scripts/check-find.mjs` 對本機建置重跑，11 項 PASS（尋找列仍掛在頂列下方）。
+- 容器：`NOTES_PORT=18090 docker compose -p notes-edited-check up -d --build --wait`（獨立專案與暫用 volume，不動 `notes_notes-data`）healthy，`/healthz` 200；`node scripts/check-edited-time.mjs http://127.0.0.1:18090` 7 項通過；`node scripts/check-app.mjs http://127.0.0.1:18090` 40 項檢查通過（exit 0）。驗證後 `down -v --rmi local` 移除。
+- 已知限制：時間取自頁面的 `updatedAt`，改圖示、封面、全寬、搬移、加入或移除最愛也會讓它變新，不只內文與標題。
+- 沒有驗證的部分：別人或其他分頁修改後由版本輪詢帶來的時間更新沒有另外跑瀏覽器實測（與既有的載入新內容同一條路徑）；唯讀共用成員與離線狀態下的顯示沒有另外實測；背景分頁回到前景時的重算只有程式邏輯，沒有實測；沒有在 Safari、Firefox、實體手機或正式環境驗收；其他既有瀏覽器腳本（`check-share.mjs` 等）這次沒有重跑。正式環境尚未部署。
+- 發布前檢查（版號 1.1.5，Node 22.23.1）：`package.json` 與 `package-lock.json` 以 `npm version 1.1.5 --no-git-tag-version` 更新，沒有調整任何依賴版本；`src/server/releases.ts` 新增 1.1.5 的更新資訊，發布說明見 `docs/releases/1.1.5.md`。`npm run check`（typecheck、lint、38 檔／287 tests、build）全部通過，建置出的 `sw.js` 版號為 1.1.5。容器：`NOTES_PORT=18090 docker compose -p notes-release-check up -d --build --wait`（獨立專案，不動 `notes_notes-data`）healthy，`/healthz` 200，`GET /api/version` 回報 1.1.5 與本版更新資訊，`scripts/check-edited-time.mjs` 7 項通過，`scripts/check-app.mjs` 40 項檢查通過；驗證後已移除。
+
 ## 頁面內尋找與取代（2026-11-11，版本 1.1.4）
 
 - 範圍：只改前端（新增 `src/client/features/editor/findReplace.ts`、`FindBar.tsx`，接入 `PageRoute.tsx`、`TopBar.tsx`、`PageMenuItems.tsx`、`PublicView.tsx`，樣式在 `editor.css`）。沒有 API、migration，沒有新增或升級任何依賴。以下實測在版號仍為 1.1.3 時完成；使用者指定 1.1.4 後只改了版號、更新資訊與文件，並重跑本機檢查與容器檢查（見本段最後的「發布前檢查」）。

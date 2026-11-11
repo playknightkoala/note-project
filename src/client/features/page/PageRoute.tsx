@@ -75,6 +75,10 @@ function PageView({ initial }: { initial: LocalPageResponse }) {
   useTableBleed(pageRef, bodyRef);
   /** The title as last sent from here or received; a row's rename says which title it started from. */
   const sentTitle = useRef(initial.page.title);
+  // Edits made here count from this device's clock; what arrives from elsewhere carries the server's time.
+  const [editedHere, setEditedAt] = useState(initial.page.updatedAt);
+  const editedAt = Math.max(editedHere, initial.page.updatedAt);
+  const touch = useCallback(() => setEditedAt(Date.now()), []);
   const [meta, setMeta] = useState({ title: initial.page.title, icon: initial.page.icon, fullWidth: initial.page.fullWidth, coverUrl: initial.page.coverUrl, coverPosition: initial.page.coverPosition });
   useEffect(() => { rememberPage(pageId); expandMany(initial.breadcrumbs.slice(0, -1).map(b => b.id)); }, [pageId, rememberPage, expandMany, initial.breadcrumbs]);
 
@@ -101,6 +105,7 @@ function PageView({ initial }: { initial: LocalPageResponse }) {
           replaceContent(fresh.page.content);
           sentTitle.current = fresh.page.title;
           setMeta({ title: fresh.page.title, icon: fresh.page.icon, fullWidth: fresh.page.fullWidth, coverUrl: fresh.page.coverUrl, coverPosition: fresh.page.coverPosition });
+          setEditedAt(fresh.page.updatedAt);
           autosave.setVersion(fresh.page.version, fresh.localRevision);
         }).catch(error => setRefreshError(errorText(error)));
     },
@@ -111,11 +116,12 @@ function PageView({ initial }: { initial: LocalPageResponse }) {
     if (replacingRef.current || (remoteContentRef.current !== null && JSON.stringify(editorRef.current?.document) === remoteContentRef.current)) return;
     remoteContentRef.current = null;
     localRevisionRef.current++;
+    touch();
     autosave.markDirty();
-  }, [autosave]);
+  }, [autosave, touch]);
   /** A reader without edit access never saves: the marks of their own discussions exist on their screen only. */
   const ignoreChange = useCallback(() => {}, []);
-  const onCompositionSettled = useCallback(() => { localRevisionRef.current++; autosave.markDirty(); }, [autosave]);
+  const onCompositionSettled = useCallback(() => { localRevisionRef.current++; touch(); autosave.markDirty(); }, [autosave, touch]);
   const onComposingChange = useCallback(() => { if (replacingRef.current) return; localRevisionRef.current++; autosave.markComposing(); }, [autosave]);
   const [actionError, setActionError] = useState<string | null>(null);
 
@@ -149,8 +155,8 @@ function PageView({ initial }: { initial: LocalPageResponse }) {
   }, [autosave, initial.page.kind, pageId]);
   const saveTitle = useCallback((title: string) => {
     const baseTitle = sentTitle.current; sentTitle.current = title;
-    localRevisionRef.current++; setMeta(m => ({ ...m, title })); patch.mutate({ id: pageId, title, baseTitle, localRevision: autosave.localRevision() });
-  }, [patch, pageId, autosave]);
+    localRevisionRef.current++; touch(); setMeta(m => ({ ...m, title })); patch.mutate({ id: pageId, title, baseTitle, localRevision: autosave.localRevision() });
+  }, [patch, pageId, autosave, touch]);
   const saveIcon = useCallback((icon: string | null) => { setMeta(m => ({ ...m, icon })); patch.mutate({ id: pageId, icon }); }, [patch, pageId]);
   const saveCover = useCallback((cover: string | null) => {
     if (cover === null) { setMeta(m => ({ ...m, coverUrl: null })); patch.mutate({ id: pageId, coverFileId: null, coverPreset: null }); return; }
@@ -175,7 +181,7 @@ function PageView({ initial }: { initial: LocalPageResponse }) {
     <TopBar page={currentPage} breadcrumbs={initial.breadcrumbs}
       saveStatus={autosave.state.status} saveError={autosave.state.error} onRetry={() => { void autosave.saveNow(); }}
       onToggleFullWidth={toggleFullWidth}
-      smallText={smallText} onToggleSmallText={toggleSmallText} onOpenHistory={() => setHistoryOpen(true)} access={access} {...(hasText ? { onFind: openFind } : {})} />
+      smallText={smallText} onToggleSmallText={toggleSmallText} onOpenHistory={() => setHistoryOpen(true)} access={access} editedAt={hasText ? editedAt : undefined} {...(hasText ? { onFind: openFind } : {})} />
     {hasText && <FindBar ref={findRef} editor={getEditor} canReplace={!readOnly} />}
     {!access && <HistoryDrawer pageId={pageId} opened={historyOpen} onClose={() => setHistoryOpen(false)} currentVersion={autosave.state.version}
       prepare={prepareRestore} onRestored={() => { if (editorRef.current) void autosave.resolveConflict('reload'); else window.location.reload(); }} />}

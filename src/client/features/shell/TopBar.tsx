@@ -9,6 +9,7 @@ import { useShareDialog } from '../share/ShareDialog.tsx';
 import { PageMenuItems } from './PageMenuItems.tsx';
 import { useShell } from './AppShell.tsx';
 import { SaveStatus } from '../page/SaveStatus.tsx';
+import { EditedTime, useEditedLabel } from '../page/EditedTime.tsx';
 import type { SaveState } from '../page/useAutosave.ts';
 
 interface Props {
@@ -20,9 +21,12 @@ interface Props {
   onOpenHistory: () => void;
   access?: PageAccess | undefined;
   onFind?: () => void;
+  /** When the page was last edited; shown beside the save status, and in the menu where the bar has no room. Absent for a database, whose rows are edited on their own. */
+  editedAt?: number | undefined;
 }
 
-export function TopBar({ page, breadcrumbs, saveStatus, saveError, onRetry, onToggleFullWidth, smallText, onToggleSmallText, onOpenHistory, access, onFind }: Props) {
+export function TopBar({ page, breadcrumbs, saveStatus, saveError, onRetry, onToggleFullWidth, smallText, onToggleSmallText, onOpenHistory, access, onFind, editedAt }: Props) {
+  const edited = useEditedLabel(editedAt);
   const isMobile = useMediaQuery('(max-width: 767px)');
   const shell = useShell();
   const tree = useTree();
@@ -40,6 +44,7 @@ export function TopBar({ page, breadcrumbs, saveStatus, saveError, onRetry, onTo
     {(isMobile || !shell.sidebarOpen) && <Burger opened={shell.sidebarOpen} onClick={shell.toggleSidebar} size="sm" aria-label="開啟側邊欄" title="側邊欄（Ctrl / ⌘ \\）" />}
     <Breadcrumbs separator="/" className="topbar__crumbs">{visibleCrumbs}</Breadcrumbs>
     <span style={{ flex: 1 }} />
+    {editedAt !== undefined && <EditedTime at={editedAt} />}
     <SaveStatus status={saveStatus} error={saveError} onRetry={onRetry} />
     {access && <Tooltip label={`${access.owner.name} 與你共用`}><Badge variant="light" color={access.role === 'editor' ? 'blue' : 'gray'} className="topbar__access">{roleLabels[access.role]}</Badge></Tooltip>}
     {!access && page.kind !== 'row' && <Button variant={shared ? 'light' : 'subtle'} color={shared ? 'blue' : 'gray'} size="compact-sm" leftSection={<Users size={14} />} className="topbar__share"
@@ -48,6 +53,7 @@ export function TopBar({ page, breadcrumbs, saveStatus, saveError, onRetry, onTo
       <Menu.Target><ActionIcon variant="subtle" color="gray" aria-label="頁面選單"><MoreHorizontal size={18} /></ActionIcon></Menu.Target>
       <Menu.Dropdown>
         <PageMenuItems page={page} access={access} onToggleFullWidth={onToggleFullWidth} smallText={smallText} onToggleSmallText={onToggleSmallText} onOpenHistory={onOpenHistory} {...(onFind ? { onFind } : {})} />
+        {edited && <div className="edited-time-menu"><Menu.Divider /><Menu.Label>{edited}</Menu.Label></div>}
       </Menu.Dropdown>
     </Menu>
   </div>;
