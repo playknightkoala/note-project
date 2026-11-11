@@ -1,5 +1,16 @@
 # 驗證紀錄
 
+## 頁面內尋找與取代（2026-11-11，版本 1.1.4）
+
+- 範圍：只改前端（新增 `src/client/features/editor/findReplace.ts`、`FindBar.tsx`，接入 `PageRoute.tsx`、`TopBar.tsx`、`PageMenuItems.tsx`、`PublicView.tsx`，樣式在 `editor.css`）。沒有 API、migration，沒有新增或升級任何依賴。以下實測在版號仍為 1.1.3 時完成；使用者指定 1.1.4 後只改了版號、更新資訊與文件，並重跑本機檢查與容器檢查（見本段最後的「發布前檢查」）。
+- 自動化測試：新增 `tests/client/findReplace.test.tsx` 12 項（比對：不分大小寫、跨樣式、不跨區塊與頁面連結、表格／巢狀／程式碼區塊；高亮與上下一個、搜尋不改動筆記 JSON；從指定位置開始與編輯後重算；單筆取代保留樣式並前進、取代文字含搜尋文字不重複取代、全部取代一次復原、唯讀不取代；尋找列的 Ctrl+F、Enter、取代、Esc、重新開啟保留搜尋文字、唯讀不顯示取代、輸入法組字中不動作、第二次 Ctrl+F 與對話框開啟時不攔截）。
+- 實際命令（Node 22.23.1）：`npm run check`（typecheck、lint、**37 檔／283 tests**、build）全部通過。
+- 瀏覽器實測：新增 `scripts/check-find.mjs`（playwright-core 驅動系統 Chrome，headless，macOS），對「建置後以空資料目錄啟動的 `dist/server/index.js`」與下述容器各跑一次，皆 **11 項 PASS**、沒有頁面錯誤：⌘F 開啟並聚焦、5 筆結果與計數、尋找列在頂列下方（頁面頂端與捲動後）；Enter／Shift+Enter／箭頭／⌘G 切換，跨粗體的結果、目前結果捲入畫面、收合的折疊列表自動展開、最後一筆回到第一筆；「取代」只改一筆並由自動保存送到伺服器（以 API 讀回內容確認）；「全部取代」改掉其餘 4 筆、顯示「已取代 4 處」、粗體樣式保留；Esc 關閉、高亮清除、焦點回內文，⌘Z 一次還原全部取代並保存；頁面選單「尋找與取代」可開啟且保留上次搜尋文字，在尋找欄位再按 ⌘F 會關閉；雙擊選取文字後開啟會帶入並從該處開始；390 寬不超出畫面；資料庫頁面不出現尋找列；深色模式；公開連結可尋找、沒有取代按鈕。截圖（淺色、深色、手機、公開連結）已人工檢視，與使用者提供的 Notion 截圖版面相符。
+- 實測中發現並修正：(1) 雙擊選字後數十毫秒內按 ⌘F 時，編輯器內部的選取狀態尚未同步，帶不到選取文字；改為直接讀畫面上的選取範圍，唯讀頁面也因此可帶入。(2) 頁面在最上方時（上方有離線狀態列）尋找列蓋住頂列右側按鈕；改為掛在頂列下方。
+- 容器：`NOTES_PORT=18090 docker compose -p notes-find-check up -d --build --wait`（獨立專案與暫用 volume，不動 `notes_notes-data`）healthy，`/healthz` 200；`node scripts/check-find.mjs http://127.0.0.1:18090` 11 項 PASS；`node scripts/check-app.mjs http://127.0.0.1:18090` 40 項檢查通過（exit 0）。驗證後 `down -v --rmi local` 移除。
+- 沒有驗證的部分：真實輸入法（注音等）在尋找欄位的組字只以 jsdom 模擬事件測試；瀏覽器「交還內建尋找」只確認尋找列關閉且事件未被攔截，headless 無法觀察瀏覽器自己的尋找介面；Windows／Linux 的 Ctrl+F 只有 jsdom 測試（實測機為 macOS）；沒有在 Safari、Firefox、實體手機或正式環境驗收；唯讀共用成員（站內帳號）的頁面沒有另外跑瀏覽器實測（與公開連結共用同一個 `canReplace=false` 路徑，另有單元測試）；其他既有瀏覽器腳本（`check-share.mjs` 等）這次沒有重跑。正式環境尚未部署。
+- 發布前檢查（版號 1.1.4，Node 22.23.1）：`package.json` 與 `package-lock.json` 以 `npm version 1.1.4 --no-git-tag-version` 更新，沒有調整任何依賴版本；`src/server/releases.ts` 新增 1.1.4 的更新資訊，發布說明見 `docs/releases/1.1.4.md`。`npm run check`（typecheck、lint、37 檔／283 tests、build）全部通過，建置出的 `sw.js` 版號為 1.1.4。容器：`NOTES_PORT=18090 docker compose -p notes-find-check up -d --build --wait`（獨立專案，不動 `notes_notes-data`）healthy，`/healthz` 200，`GET /api/version` 回報 1.1.4 與本版更新資訊，`scripts/check-find.mjs` 11 項 PASS，`scripts/check-app.mjs` 40 項檢查通過；驗證後已移除。
+
 ## 封面與標題間距、桌面封面撐滿內容區（2026-11-11，版本 1.1.3）
 
 - 範圍：只改前端版面（`PageHeader.tsx`、`PublicView.tsx`、`editor.css`、`database.css`）。沒有 migration，沒有新增或升級任何依賴。以下實測在版號仍為 1.1.2 時完成；使用者指定 1.1.3 後只改了版號、更新資訊與文件，並重跑本機檢查與容器檢查。

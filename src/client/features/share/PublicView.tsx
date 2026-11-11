@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { PartialBlock } from '@blocknote/core';
 import { BlockNoteView } from '@blocknote/mantine';
@@ -15,6 +15,7 @@ import { api, errorText, isApiError } from '../../api/client.ts';
 import { openShareLink, shareKeys } from '../../api/shares.ts';
 import { RequireAuth } from '../auth/RequireAuth.tsx';
 import { dictionary } from '../editor/dictionary.ts';
+import { FindBar } from '../editor/FindBar.tsx';
 import { schema } from '../editor/schema.ts';
 import { PageLinkContext } from '../editor/pageLink/PageLinkContext.ts';
 import type { PageLinks } from '../editor/pageLink/PageLinkContext.ts';
@@ -133,7 +134,9 @@ function PublicBlocks({ content, fullWidth }: { content: unknown[]; fullWidth: b
     ...(content.length ? { initialContent: content as Blocks } : {}),
     links: { onClick: event => { const href = (event.target as HTMLAnchorElement | null)?.closest('a')?.getAttribute('href'); if (href) window.open(href, '_blank', 'noopener'); return false; } },
   });
+  const getEditor = useCallback(() => editor, [editor]);
   return <div className={`block-editor${fullWidth ? ' block-editor--full' : ''}`}>
+    <FindBar editor={getEditor} canReplace={false} />
     <BlockNoteView editor={editor} editable={false} theme={scheme} slashMenu={false} emojiPicker={false} formattingToolbar={false} sideMenu={false} linkToolbar={false} filePanel={false} tableHandles={false} />
   </div>;
 }

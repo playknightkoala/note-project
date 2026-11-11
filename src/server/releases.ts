@@ -2,6 +2,12 @@ import type { VersionInfo } from '../shared/version.ts';
 import { isNewerVersion } from '../shared/version.ts';
 
 const releases: VersionInfo['releases'] = [
+  { version: '1.1.4', title: '頁面內尋找與取代', changes: [
+    '在筆記頁按 Ctrl+F（macOS ⌘F）或頁面選單「尋找與取代」，右上角出現尋找列，標出所有結果與目前第幾筆。',
+    'Enter／Shift+Enter 或箭頭切換結果，會自動捲到該處並展開收合的折疊列表。',
+    '按取代圖示可逐筆取代或全部取代；全部取代按一次復原即可還原。',
+    '唯讀共用頁與公開連結只能尋找。在尋找欄位再按一次 Ctrl+F 會改用瀏覽器自己的尋找。',
+  ] },
   { version: '1.1.3', title: '封面版面調整：標題不再貼著封面，電腦版封面撐滿', changes: [
     '有封面、沒有圖示的頁面，標題與封面之間留出間距，不再貼在一起。',
     '有圖示時，圖示一半壓在封面下緣並完整顯示，不再被封面遮住。',

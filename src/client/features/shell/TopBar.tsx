@@ -19,9 +19,10 @@ interface Props {
   smallText: boolean; onToggleSmallText: () => void;
   onOpenHistory: () => void;
   access?: PageAccess | undefined;
+  onFind?: () => void;
 }
 
-export function TopBar({ page, breadcrumbs, saveStatus, saveError, onRetry, onToggleFullWidth, smallText, onToggleSmallText, onOpenHistory, access }: Props) {
+export function TopBar({ page, breadcrumbs, saveStatus, saveError, onRetry, onToggleFullWidth, smallText, onToggleSmallText, onOpenHistory, access, onFind }: Props) {
   const isMobile = useMediaQuery('(max-width: 767px)');
   const shell = useShell();
   const tree = useTree();
@@ -46,7 +47,7 @@ export function TopBar({ page, breadcrumbs, saveStatus, saveError, onRetry, onTo
     <Menu position="bottom-end" shadow="md" width={220}>
       <Menu.Target><ActionIcon variant="subtle" color="gray" aria-label="頁面選單"><MoreHorizontal size={18} /></ActionIcon></Menu.Target>
       <Menu.Dropdown>
-        <PageMenuItems page={page} access={access} onToggleFullWidth={onToggleFullWidth} smallText={smallText} onToggleSmallText={onToggleSmallText} onOpenHistory={onOpenHistory} />
+        <PageMenuItems page={page} access={access} onToggleFullWidth={onToggleFullWidth} smallText={smallText} onToggleSmallText={onToggleSmallText} onOpenHistory={onOpenHistory} {...(onFind ? { onFind } : {})} />
       </Menu.Dropdown>
     </Menu>
   </div>;

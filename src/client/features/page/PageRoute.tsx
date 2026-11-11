@@ -10,6 +10,8 @@ import type { LocalPageResponse } from '../../offline/notes.ts';
 import { exportPageDraft } from '../../offline/exportDraft.ts';
 import { useUiState } from '../../app/uiState.tsx';
 import { BlockEditor } from '../editor/BlockEditor.tsx';
+import { FindBar } from '../editor/FindBar.tsx';
+import type { FindBarHandle } from '../editor/FindBar.tsx';
 import type { AppEditor } from '../editor/schema.ts';
 import type { schema } from '../editor/schema.ts';
 import { TopBar } from '../shell/TopBar.tsx';
@@ -56,6 +58,10 @@ function PageView({ initial }: { initial: LocalPageResponse }) {
   const patch = usePatchPage();
   const { rememberPage, expandMany } = useUiState();
   const editorRef = useRef<AppEditor | null>(null);
+  const getEditor = useCallback(() => editorRef.current, []);
+  const findRef = useRef<FindBarHandle>(null);
+  const hasText = initial.page.kind !== 'database';
+  const openFind = useCallback(() => findRef.current?.open(), []);
   const replacingRef = useRef(false);
   const remoteContentRef = useRef<string | null>(null);
   const localRevisionRef = useRef(0);
@@ -164,12 +170,13 @@ function PageView({ initial }: { initial: LocalPageResponse }) {
   const currentPage = { id: pageId, kind: initial.page.kind, title: meta.title, icon: meta.icon, fullWidth: meta.fullWidth };
   const toggleFullWidth = () => { const fullWidth = !meta.fullWidth; setMeta(m => ({ ...m, fullWidth })); patch.mutate({ id: pageId, fullWidth }); };
 
-  return <ContextMenu label="頁面右鍵選單" items={<PageMenuItems page={currentPage} access={access} onToggleFullWidth={toggleFullWidth} smallText={smallText} onToggleSmallText={toggleSmallText} onOpenHistory={() => setHistoryOpen(true)} />}>
+  return <ContextMenu label="頁面右鍵選單" items={<PageMenuItems page={currentPage} access={access} onToggleFullWidth={toggleFullWidth} smallText={smallText} onToggleSmallText={toggleSmallText} onOpenHistory={() => setHistoryOpen(true)} {...(hasText ? { onFind: openFind } : {})} />}>
     {handlers => <div className="page" ref={pageRef} {...handlers}>
     <TopBar page={currentPage} breadcrumbs={initial.breadcrumbs}
       saveStatus={autosave.state.status} saveError={autosave.state.error} onRetry={() => { void autosave.saveNow(); }}
       onToggleFullWidth={toggleFullWidth}
-      smallText={smallText} onToggleSmallText={toggleSmallText} onOpenHistory={() => setHistoryOpen(true)} access={access} />
+      smallText={smallText} onToggleSmallText={toggleSmallText} onOpenHistory={() => setHistoryOpen(true)} access={access} {...(hasText ? { onFind: openFind } : {})} />
+    {hasText && <FindBar ref={findRef} editor={getEditor} canReplace={!readOnly} />}
     {!access && <HistoryDrawer pageId={pageId} opened={historyOpen} onClose={() => setHistoryOpen(false)} currentVersion={autosave.state.version}
       prepare={prepareRestore} onRestored={() => { if (editorRef.current) void autosave.resolveConflict('reload'); else window.location.reload(); }} />}
     {access && <Text size="xs" c="dimmed" className="shared-banner" role="status">{access.owner.name} 與你共用這個頁面 · {roleLabels[access.role]}{readOnly ? '：可以閱讀、留言與加表情' : initial.page.kind === 'database' ? '：可以修改資料列，也可以留言' : '：可以修改內文與標題，也可以留言'}</Text>}
