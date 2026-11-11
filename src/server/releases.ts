@@ -2,6 +2,12 @@ import type { VersionInfo } from '../shared/version.ts';
 import { isNewerVersion } from '../shared/version.ts';
 
 const releases: VersionInfo['releases'] = [
+  { version: '1.1.3', title: '封面版面調整：標題不再貼著封面，電腦版封面撐滿', changes: [
+    '有封面、沒有圖示的頁面，標題與封面之間留出間距，不再貼在一起。',
+    '有圖示時，圖示一半壓在封面下緣並完整顯示，不再被封面遮住。',
+    '電腦版的封面撐滿整個內容區；手機版維持原本的大小。',
+    '封面圖片比畫面窄時會等比例放大並裁切上下，可用「調整位置」選擇顯示的部分。',
+  ] },
   { version: '1.1.2', title: '公開連結與「知道連結的本站帳號」共用一個連結', changes: [
     '每個分享只有一個連結：分享視窗只顯示公開連結，不再顯示頁面網址。',
     '打開公開連結後，下方才出現「知道連結的本站帳號」：與未登入相同、皆可唯讀或皆可編輯。',

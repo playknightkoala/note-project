@@ -10,16 +10,26 @@
 .history-item--active { background: var(--app-selection); }
 .history-preview { border: 1px solid var(--app-border); border-radius: var(--app-radius); padding: 8px; }
 .history-preview__text { margin: 0; white-space: pre-wrap; font: inherit; font-size: 13px; line-height: 1.5; }
-.page-header { margin-bottom: 8px; }
+.page-header { margin-bottom: 8px; --page-cover-height: clamp(200px, 30vh, 320px); }
 .page-header--cover { margin-top: -48px; }
-.page-cover { position: relative; height: 30vh; min-height: 200px; max-height: 320px; margin: 0 -96px 0; background-size: cover; background-position-x: center; user-select: none; }
+.page-cover { position: relative; height: var(--page-cover-height); margin: 0 -96px 0; background-size: cover; background-position-x: center; user-select: none; }
 .page-cover__actions { position: absolute; right: 16px; bottom: 12px; opacity: 0; transition: opacity 120ms; }
 .page-cover:hover .page-cover__actions { opacity: 1; }
 .page-cover__hint { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); padding: 4px 10px; border-radius: 4px; background: rgba(0,0,0,0.55); color: #fff; font-size: 12px; pointer-events: none; }
-.page-header--cover .page-header__body { margin-top: -36px; }
+/* Below a cover: the icon straddles the cover's bottom edge by half its height; without an icon the title keeps a clear gap. */
+.page-header--cover .page-header__body { padding-top: 12px; }
+.page-header--cover.page-header--icon .page-header__body { margin-top: -36px; padding-top: 0; }
+@media (min-width: 768px) {
+  /* Desktop: the cover spans the whole content area, not only the reading column. It leaves the flow and stretches to
+     the edges of the positioned page; the header's padding keeps its place and the negative margin lifts it back there. */
+  .page, .public-main { position: relative; }
+  .page-header--cover { padding-top: var(--page-cover-height); }
+  .page-cover { position: absolute; left: 0; right: 0; margin: calc(-1 * var(--page-cover-height)) 0 0; }
+}
 .page-header__tools { opacity: 0; transition: opacity 120ms; min-height: 28px; }
 .page-header:hover .page-header__tools, .page-header__tools:focus-within { opacity: 1; }
-.page-icon { display: block; font-size: 64px; line-height: 1; margin: 0 0 8px; padding: 4px; border: 0; border-radius: 8px; background: transparent; cursor: pointer; }
+/* Positioned so the half that overlaps the cover paints above it (the cover is positioned too). */
+.page-icon { position: relative; z-index: 1; display: block; font-size: 64px; line-height: 1; margin: 0 0 8px; padding: 4px; border: 0; border-radius: 8px; background: transparent; cursor: pointer; }
 .page-icon:hover { background: var(--app-hover); }
 .icon-picker { width: 352px; }
 .icon-picker__root { display: flex; flex-direction: column; height: 320px; }
@@ -127,8 +137,9 @@
   .page-body { padding: 16px 16px 30vh; }
   .page-title { font-size: 30px; }
   .page-icon { font-size: 48px; }
-  .page-cover { margin: 0 -16px; height: 160px; min-height: 0; }
+  .page-cover { margin: 0 -16px; height: 160px; }
   .page-header--cover { margin-top: -16px; }
+  .page-header--cover.page-header--icon .page-header__body { margin-top: -28px; }
   .page-header__tools { opacity: 1; }
   .block-editor .bn-editor { padding-inline: 36px 0; }
   .tree-row__actions { display: inline-flex; }
@@ -148,11 +159,12 @@
 .attachment-list a { display: inline-flex; align-items: center; gap: 4px; overflow-wrap: anywhere; }
 .readonly-selection-bar { position: fixed; z-index: 300; display: flex; align-items: center; gap: 2px; padding: 4px; background: var(--app-bg); border: 1px solid var(--app-border); border-radius: 8px; box-shadow: 0 6px 20px rgba(0,0,0,0.15); }
 .public-layout { display: flex; align-items: flex-start; flex: 1; min-width: 0; }
-.public-layout > .page-body { flex: 1; min-width: 0; }
+.public-main { flex: 1; min-width: 0; }
 .public-nav { position: sticky; top: 52px; flex: none; width: 240px; max-height: calc(100vh - 60px); overflow: auto; padding: 12px 8px; border-right: 1px solid var(--app-border); }
 .public-nav .tree-row { text-decoration: none; }
 @media (max-width: 767px) {
   .public-layout { flex-direction: column; }
+  .public-main { width: 100%; }
   .public-nav { position: static; width: 100%; max-height: 180px; border-right: 0; border-bottom: 1px solid var(--app-border); box-sizing: border-box; }
   .shared-banner { padding: 6px 16px 0; }
   .topbar__share .mantine-Button-label { display: none; }

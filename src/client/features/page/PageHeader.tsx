@@ -49,7 +49,7 @@ export function PageHeader({ title, icon, coverUrl, coverPosition, onTitle, onIc
   };
   const gradientIndex = coverUrl?.startsWith('gradient:') ? Number(coverUrl.slice(9)) : -1;
   const coverStyle = coverUrl && gradientIndex < 0 ? { backgroundImage: `url("${coverUrl}")`, backgroundPositionY: `${repositioning ?? coverPosition}%`, ...(repositioning !== null ? { touchAction: 'none' } : {}) } : undefined;
-  return <div className={`page-header${coverUrl ? ' page-header--cover' : ''}`}>
+  return <div className={`page-header${coverUrl ? ' page-header--cover' : ''}${icon ? ' page-header--icon' : ''}`}>
     {coverUrl && <div className="page-cover" style={coverStyle ?? { background: GRADIENTS[gradientIndex] ?? GRADIENTS[0] }}
       onPointerDown={repositioning === null ? undefined : event => { dragStart.current = { y: event.clientY, position: repositioning }; (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId); }}
       onPointerMove={event => { if (repositioning === null || !dragStart.current) return; const delta = (event.clientY - dragStart.current.y) / event.currentTarget.clientHeight * -100; setRepositioning(Math.max(0, Math.min(100, Math.round(dragStart.current.position + delta)))); }}
@@ -79,6 +79,8 @@ export function PageHeader({ title, icon, coverUrl, coverPosition, onTitle, onIc
         </Popover>}
         {!coverUrl && <Button size="compact-xs" variant="subtle" color="gray" leftSection={<ImageIcon size={14} />} onClick={() => onCover(`gradient:${Math.floor(Math.random() * GRADIENTS.length)}`)}>新增封面</Button>}
       </Group>}
+      {/* Readers have no tool row; under a cover they keep its height, so the title sits where the owner sees it. */}
+      {!own && coverUrl && <div className="page-header__tools" aria-hidden="true" />}
       <PageTitle value={title} onChange={onTitle} onEnter={onEnter} readOnly={editable === 'none'} />
       {uploadError && <Alert color="red" role="alert" mt="sm" withCloseButton onClose={() => setUploadError(null)}>{uploadError}</Alert>}
     </div>

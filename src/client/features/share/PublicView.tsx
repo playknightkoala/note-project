@@ -87,7 +87,7 @@ function PublicPages({ token, pageId, share, error: shareError }: { token: strin
     </header>
     <div className="public-layout">
       {share.tree.length > 1 && <PublicNav tree={share.tree} token={token} currentId={shown.id} />}
-      <main className={`page-body${shown.kind === 'database' ? ' page-body--database' : ''}${shown.fullWidth ? ' page-body--full' : ''}`}>
+      <div className="public-main"><main className={`page-body${shown.kind === 'database' ? ' page-body--database' : ''}${shown.fullWidth ? ' page-body--full' : ''}`}>
         <PageHeader title={shown.title} icon={shown.icon} coverUrl={shown.coverUrl} coverPosition={shown.coverPosition} editable="none"
           onTitle={nothing} onIcon={nothing} onCover={nothing} onCoverPosition={nothing} onEnter={nothing} />
         <PageLinkContext.Provider value={links}><DatabaseAccessContext.Provider value={databaseAccess}>
@@ -102,7 +102,7 @@ function PublicPages({ token, pageId, share, error: shareError }: { token: strin
             <AttachmentList content={shown.content} />
           </>}
         </DatabaseAccessContext.Provider></PageLinkContext.Provider>
-      </main>
+      </main></div>
     </div>
   </div>;
 }
