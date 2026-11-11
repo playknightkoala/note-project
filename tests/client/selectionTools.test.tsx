@@ -108,7 +108,8 @@ it('opens a discussion by clicking its text after the editor mounts', async () =
   const host = document.createElement('div'); document.body.append(host); editor.mount(host);
   editor.setSelection('b', 'c');
   vi.mocked(window.matchMedia).mockReturnValue({ matches: true } as MediaQueryList);
-  expect(fireEvent.contextMenu(host.querySelector('[data-annotation-ids]')!)).toBe(false);
+  // A right-click on selected text is left to the browser: its own menu opens, with or without Shift.
+  expect(fireEvent.contextMenu(host.querySelector('[data-annotation-ids]')!)).toBe(true);
   expect(fireEvent.contextMenu(host.querySelector('[data-annotation-ids]')!, { shiftKey: true })).toBe(true);
   fireEvent.click(host.querySelector('[data-annotation-ids]')!);
   await screen.findByText('原留言');

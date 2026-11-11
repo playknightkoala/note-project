@@ -53,7 +53,7 @@ try {
   page.on('pageerror', error => errors.push(error.message));
   await page.clock.install();
   await page.goto(origin + `/p/${first.id}`);
-  const versionButton = (tab, version) => tab.getByRole('button', { name: `目前版本 ${version}，檢查更新`, exact: true });
+  const versionButton = (tab, version) => tab.getByRole('button', { name: `目前版本 ${version}，查看更新紀錄`, exact: true });
   await versionButton(page, current).waitFor();
   await page.evaluate(async () => { await navigator.serviceWorker.ready; });
   await page.waitForFunction(() => !!navigator.serviceWorker.controller);
@@ -67,14 +67,39 @@ try {
   await context.route('**/api/offline/pages/**', route => route.abort());
   await other.locator('[contenteditable="true"]').first().fill('另一分頁保留的草稿');
   await page.bringToFront();
+  const UPDATE = '有新版本，請更新';
+  const pendingDraft = (tab, id) => tab.evaluate(async ({ userId, id }) => new Promise(resolve => {
+    const request = globalThis.indexedDB.open('notes-offline-v1', 1);
+    request.onsuccess = () => { const db = request.result, read = db.transaction('records').objectStore('records').get(`page:${userId}:${id}`); read.onsuccess = () => { db.close(); resolve(JSON.stringify(read.result ?? null)); }; };
+  }), { userId: session.user.id, id });
+
+  // The version label opens the update log of this interface.
+  await versionButton(page, current).click();
+  const log = page.getByRole('dialog', { name: '更新紀錄' });
+  await log.getByText('目前版本', { exact: true }).waitFor();
+  assert.ok(await log.getByText(new RegExp(`^v${current.replaceAll('.', '[.]')} · `)).isVisible(), '更新紀錄列出目前版本');
+  assert.ok(await log.getByText(/^v\d+[.]\d+[.]\d+ · /).count() > 1, '更新紀錄列出先前的版本');
+  assert.equal(await page.getByRole('dialog', { name: UPDATE }).count(), 0);
+  mkdirSync('.local/validation', { recursive: true });
+  await page.keyboard.press('Escape');
+  await log.waitFor({ state: 'hidden' });
+  console.log('PASS 左下角為目前介面版號，點擊顯示更新紀錄（不再是檢查更新）');
+
+  // Typed just before the new version is found: nothing has saved it yet.
+  await page.locator('[contenteditable="true"]').first().fill('強制更新前的待同步草稿');
   published = true; failWorker = true;
   await page.clock.fastForward(61_000);
-  await page.getByRole('dialog', { name: '有新版本可更新' }).waitFor();
+  const update = page.getByRole('dialog', { name: UPDATE });
+  await update.waitFor();
   await page.getByText('驗證立即更新與離線草稿保留', { exact: true }).waitFor();
-  console.log('PASS 左下角為目前介面版號，定期檢查自動顯示新版 Modal 與更新資訊');
-  await page.getByRole('button', { name: '稍後更新' }).click();
-  await page.locator('[contenteditable="true"]').first().fill('強制更新前的待同步草稿');
-  await versionButton(page, current).click();
+  assert.match(await pendingDraft(page, first.id), /強制更新前的待同步草稿/, '更新視窗出現前，草稿已經保存到此裝置');
+  console.log('PASS 定期檢查發現新版後，先保存尚未儲存的修改，再顯示更新視窗與更新資訊');
+  assert.deepEqual(await update.getByRole('button').allInnerTexts(), ['立即更新'], '只有立即更新');
+  await page.keyboard.press('Escape');
+  await page.mouse.click(5, 5);
+  await page.clock.fastForward(61_000);
+  assert.ok(await update.isVisible(), '更新視窗不能關閉或延後');
+  console.log('PASS 更新視窗沒有延後的選項，Esc 與點擊外側都關不掉');
   await page.getByRole('button', { name: '立即更新' }).click();
   await page.getByText('下載新版介面失敗，請確認連線後重試。', { exact: true }).waitFor();
   assert.ok(await versionButton(page, current).isVisible());
@@ -82,20 +107,25 @@ try {
   await page.getByRole('button', { name: '立即更新' }).click();
   await versionButton(page, next).waitFor();
   assert.match(await page.locator('[contenteditable="true"]').first().innerText(), /強制更新前的待同步草稿/);
-  const persisted = await page.evaluate(async ({ userId, id }) => new Promise(resolve => {
-    const request = globalThis.indexedDB.open('notes-offline-v1', 1);
-    request.onsuccess = () => { const db = request.result, read = db.transaction('records').objectStore('records').get(`page:${userId}:${id}`); read.onsuccess = () => { db.close(); resolve(read.result?.pending); }; };
-  }), { userId: session.user.id, id: first.id });
-  assert.equal(persisted, true, '未同步的草稿仍須保留在 IndexedDB');
+  assert.equal(JSON.parse(await pendingDraft(page, first.id)).pending, true, '未同步的草稿仍須保留在 IndexedDB');
   assert.equal(await page.evaluate(async userId => await (await (await globalThis.caches.open(`notes-files-${userId}`)).match('/api/files/update-canary'))?.text(), session.user.id), 'synthetic');
   console.log('PASS 下載失敗可重試，立即更新切至新版並保留登入、待同步草稿與附件快取');
   assert.ok(await versionButton(other, current).isVisible(), '其他分頁不可自動重新載入');
   assert.match(await other.locator('[contenteditable="true"]').first().innerText(), /另一分頁保留的草稿/);
   assert.ok((await page.evaluate(() => globalThis.caches.keys())).some(name => oldShells.includes(name)));
   assert.equal(await other.evaluate(async entry => (await fetch(entry)).status, oldEntry), 200);
-  await other.getByRole('dialog', { name: '有新版本可更新' }).waitFor();
+  await other.getByRole('dialog', { name: UPDATE }).waitFor();
+  // Screenshots come from this tab: its clock is the real one, so the windows are drawn as a user sees them.
+  await other.waitForTimeout(500);
+  await other.screenshot({ path: '.local/validation/app-update-required.png' });
   await other.getByRole('button', { name: '立即更新' }).click();
   await versionButton(other, next).waitFor();
+  await versionButton(other, next).click();
+  // The test build one patch ahead has no entry of its own; the log still lists everything up to this release.
+  await other.getByRole('dialog', { name: '更新紀錄' }).getByText(/^v\d+[.]\d+[.]\d+ · /).first().waitFor();
+  await other.waitForTimeout(500);
+  await other.screenshot({ path: '.local/validation/app-update-log.png' });
+  await other.keyboard.press('Escape');
   assert.match(await other.locator('[contenteditable="true"]').first().innerText(), /另一分頁保留的草稿/);
   await page.waitForFunction(async old => !(await globalThis.caches.keys()).some(name => old.includes(name)), oldShells);
   console.log('PASS 其他分頁保留原介面及資源，主動更新後才清理舊版介面快取');
@@ -106,7 +136,6 @@ try {
     const bounds = globalThis.document.querySelector('.app-version')?.getBoundingClientRect();
     return bounds && bounds.x >= 0 && bounds.right <= globalThis.innerWidth && bounds.bottom <= globalThis.innerHeight;
   });
-  mkdirSync('.local/validation', { recursive: true });
   await page.screenshot({ path: '.local/validation/app-version-mobile.png' });
   assert.deepEqual(errors, []);
   console.log('PASS 手機側欄顯示版號，沒有未捕捉的前端錯誤');

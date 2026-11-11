@@ -1,5 +1,28 @@
 # 驗證紀錄
 
+## 強制更新（先儲存再出現、不能延後）與更新紀錄視窗（2026-11-11，版本 1.1.7）
+
+- 使用者要求：(1) 更新公告改成先強制儲存使用者尚未儲存的內容，再出現更新視窗，取消「暫不更新」，一律都要更新；(2) 左下角版號原本點擊是檢查更新，改成以 Modal 顯示更新紀錄，讓使用者知道哪個版本更新了什麼。
+- 範圍：`src/client/updates/AppUpdates.tsx` 重寫流程；更新資訊清單由 `src/server/releases.ts` 搬到 `src/shared/releases.ts`（伺服器與前端共用，`versionInfo` 仍在 `src/server/releases.ts`，`/api/version` 的回應不變）。沒有 migration，沒有新增或升級任何依賴。以下實測在版號仍為 1.1.6 時完成；使用者指定 1.1.7 後只改了版號、更新資訊與文件，並重跑本機檢查與容器檢查（見本段最後的「發布前檢查」）。
+- 行為：發現新版 → 執行 update guards（保存筆記標題／內文）、等候 mutations 與附件上傳 → 全部通過才顯示更新視窗；視窗只有「立即更新」，沒有關閉按鈕，Esc 與點擊外側無效。無法代為儲存的內容（未送出的留言、開著的設定表單、編輯中的資料格、衝突、輸入法組字）存在時，視窗先不出現、每 2 秒重試，更新紀錄視窗說明原因。按「立即更新」時再儲存一次；離線時視窗暫時退下。這兩點（等待而不強制送出、離線退下）是實作時的判斷，已向使用者說明。
+- 自動化測試：`tests/client/appUpdates.test.tsx` 改寫為 9 項（先儲存再出現並帶更新資訊；視窗只有一個按鈕、Esc 與重新檢查都關不掉；有未完成內容時不出現、更新紀錄說明原因、完成後自動出現；視窗開啟後又有未完成內容時退下再回來；輸入法組字結束後才儲存與出現；離線退下、連線回來；版號按鈕顯示本介面的更新紀錄、標示目前版本、不含更新的版本、不要求更新；伺服器連不上仍能看更新紀錄；啟用失敗可重試）。`tests/server/health.test.ts` 的版本資訊測試不變並通過。
+- 實際命令（Node 22.23.1）：`npm run check`（typecheck、lint、**39 檔／296 tests**、build）全部通過。
+- 瀏覽器實測：改寫既有的 `scripts/check-app-update.mjs`（playwright-core 驅動系統 Chrome，headless，macOS；另建高一個 patch 版本的前端與本機代理，模擬伺服器升級），對「建置後以空資料目錄啟動的 `dist/server/index.js`」與下述容器各跑一次，皆 **6 項 PASS**、沒有頁面錯誤：點左下角版號出現「更新紀錄」，列出目前版本（有標示）與先前版本，沒有更新視窗；輸入草稿後發布新版，更新視窗出現時草稿已保存在此裝置（IndexedDB）；視窗只有「立即更新」，Esc、點擊外側、再過一分鐘都仍在；新版下載失敗時顯示錯誤、可重試，成功後切到新版並保留登入、待同步草稿與附件快取；另一個分頁不會被自動重新載入，出現自己的更新視窗後按更新才切換，舊版介面快取之後才清理；手機寬度側欄顯示版號。截圖（更新視窗、更新紀錄）已人工檢視。
+- 容器：`NOTES_PORT=18090 docker compose -p notes-update-check up -d --build --wait`（獨立專案與暫用 volume，不動 `notes_notes-data`）healthy，`/healthz` 200，`GET /api/version` 回報 1.1.6 與更新資訊（搬移後內容相同）；`node scripts/check-app-update.mjs http://127.0.0.1:18090` 6 項 PASS；`node scripts/check-app.mjs http://127.0.0.1:18090` 40 項檢查通過（exit 0）。驗證後 `down -v --rmi local` 移除。
+- 沒有驗證的部分：瀏覽器實測裡草稿在視窗出現前已保存，但該流程中一般的自動保存也會先發生，「由更新流程觸發儲存」的先後順序是由單元測試確認的；有未完成內容時的等待、離線退下只有單元測試，沒有瀏覽器實測；真實輸入法只以模擬事件測試；實體手機、Safari、Firefox 與正式環境沒有驗收；正式環境的第一次強制更新要等部署下一個版本時才會發生；其他既有瀏覽器腳本（`check-find.mjs`、`check-share.mjs` 等）這次沒有重跑。正式環境尚未部署。
+- 發布前檢查（版號 1.1.7，Node 22.23.1，含下一段的右鍵調整）：`package.json` 與 `package-lock.json` 以 `npm version 1.1.7 --no-git-tag-version` 更新，沒有調整任何依賴版本；`src/shared/releases.ts` 新增 1.1.7 的更新資訊，發布說明見 `docs/releases/1.1.7.md`。`npm run check`（typecheck、lint、39 檔／296 tests、build）全部通過，建置出的 `sw.js` 版號為 1.1.7。容器：`NOTES_PORT=18090 docker compose -p notes-release-check up -d --build --wait`（獨立專案，不動 `notes_notes-data`）healthy，`/healthz` 200，`GET /api/version` 回報 1.1.7 與本版更新資訊，`scripts/check-app-update.mjs` 6 項 PASS；移除後重建一個全新的實例，`scripts/check-selection-context.mjs` 5 項通過、`scripts/check-app.mjs` 40 項檢查通過；驗證後已移除。
+
+## 選取文字後右鍵恢復瀏覽器選單（2026-11-11，版本 1.1.7）
+
+- 背景：使用者發現電腦上選取文字、格式面板出現後，右鍵沒有反應。原因是 1.0.2（commit `46ecfa5`）加入的攔截：桌面、可編輯頁面、內文有選取時，右鍵被取消並改為開啟格式面板；面板在選取時本來就已顯示，所以看起來像右鍵失效（當時要按 Shift+右鍵才有瀏覽器選單）。手機、唯讀頁面、沒有選取時原本就不攔截。使用者選擇直接拿掉攔截。
+- 範圍：只改前端，`src/client/features/editor/SelectionTools.tsx` 移除 `contextmenu` 監聽；選取時自動出現的格式面板、點擊標記開啟討論、頁面其他地方的自訂右鍵選單（`ContextMenu.tsx`）都不變。沒有 API、migration，沒有新增或升級任何依賴。實測在版號仍為 1.1.6 時完成，與上一段的強制更新一起以 1.1.7 發布（發布前檢查見上一段）。
+- 自動化測試：`tests/client/selectionTools.test.tsx` 既有的一項由「桌面選取右鍵被攔截」改為「不被攔截（有沒有按 Shift 都一樣）」。
+- 實際命令（Node 22.23.1）：`npm run check`（typecheck、lint、**39 檔／293 tests**、build）全部通過。
+- 瀏覽器實測：新增 `scripts/check-selection-context.mjs`（playwright-core 驅動系統 Chrome，headless，macOS），對「建置後以空資料目錄啟動的 `dist/server/index.js`」與下述容器各跑一次，皆 **5 項通過**、沒有頁面錯誤：雙擊選取文字後格式面板照常出現；對選取的文字按右鍵，`contextmenu` 事件沒有被取消、選取與格式面板仍在、頁面的自訂右鍵選單沒有出現；Shift+右鍵相同；沒有選取時在內文按右鍵不被攔截；內文以外的空白處按右鍵仍是頁面的自訂選單。先以修改前的程式建置跑同一支腳本，在「對選取的文字按右鍵」那一步失敗（事件被攔下），確認腳本測得到這個行為。
+- 容器：`NOTES_PORT=18090 docker compose -p notes-context-check up -d --build --wait`（獨立專案與暫用 volume，不動 `notes_notes-data`）healthy，`/healthz` 200；`node scripts/check-selection-context.mjs http://127.0.0.1:18090` 5 項通過；`node scripts/check-app.mjs http://127.0.0.1:18090` 40 項檢查通過（exit 0）。驗證後 `down -v --rmi local` 移除。
+- 行為上的取捨：格式面板被關掉（例如按 Esc）而文字仍選取時，原本可以用右鍵把面板叫回來，現在要重新選取。
+- 沒有驗證的部分：headless 看不到瀏覽器自己的右鍵選單，只確認事件沒有被取消；Windows／Linux、Safari、Firefox 與正式環境沒有驗收；其他既有瀏覽器腳本（`check-find.mjs`、`check-share.mjs` 等）這次沒有重跑。
+
 ## 瀏覽器分頁的標題與圖示跟著頁面（2026-11-11，版本 1.1.6）
 
 - 範圍：只改前端（新增 `src/client/app/documentHead.ts`，接入 `PageRoute.tsx` 與 `PublicView.tsx`）。沒有 API、migration，沒有新增或升級任何依賴，CSP 不變。以下實測在版號仍為 1.1.5 時完成；使用者指定 1.1.6 後只改了版號、更新資訊與文件，並重跑本機檢查與容器檢查（見本段最後的「發布前檢查」）。

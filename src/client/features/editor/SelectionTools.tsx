@@ -161,22 +161,17 @@ export function SelectionTools({ editor, pageId, composing = false, annotationsE
       const id = mark.dataset.annotationIds?.split(' ').find(value => annotations.data?.annotations.some(item => item.id === value && isActiveAnnotation(item)));
       if (id) { setPending(null); setSelectedId(id); setFailure(null); setDraft(''); setOpened(true); }
     };
-    const context = (event: MouseEvent) => {
-      if (readOnly || mobile || composing || event.shiftKey || editor.prosemirrorView.composing || editor.prosemirrorState.selection.empty
-        || (event.target as Element).closest('a, input, textarea, select') || !window.matchMedia('(hover: hover) and (pointer: fine)').matches) return;
-      event.preventDefault(); event.stopPropagation();
-      editor.getExtension(FormattingToolbarExtension)?.store.setState(true);
-    };
     let detach = () => {};
     const attach = () => {
       detach();
       const dom = editor.domElement; if (!dom) return;
-      dom.addEventListener('click', click, true); dom.addEventListener('contextmenu', context, true);
-      detach = () => { dom.removeEventListener('click', click, true); dom.removeEventListener('contextmenu', context, true); };
+      // Only the click is listened for: a right-click on selected text keeps the browser's own menu.
+      dom.addEventListener('click', click, true);
+      detach = () => dom.removeEventListener('click', click, true);
     };
     const stop = editor.onMount(attach); attach();
     return () => { stop(); detach(); };
-  }, [editor, annotations.data, mobile, composing, readOnly]);
+  }, [editor, annotations.data]);
 
   const mutation = useMutation({
     networkMode: 'always',

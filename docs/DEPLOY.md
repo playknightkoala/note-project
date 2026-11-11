@@ -36,7 +36,7 @@ NOTES_BIND=0.0.0.0
 
 手機的離線筆記功能也需要 HTTPS；區網明文 HTTP 仍可一般連線使用，但不會啟用離線介面。部署及升級後，先連線開啟「離線與同步」完成介面準備與筆記下載，詳見 [OFFLINE.md](OFFLINE.md)。反向代理應讓 `/sw.js` 保持 `Cache-Control: no-cache`，`/api/version` 保持 `no-store`，不要另外長期快取 Service Worker、版本資訊或登入 API。
 
-1.0.6 起左下角顯示目前介面版本。發布時同步更新 package.json／package-lock.json 根版本及 `src/server/releases.ts` 的更新資訊，重新建置部署後，使用者會收到更新 Modal，可按「立即更新」讓新版介面接手。首次從 1.0.5 或更早版升級仍須手動連線重載一次，才能載入此功能。只建立 GitHub Release 不會自行升級容器；偵測的是目前伺服器已部署的版號。
+1.0.6 起左下角顯示目前介面版本。發布時同步更新 package.json／package-lock.json 根版本及 `src/shared/releases.ts` 的更新資訊（伺服器的 `/api/version` 與介面左下角的更新紀錄共用這份清單），重新建置部署後，使用者的修改會先被儲存，接著出現不能延後的更新視窗，按「立即更新」讓新版介面接手。首次從 1.0.5 或更早版升級仍須手動連線重載一次，才能載入此功能。只建立 GitHub Release 不會自行升級容器；偵測的是目前伺服器已部署的版號。
 
 瀏覽器只在安全環境（HTTPS，或 `localhost`／`127.0.0.1`）允許本站需要的功能，而且密碼與 cookie 不能走明文，所以對外一定要 HTTPS。
 
