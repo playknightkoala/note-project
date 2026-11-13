@@ -34,8 +34,22 @@ export const syncNoteSchema = z.object({
   parentId: pageIdSchema.nullable(),
   content: z.array(z.unknown()).max(20_000),
   overwrite: z.boolean().default(false),
+  /**
+   * Sent by an interface that reads `applied` in the answer (below). One that does not would take the answer to a
+   * repeat as its new baseline, so it is refused instead when the page has moved on since its operation.
+   */
+  repeatAware: z.boolean().default(false),
 });
 export type SyncNoteInput = z.infer<typeof syncNoteSchema>;
+/**
+ * The answer to a synced note: the page as it is now, and `applied`, the version and title that this very operation
+ * left behind. They differ when the answer is to a repeat and somebody else has saved since: the device must then
+ * treat what it wrote in the meantime as a conflict, never as a draft based on the page it is shown here.
+ */
+export interface SyncNoteResult extends PageResponse { applied: { version: number; title: string } }
+/** Whether the page has moved on since the operation this answers. A row's name is not part of its synced text. */
+export const movedSince = (result: PageResponse & { applied?: SyncNoteResult['applied'] }): boolean => !!result.applied
+  && (result.applied.version !== result.page.version || (result.page.kind === 'page' && result.applied.title !== result.page.title));
 
 // ---- M9: databases, discussions and attachments ----
 

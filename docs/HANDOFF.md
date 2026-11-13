@@ -1,8 +1,22 @@
 # 交接紀錄
 
-更新：2026-11-11。動手前讀本文件、[AGENTS.md](../AGENTS.md)、[ARCHITECTURE.md](ARCHITECTURE.md)、[DEPLOY.md](DEPLOY.md)。
+更新：2026-11-13。動手前讀本文件、[AGENTS.md](../AGENTS.md)、[ARCHITECTURE.md](ARCHITECTURE.md)、[DEPLOY.md](DEPLOY.md)。
 
 桌面側欄「…」選單滑鼠移入即消失已修正：Portal 選單離開頁面列的 hover／focus 區域後，原本會讓定位按鈕 display:none，Mantine 因此隱藏選單。現在以 `menuOpened`／`data-menu-open` 在開啟期間保留按鈕可見。`scripts/check-sidebar-menu.mjs` 已先重現失敗再驗證通過，包含滑鼠、實際選單動作、右鍵、Escape、鍵盤與點外關閉；129 tests、typecheck、lint、build、容器及 30 項靜態檢查通過。詳見 VALIDATION 對應段落。
+
+## 本輪工作：code review 與資安加強審查後的修正，版本 1.1.8（2026-11-13；正式環境尚未部署）
+
+使用者先請 codex、再請 Claude 各做一次全專案 code review（加強資安）。Claude 重現了 codex 五項中的四項（nginx 那項當時只從設定判讀，修正後已在容器實測），另外找出兩個更根本的問題（授權在讀取請求內容前判定後不再重驗；未登入的 chunked 請求在驗證前被整個讀入記憶體）與幾個加強項目。使用者接著要求全部修正並請 codex 複核。
+
+- 版號由使用者指定：修正與 codex 四輪複核完成時維持 1.1.7 未動，使用者下達「commit+push+release 1.1.8+移除未使用依賴」後才更新 `package.json`／lock、`src/shared/releases.ts`、`docs/releases/1.1.8.md`，並移除 `fflate`、`markdown-it`、`tar`、`@types/markdown-it`。
+- 做了什麼、怎麼驗證、哪些沒驗證：見 VALIDATION 最上面一段；協定見 ARCHITECTURE「授權時點與同步協定補充」；部署面的變更（nginx 錯誤紀錄等級與連線上限、overlay 下 app 連接埠固定 loopback、兩個新的選用設定、安全事件紀錄）見 DEPLOY。
+- 行為上值得知道的改變：
+  - 密碼雜湊參數提高（p=1 → p=3），每位使用者下次登入時自動重算一次；登入與註冊各多花約兩倍的雜湊時間。
+  - 成員讀共用頁面時，提及到未分享頁面的標題會是空的（顯示「無法存取這個頁面」）；裝置上既有的副本會在下次同步時因內文不同而重新載入一次。
+  - 成員的資料庫 stamp 多了角色字尾，既有裝置會把共用的資料庫重新下載一次。
+  - 同步回應多了 `applied` 欄位，前端在請求中帶 `repeatAware: true`。沒有帶的舊版前端在「重送且頁面已前進」時會收到 409，走原本的衝突流程（沒有新內容時也會看到衝突提示）。
+- 留給使用者決定：`NOTES_MAX_ACCOUNT_STORAGE_MB` 與 `NOTES_MEMORY_LIMIT` 是否要給預設值（目前預設不限制）；未使用的 `MAX_IMPORT_MB` 設定與 `import_jobs` 表是否也清掉；（原本列在這裡的「是否在伺服器端擋下舊版前端的重送覆寫」已依 codex 複核意見實作，見上。）
+- codex 複核：第一輪複核提出四點（登入端的同類競態、nginx 錯誤紀錄在 `alert` 等級的殘餘風險、舊版前端仍會覆寫、成員存回時提及標題快照被改寫），全部已修正並補測試；第二輪再提出三點（百分比編碼可繞過 token 過濾、舊雜湊升級期間並行登入誤回 401、同一頁面多個提及被補成同一個快照），也已修正；第三輪確認登入與提及快照通過，再提出一點（路由前綴以百分比編碼書寫可避開過濾），修正後第四輪回報沒有需要阻擋交付的問題。細節在 VALIDATION 同一段的最後幾點。
 
 ## 本輪工作：強制更新與更新紀錄視窗，版本 1.1.7（2026-11-11，已發布 v1.1.7；正式環境尚未部署）
 

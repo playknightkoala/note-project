@@ -47,19 +47,24 @@ export function pageRoutes(): Hono<AppEnv> {
     return c.json(pages.headOf(pages.loadPage(db, requireAccess(db, userId, c.req.param('id'), 'view').ownerId, c.req.param('id'))));
   });
 
+  // A member's right to write is settled twice: before the body is read, so a stranger is answered "not found"
+  // whatever they send, and again once it has arrived, because a share can end while a body is on its way.
   app.put('/:id/content', async c => {
     const { db, userId, now } = ctx(c);
+    const id = c.req.param('id');
     const version = expectedVersion(c);
-    const access = requireAccess(db, userId, c.req.param('id'), 'edit');
+    requireAccess(db, userId, id, 'edit');
     const input = await parseBody(c, contentSchema);
-    return c.json(pages.updateContent(db, access.ownerId, c.req.param('id'), input.content, version, now, input.overwrite ? 'overwrite' : 'autosave', userId));
+    const access = requireAccess(db, userId, id, 'edit');
+    return c.json(pages.updateContent(db, access.ownerId, id, input.content, version, now, input.overwrite ? 'overwrite' : 'autosave', userId));
   });
 
   app.patch('/:id', async c => {
     const { db, userId, now } = ctx(c);
     const id = c.req.param('id');
-    const access = requireAccess(db, userId, id, 'edit');
+    requireAccess(db, userId, id, 'edit');
     const input = await parseBody(c, patchPageSchema);
+    const access = requireAccess(db, userId, id, 'edit');
     if (access.role !== 'owner') {
       // A member with edit access renames a note and nothing else: icon, cover and layout stay the owner's, and a
       // row's name is one of its cells.

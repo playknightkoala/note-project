@@ -23,14 +23,17 @@ export function annotationRoutes(): Hono<AppEnv> {
     const { db, userId, ownerId, pageId } = context(c);
     return c.json({ annotations: annotations.listAnnotations(db, ownerId, pageId, userId) });
   });
+  // Access is settled again once the body has arrived: a share can end while a comment is on its way.
   app.post('/:pageId/annotations', async c => {
-    const { db, userId, ownerId, pageId, now } = context(c);
+    context(c);
     const input = await parseBody(c, createAnnotationSchema);
+    const { db, userId, ownerId, pageId, now } = context(c);
     return c.json({ annotation: annotations.createAnnotation(db, ownerId, pageId, input, now, userId) }, 201);
   });
   app.patch('/:pageId/annotations/:id', async c => {
-    const { db, userId, ownerId, pageId, now, moderator } = context(c);
+    context(c);
     const input = await parseBody(c, changeAnnotationSchema);
+    const { db, userId, ownerId, pageId, now, moderator } = context(c);
     return c.json({ annotation: annotations.changeAnnotation(db, ownerId, pageId, c.req.param('id'), input, expectedVersion(c), now, userId, moderator) });
   });
   app.delete('/:pageId/annotations/:id', c => {

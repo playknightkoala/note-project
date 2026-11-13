@@ -617,7 +617,7 @@ describe('keeping shared notes on a device', () => {
     const operationId = uuid();
     const synced = await json<PageResponse>(sync(editor, B, { baseVersion: version, title: '乙二', content: [text('p', '離線改的')] }, operationId));
     expect(synced).toMatchObject({ page: { title: '乙二', version: version + 1, content: [text('p', '離線改的')] }, access: { role: 'editor', rootId: A } });
-    expect(synced).toEqual(await page(editor, B));
+    expect(synced).toEqual({ ...await page(editor, B), applied: { version: version + 1, title: '乙二' } });
     // A stale base is a conflict for a member exactly as for the owner's other devices.
     expect(await status(sync(editor, B, { baseVersion: version, content: [text('p', '舊版')] }))).toBe(409);
     expect(await status(sync(editor, uuid(), { baseVersion: null, parentId: B, title: '子頁' }))).toBe(404);
@@ -626,7 +626,7 @@ describe('keeping shared notes on a device', () => {
     await owner.client.request('PATCH', `/api/pages/${A}/share/members/${editor.id}`, { json: { role: 'viewer' } });
     const repeated = await sync(editor, B, { baseVersion: version, title: '乙二', content: [text('p', '離線改的')] }, operationId);
     expect(repeated.status).toBe(200);
-    expect(await json<PageResponse>(repeated)).toEqual(await page(editor, B));
+    expect(await json<PageResponse>(repeated)).toEqual({ ...await page(editor, B), applied: { version: version + 1, title: '乙二' } });
     expect((await page(editor, B)).access?.role).toBe('viewer');
     await owner.client.request('PATCH', `/api/pages/${A}/share/members/${editor.id}`, { json: { role: 'editor' } });
     // Once removed, a repeat of an answered request tells nothing: neither the stored answer nor the current state.

@@ -56,7 +56,7 @@ NOTES_HTTPS_PORT=443
 docker compose -f compose.yaml -f compose.https.yaml up -d --build --wait
 ```
 
-overlay 會：以 nginx 終結 TLS（TLS 1.2／1.3）並轉給 app；把 app 的 `TRUST_PROXY` 設為 1，讓伺服器信任 `X-Forwarded-Proto`／`X-Forwarded-Host`／`X-Forwarded-For`，因此 session cookie 會帶 `Secure`。nginx 會以實際連線位址覆寫 `X-Forwarded-For`（不沿用客戶端送來的值），速率限制因此以連到 nginx 的位址計算；若 nginx 前面還有 Cloudflare，請依下節設定 `NOTES_CLIENT_IP_HEADER`，否則所有訪客會被算成 Cloudflare 的節點位址。app 自己的 8080 仍只綁 `127.0.0.1`，不要另外發布。
+overlay 會：以 nginx 終結 TLS（TLS 1.2／1.3）並轉給 app；把 app 的 `TRUST_PROXY` 設為 1，讓伺服器信任 `X-Forwarded-Proto`／`X-Forwarded-Host`／`X-Forwarded-For`，因此 session cookie 會帶 `Secure`。nginx 會以實際連線位址覆寫 `X-Forwarded-For`（不沿用客戶端送來的值），速率限制因此以連到 nginx 的位址計算；若 nginx 前面還有 Cloudflare，請依下節設定 `NOTES_CLIENT_IP_HEADER`，否則所有訪客會被算成 Cloudflare 的節點位址。app 自己的 8080 在 overlay 下固定只綁 `127.0.0.1`（`compose.https.yaml` 覆寫了連接埠設定，`NOTES_BIND` 在此不生效）：app 已信任轉送標頭，能直連它的人可以自行填寫來源位址。nginx 另外限制每個來源位址同時 100 條連線（超過回 429）。nginx 的錯誤訊息不論等級都會帶出完整請求行，公開連結的 token 會因此進入錯誤紀錄，而且 nginx 本身無法像存取紀錄那樣遮蔽；overlay 因此讓 nginx 的標準錯誤輸出先經過一個過濾程式（`compose.https.yaml` 的 entrypoint），把 `/s/…` 與 `/api/public/…` 後面整個路徑片段換成 `-` 才寫出；網址中只要有百分比編碼（不論寫在 token 還是 `/s/` 本身），整個網址都不寫出。代價是含中文檔名等編碼字元的請求在錯誤訊息裡看不到路徑，要對照存取紀錄的時間與狀態碼。把 `docker/https.nginx.conf` 拿去別處用而沒有這個過濾程式時，錯誤紀錄會含 token。
 
 驗證：
 
@@ -75,11 +75,15 @@ npm run test:app -- https://你的網域
 
 - 代理必須傳 `X-Forwarded-Proto: https` 與 `X-Forwarded-For`，且 app 只在 `TRUST_PROXY=1` 時信任這些標頭。沒有代理時不要開，否則客戶端可以偽造來源 IP 影響速率限制。
 - 來源位址取 `X-Forwarded-For` 的最後一段（緊鄰 app 的代理所附加的位址）；前面各段可能是客戶端自己填的，不採用。自架代理請覆寫或附加真實位址（nginx：`proxy_set_header X-Forwarded-For $remote_addr;`）。代理另以專用標頭提供真實位址時，用 `NOTES_CLIENT_IP_HEADER` 指定。
-- 公開連結（`/s/…` 與 `/api/public/…`，見 [SHARING.md](SHARING.md)）不需登入，依來源位址限流（每分鐘 600 次）。在代理或 tunnel 後面若沒有設定 `NOTES_TRUST_PROXY=1`（及必要的 `NOTES_CLIENT_IP_HEADER`），所有訪客都會被當成代理的位址而共用同一個額度。公開連結的網址本身就是鑰匙，會出現在代理的存取紀錄中；app 自己的錯誤紀錄會遮蔽它，代理的紀錄請自行控管保存與存取。
-- 登入限制：每個來源位址 15 分鐘 10 次；同一來源對同一帳號 5 次失敗後暫停 15 分鐘；同一帳號不分來源以 30 次為上限。別人從其他位址猜錯密碼不會鎖住帳號本人。登入與註冊只接受同源的 `application/json` 請求。
-- 請求大小：帳號相關端點 64 KB、其他 JSON 端點 8 MB、附件為 `NOTES_MAX_UPLOAD_MB`；超過即回 413，未帶 `Content-Length`（chunked）的請求也在讀到上限時中止。
+- 公開連結（`/s/…` 與 `/api/public/…`，見 [SHARING.md](SHARING.md)）不需登入，依來源位址限流（每分鐘 600 次）。在代理或 tunnel 後面若沒有設定 `NOTES_TRUST_PROXY=1`（及必要的 `NOTES_CLIENT_IP_HEADER`），所有訪客都會被當成代理的位址而共用同一個額度。公開連結的網址本身就是鑰匙，會出現在代理的存取紀錄中；app 自己的錯誤紀錄會遮蔽它，overlay 的 nginx 存取紀錄與錯誤紀錄也都會遮蔽；自架代理的紀錄請自行控管保存與存取。
+- 登入限制：每個來源位址 15 分鐘 10 次；同一來源對同一帳號 5 次失敗後暫停 15 分鐘；同一帳號不分來源以 30 次為上限。別人從其他位址猜錯密碼不會鎖住帳號本人。登入與註冊只接受同源的 `application/json` 請求。已登入時變更密碼，「目前密碼」每個帳號 15 分鐘最多輸入 5 次。
+- 請求大小：帳號相關端點 64 KB、其他 JSON 端點 8 MB、附件為 `NOTES_MAX_UPLOAD_MB`；超過即回 413，未帶 `Content-Length`（chunked）的請求也在讀到上限時中止。伺服器在確認登入與限流之後才開始讀取請求內容，未登入的請求不論送多少都不會被讀進記憶體。請求內容送達後會再確認一次登入狀態與對頁面的權限：內容傳送期間被登出、被停用或被移出共用名單的請求不會生效。
 - 寫入請求的來源檢查只比對主機名：`Origin` 必須是 `NOTES_PUBLIC_ORIGIN`，或等於請求抵達時的 `Host`（`NOTES_TRUST_PROXY=1` 時改看 `X-Forwarded-Host`）。若代理或 tunnel 改寫了 `Host`（症狀：登入後所有寫入動作都回 403 `csrf`，例如產生邀請碼、登出），在 `.env` 設 `NOTES_PUBLIC_ORIGIN=https://你的網域` 後 `docker compose up -d --wait`。
-- 附件上傳預設 `NOTES_MAX_UPLOAD_MB=90`；既有 `.env` 若仍明確設定為 20，升級時需自行改為 90 才會放寬。上傳大檔時代理的 body 上限要高於附件上限（含 multipart 包裝；overlay 已設 220 MB、讀取逾時 300 秒）。Cloudflare 若為單次請求 100 MB 上限，建議維持 90，避免容量單位與包裝造成 413；此限制與裝置離線快取總容量不同。
+- 附件上傳預設 `NOTES_MAX_UPLOAD_MB=90`；既有 `.env` 若仍明確設定為 20，升級時需自行改為 90 才會放寬。上傳大檔時代理的 body 上限要高於附件上限（含 multipart 包裝；overlay 已設 220 MB、讀取逾時 300 秒）。Cloudflare 若為單次請求 100 MB 上限，建議維持 90，避免容量單位與包裝造成 413；此限制與裝置離線快取總容量不同。同時處理的上傳以 4 個為限（每個帳號 2 個），其餘排隊等候，不會失敗。`NOTES_MAX_ACCOUNT_STORAGE_MB` 可限制每個帳號附件的總容量（預設 0＝不限制；成員加到共用頁面的檔案算在頁面擁有者名下），超過時上傳回 413。`NOTES_MEMORY_LIMIT`（例如 `2g`，預設 0＝不限制）設定 app 容器的記憶體上限；大檔上傳在儲存過程中會佔用數倍於檔案大小的記憶體，設定時請保留餘裕。
+
+### 安全事件紀錄
+
+app 以每行一筆 JSON 寫到標準輸出（`docker compose logs app`）。除了啟動與錯誤，會記錄：登入成功（`login`）、登入失敗（`login failed`）、停用帳號嘗試登入、登出、註冊、變更密碼成功與「目前密碼」錯誤、管理者變更使用者角色或停用狀態、邀請碼建立與撤銷、分享範圍變更、公開連結開啟與關閉、公開連結給本站帳號的權限、共用成員新增／變更／移除、停止分享。欄位只有帳號與頁面的識別碼、來源位址與動作結果；密碼、session、邀請碼、公開連結的 token 都不會寫入，登入失敗也不記錄輸入的帳號欄位（使用者可能把密碼打在那一格）。
 
 ## 備份與還原
 

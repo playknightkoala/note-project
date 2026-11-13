@@ -10,7 +10,7 @@ const member = { email: 'member@example.test', username: 'member', displayName: 
 describe('password hashing', () => {
   it('round-trips, rejects wrong passwords and reports weak parameters', async () => {
     const hash = await hashPassword('秘密密碼 secret');
-    expect(hash.startsWith('scrypt$15$8$1$')).toBe(true);
+    expect(hash.startsWith('scrypt$15$8$3$')).toBe(true);
     expect(await verifyPassword(hash, '秘密密碼 secret')).toBe(true);
     expect(await verifyPassword(hash, '秘密密碼 secret!')).toBe(false);
     expect(await verifyPassword('garbage', 'x')).toBe(false);

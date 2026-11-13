@@ -4,10 +4,26 @@ services:
   app:
     environment:
       TRUST_PROXY: "1"
+    # The app now trusts the forwarded headers, so only nginx may reach it from outside this computer: its own port
+    # stays on loopback whatever NOTES_BIND says (that setting is for running without this overlay).
+    ports: !override
+      - "127.0.0.1:${NOTES_PORT:-8080}:8080"
   https:
     image: nginx:1.30.3-alpine@sha256:0d3b80406a13a767339fbe2f41406d6c7da727ab89cf8fae399e81f780f814d1
     user: "101:101"
-    entrypoint: [nginx, -g, "daemon off;"]
+    # The token in a public link's address is a credential. nginx writes request lines into its error log and cannot
+    # mask them itself, so everything it writes to standard error goes through this filter first. The filter replaces
+    # the whole path segment after /s/ and /api/public/. An address can also be written with percent-encoding, in the
+    # token or in the /s/ itself, and still reach the same page: any word of a line that contains a "%" is left out
+    # altogether rather than decoded here. (Compose reads "$$" below as a single "$".) nginx takes the shell's place, so it stays the container's main process and receives its signals;
+    # the filter ends when nginx does.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        rm -f /tmp/nginx-errors && mkfifo /tmp/nginx-errors || exit 1
+        awk '{ for (i = 1; i <= NF; i++) if (index($$i, "%")) $$i = "-"; gsub(/\/s\/[^\/ ?#"]+/, "/s/-"); gsub(/\/api\/public\/[^\/ ?#"]+/, "/api/public/-"); print; fflush() }' < /tmp/nginx-errors >&2 &
+        exec nginx -g 'daemon off;' 2> /tmp/nginx-errors
     ports: ["${NOTES_HTTPS_BIND:-127.0.0.1}:${NOTES_HTTPS_PORT:-8443}:8443"]
     volumes:
       - ./docker/https.nginx.conf:/etc/nginx/nginx.conf:ro

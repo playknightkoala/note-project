@@ -1,7 +1,7 @@
 import type { Db } from '../db/driver.ts';
 import type { Breadcrumb, PageAccess, PageKind, PageResponse } from '../../shared/api.ts';
 import type { MemberRole, ShareScope } from '../../shared/shares.ts';
-import { scopeCovers } from '../../shared/shares.ts';
+import { mapPageLinkTitles, scopeCovers } from '../../shared/shares.ts';
 import { AppError } from '../../shared/errors.ts';
 import { breadcrumbs, toPageDto } from './pages.ts';
 import type { PageRow } from './pages.ts';
@@ -17,6 +17,8 @@ const STEP = 'id, user_id, parent_id, kind, title, icon, trashed_at';
 const MAX_DEPTH = 64;
 
 export interface Access {
+  /** Who is reading. */
+  viewerId: string;
   /** Whose page it is: the id to pass to the services. */
   ownerId: string;
   role: 'owner' | MemberRole;
@@ -53,7 +55,7 @@ export function resolveAccess(db: Db, viewerId: string, pageId: string): Access 
   const steps = ancestry(db, pageId);
   const page = steps[0];
   if (!page) throw notFound();
-  if (page.user_id === viewerId) return { ownerId: viewerId, role: 'owner', chain: [] };
+  if (page.user_id === viewerId) return { viewerId, ownerId: viewerId, role: 'owner', chain: [] };
   // Somebody else's page: never from the trash, and never once the owner's account is disabled.
   if (steps.some(step => step.trashed_at !== null || step.user_id !== page.user_id)) throw notFound();
   let role: MemberRole | undefined, top = -1;
@@ -70,7 +72,7 @@ export function resolveAccess(db: Db, viewerId: string, pageId: string): Access 
   const owner = db.get<{ display_name: string; disabled_at: number | null }>('SELECT display_name, disabled_at FROM users WHERE id = ?', page.user_id);
   if (!owner || owner.disabled_at !== null) throw notFound();
   const chain = crumbs(steps.slice(0, top + 1));
-  return { ownerId: page.user_id, role, chain, member: { role, rootId: steps[top]!.id, owner: { id: page.user_id, name: owner.display_name } } };
+  return { viewerId, ownerId: page.user_id, role, chain, member: { role, rootId: steps[top]!.id, owner: { id: page.user_id, name: owner.display_name } } };
 }
 
 /** A stranger gets 404 (the page does not exist for them); a member whose role is too low gets 403. */
@@ -87,14 +89,35 @@ export function requireAccess(db: Db, viewerId: string, pageId: string, need: Ne
 export function pageResponse(db: Db, access: Access, row: PageRow): PageResponse {
   if (!access.member) return { page: toPageDto(row), breadcrumbs: breadcrumbs(db, access.ownerId, row) };
   // Nothing of the owner's own organisation leaves: no favourite flag, no parent above the shared page.
-  const page = { ...toPageDto(row), isFavorite: false, parentId: row.id === access.member.rootId ? null : row.parent_id };
+  const dto = toPageDto(row);
+  const page = { ...dto, content: memberContent(db, access.viewerId, dto.content), isFavorite: false, parentId: row.id === access.member.rootId ? null : row.parent_id };
   return { page, breadcrumbs: access.chain, access: access.member };
 }
 /** The same for a row of a database the reader has already been granted: every share that reaches a database reaches its rows. */
 export function rowResponse(db: Db, access: Access, trail: Breadcrumb[], row: PageRow): PageResponse {
   const chain = [...trail, { id: row.id, title: row.title, icon: row.icon, kind: row.kind }];
   if (!access.member) return { page: toPageDto(row), breadcrumbs: chain };
-  return { page: { ...toPageDto(row), isFavorite: false }, breadcrumbs: chain, access: access.member };
+  const dto = toPageDto(row);
+  return { page: { ...dto, content: memberContent(db, access.viewerId, dto.content), isFavorite: false }, breadcrumbs: chain, access: access.member };
+}
+
+/**
+ * A mention keeps the title the mentioned page had when it was written. A member reads the page's text as it is,
+ * but the title of a page that is not shared with them is not theirs to read: it is left out of the mention, which
+ * stays in place (unlike on a public link, a member may save this text back). `updateContent` restores those
+ * titles when a member saves.
+ */
+function memberContent(db: Db, viewerId: string, content: unknown[]): unknown[] {
+  const readable = new Map<string, boolean>();
+  const canRead = (pageId: string): boolean => {
+    try { resolveAccess(db, viewerId, pageId); return true; }
+    catch (error) { if (error instanceof AppError && error.code === 'not_found') return false; throw error; }
+  };
+  return mapPageLinkTitles(content, (pageId, title) => {
+    if (!title) return undefined;
+    if (!readable.has(pageId)) readable.set(pageId, canRead(pageId));
+    return readable.get(pageId) ? undefined : '';
+  });
 }
 
 const CONDITION: Record<ShareScope, string> = { all: '1', subpages: 'sub.blocked = 0', page: "(sub.depth = 0 OR (sub.depth = 1 AND p.kind = 'row'))" };

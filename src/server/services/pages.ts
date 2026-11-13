@@ -5,6 +5,7 @@ import type { Block } from '../../shared/blocks.ts';
 import { AppError } from '../../shared/errors.ts';
 import { extractPlainText } from '../../shared/text.ts';
 import { stripAnnotationAnchors } from '../../shared/annotations.ts';
+import { mapPageLinkTitles } from '../../shared/shares.ts';
 
 export interface PageRow {
   rid: number; id: string; user_id: string; parent_id: string | null; kind: PageKind; database_id: string | null; position: number;
@@ -133,12 +134,18 @@ function snapshotIfDue(db: Db, row: PageRow, now: number, reason: string, force 
  * each add a version.
  */
 export function updateContent(db: Db, userId: string, id: string, content: unknown, expectedVersion: number, now: number, reason = 'autosave', actorId: string = userId): PageHeadDto {
-  const parsed = parseBlocks(content);
-  if ('error' in parsed) throw new AppError('bad_request', parsed.error);
-  const text = extractPlainText(parsed.blocks);
+  const parse = (value: unknown) => {
+    const parsed = parseBlocks(value);
+    if ('error' in parsed) throw new AppError('bad_request', parsed.error);
+    return { json: parsed.json, text: extractPlainText(parsed.blocks) };
+  };
+  const own = actorId === userId ? parse(content) : undefined;
   return db.transaction(() => {
     const row = loadPage(db, userId, id);
     if (row.version !== expectedVersion) throw new AppError('version_conflict', undefined, { current: headOf(row) });
+    // What a member sends is completed from the text it replaces (the version they wrote it on, as just checked).
+    const parsed = own ?? parse(withStoredTitles(row.content, content));
+    const text = parsed.text;
     const writer = actorId === userId ? null : actorId;
     snapshotIfDue(db, row, now, reason, writer !== (row.content_by ?? null) || (reason !== 'autosave' && writer === null));
     const changes = db.run('UPDATE pages SET content = ?, content_text = ?, content_by = ?, version = version + 1, updated_at = ? WHERE id = ? AND user_id = ? AND version = ?',
@@ -146,6 +153,52 @@ export function updateContent(db: Db, userId: string, id: string, content: unkno
     if (changes !== 1) throw new AppError('version_conflict', undefined, { current: headOf(loadPage(db, userId, id)) });
     return { version: expectedVersion + 1, updatedAt: now, title: row.title };
   });
+}
+
+/**
+ * A member is shown the mentions of pages that are not shared with them without their titles (`pageResponse`), and
+ * sends them back that way. Each mention left without a title gets back the title it carries in the stored text
+ * (the snapshot taken when it was written, whatever has become of the page since), so the owner's text loses nothing
+ * when a member saves it. A title the member did send is theirs to set; nothing is looked up anywhere else.
+ *
+ * Mentions are matched one by one, since two mentions of one page may carry different snapshots: first by place
+ * (the same block, the same page, the same position among that block's mentions of the page), which survives blocks
+ * being removed or reordered; a mention that is found nowhere that way (moved to another block) takes a snapshot of
+ * its page that no other mention has claimed.
+ */
+function withStoredTitles(stored: string, content: unknown): unknown {
+  if (!Array.isArray(content)) return content;
+  interface Kept { title: string; claimed: boolean }
+  const places = new Map<string, Kept[]>(), spare = new Map<string, { list: Kept[]; next: number }>();
+  const push = <T>(map: Map<string, T[]>, key: string, item: T) => { const list = map.get(key); if (list) list.push(item); else map.set(key, [item]); };
+  const place = (blockId: string, pageId: string) => `${blockId}\n${pageId}`;
+  mapPageLinkTitles(JSON.parse(stored) as unknown[], (pageId, title, blockId) => {
+    const kept = { title, claimed: false };
+    push(places, place(blockId, pageId), kept);
+    if (title) { const entry = spare.get(pageId); if (entry) entry.list.push(kept); else spare.set(pageId, { list: [kept], next: 0 }); }
+    return undefined;
+  });
+  // First every mention claims the one in its own place, so that those left over are free for the ones that moved.
+  const answers: ({ pageId: string; title?: string; open: boolean })[] = [], seen = new Map<string, number>();
+  mapPageLinkTitles(content, (pageId, title, blockId) => {
+    const key = place(blockId, pageId), position = seen.get(key) ?? 0;
+    seen.set(key, position + 1);
+    const kept = places.get(key)?.[position];
+    if (kept) kept.claimed = true;
+    answers.push(title ? { pageId, open: false } : kept ? { pageId, title: kept.title, open: false } : { pageId, open: true });
+    return undefined;
+  });
+  for (const answer of answers) {
+    if (!answer.open) continue;
+    const entry = spare.get(answer.pageId);
+    if (!entry) continue;
+    while (entry.next < entry.list.length && entry.list[entry.next]!.claimed) entry.next++;
+    const kept = entry.list[entry.next] ?? entry.list[0]!;
+    kept.claimed = true;
+    answer.title = kept.title;
+  }
+  let index = 0;
+  return mapPageLinkTitles(content, (_pageId, title) => { const answer = answers[index++]; return title ? undefined : answer?.title || undefined; });
 }
 
 export interface PatchPageInput { title?: string | undefined; icon?: string | null | undefined; coverFileId?: string | null | undefined; coverPreset?: string | null | undefined; coverPosition?: number | undefined; fullWidth?: boolean | undefined }

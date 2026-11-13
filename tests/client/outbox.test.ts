@@ -316,6 +316,33 @@ describe('downloading for offline use', () => {
     expect(await queuedOps()).toMatchObject([{ problem: expect.stringContaining('5,000'), conflict: false }]);
     expect(syncStatus.phase).toBe('pending');
   });
+
+  it('learns that a shared database became read-only, also for a row whose text still waits here', async () => {
+    const owner = { id: uuid(), name: '擁有者' };
+    const as = (page: PageResponse, role: 'viewer' | 'editor'): PageResponse => ({ ...page, access: { role, rootId: databaseId, owner } });
+    const other = uuid(), otherPage = pageOf('row', other);
+    const draft = await cachePage(as(rowPage, 'editor'));
+    await cachePage(as(otherPage, 'editor')); await cachePage(as(databasePage, 'editor'));
+    await storeDatabase(me.id, { stamp: 's1.editor', meta: meta(), rows: [row(), row({ id: other })] });
+    await saveLocalContent(rowId, [{ id: 'draft' }], draft.localRevision);
+    online(true);
+    // Nothing in the database changed: only the role did, and with it the stamp.
+    const calls = stubApi(call => {
+      if (call.path === '/api/auth/me') return { json: { user: me, csrfToken: 'synthetic-token' } };
+      if (call.method === 'PUT') return { status: 403, json: { error: { code: 'forbidden', message: '這個頁面以唯讀方式與你共用，無法修改。' } } };
+      if (call.path === '/api/offline/manifest') return { json: { userId: me.id, tree: [], pages: [], maxUploadBytes: 90 * 1024 * 1024, databases: [{ id: databaseId, stamp: 's1.viewer' }], annotations: [] } satisfies OfflineManifest };
+      if (call.path === `/api/offline/databases/${databaseId}`) return { json: { stamp: 's1.viewer', meta: meta(), rows: [row(), row({ id: other })], page: as(databasePage, 'viewer'), pages: [as(rowPage, 'viewer'), as(otherPage, 'viewer')].map(summarizePage) } satisfies DatabaseSnapshotDto };
+      if (call.path.startsWith('/api/offline/pages?ids=')) return { json: { pages: [as(otherPage, 'viewer')] } };
+      return undefined;
+    });
+    await syncNotes({ force: true });
+    expect(calls.find(call => call.path.startsWith('/api/offline/pages?ids='))?.path).toBe(`/api/offline/pages?ids=${other}`);
+    expect((await offlineNote(other))?.local.access?.role).toBe('viewer');
+    expect((await offlineNote(databaseId))?.local.access?.role).toBe('viewer');
+    // The draft is still here, with its baseline, and now knows it may not be written.
+    expect(await offlineNote(rowId)).toMatchObject({ pending: true, local: { access: { role: 'viewer' }, page: { content: [{ id: 'draft' }] } }, base: { access: { role: 'viewer' }, page: { version: 1 } } });
+    expect((await storedDatabase(me.id, databaseId))?.stamp).toBe('s1.viewer');
+  });
 });
 
 describe('a row page kept on this device', () => {

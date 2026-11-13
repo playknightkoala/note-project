@@ -105,3 +105,24 @@ export function publicContent(content: unknown[], token: string, reachable: Read
   };
   return content.map(item => walk(item));
 }
+
+/**
+ * Rewrites the title snapshot that page mentions carry. `titleOf` is called for every mention in document order with
+ * the mentioned page, the title stored with the mention and the id of the block the mention is in; it answers the
+ * title to store instead, or undefined to leave the mention as it is.
+ */
+export function mapPageLinkTitles(content: unknown[], titleOf: (pageId: string, title: string, blockId: string) => string | undefined): unknown[] {
+  const walk = (value: unknown, blockId: string): unknown => {
+    if (Array.isArray(value)) return value.map(item => walk(item, blockId));
+    if (!value || typeof value !== 'object') return value;
+    const node = value as Record<string, unknown>;
+    if (node.type === 'pageLink' && node.props && typeof node.props === 'object') {
+      const props = node.props as { pageId?: unknown; title?: unknown };
+      const title = typeof props.pageId === 'string' ? titleOf(props.pageId, typeof props.title === 'string' ? props.title : '', blockId) : undefined;
+      return title === undefined ? value : { ...node, props: { ...props, title } };
+    }
+    const inside = typeof node.id === 'string' ? node.id : blockId;
+    return Object.fromEntries(Object.entries(node).map(([name, child]) => [name, walk(child, inside)]));
+  };
+  return content.map(item => walk(item, ''));
+}

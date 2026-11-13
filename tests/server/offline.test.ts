@@ -7,7 +7,7 @@ import type { OfflineManifest, SyncNoteInput } from '../../src/shared/offline.ts
 
 let t: TestApp, client: TestClient;
 const block = (text: string) => [{ id: crypto.randomUUID(), type: 'paragraph', props: {}, content: [{ type: 'text', text, styles: {} }], children: [] }];
-const operation = (changes: Partial<SyncNoteInput> = {}): SyncNoteInput => ({ operationId: crypto.randomUUID(), baseVersion: null, baseTitle: '', title: '離線筆記', content: block('手機記錄'), parentId: null, overwrite: false, ...changes });
+const operation = (changes: Partial<SyncNoteInput> = {}): SyncNoteInput => ({ operationId: crypto.randomUUID(), baseVersion: null, baseTitle: '', title: '離線筆記', content: block('手機記錄'), parentId: null, overwrite: false, repeatAware: true, ...changes });
 const save = (id: string, input: SyncNoteInput, who = client) => who.request('PUT', `/api/offline/pages/${id}`, { json: input, headers: { 'if-match': `"${input.baseVersion ?? 0}"` } });
 beforeEach(async () => {
   t = createTestApp(); client = t.client();

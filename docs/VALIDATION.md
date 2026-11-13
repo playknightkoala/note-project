@@ -1,5 +1,34 @@
 # 驗證紀錄
 
+## Code review 與資安加強審查後的修正（2026-11-13，版本 1.1.8）
+
+- 起因：使用者請 codex 與 Claude 各做一次全專案 code review（加強資安），再要求修正 Claude 核對與新發現的所有問題，並請 codex 複核。修正與複核完成時都在 `main` 的工作目錄、版號未動；使用者隨後指示「commit+push+release 1.1.8+移除未使用依賴」，才更新 `package.json`／lock、`src/shared/releases.ts` 與 `docs/releases/1.1.8.md` 並移除依賴（見本段最後的「發布前檢查」）。沒有 migration，沒有新增或升級依賴。
+- 修正內容（協定細節見 ARCHITECTURE「授權時點與同步協定補充」）：
+  1. **離線重送靜默覆寫**（codex Spec-1）：`PUT /api/offline/pages/:id` 回應加 `applied`；用戶端在重送的回應顯示別人已儲存新版時，有新內容就列為衝突，沒有新內容就以伺服器版本取代本機副本並讓編輯器重新載入。
+  2. **授權在讀取請求內容前判定、之後不重驗**（codex Std-3 與其通用情形）：`parseBody` 讀完內容後重驗 session；頁面內文／標題、留言、附件上傳在讀完內容後重新判定存取權；管理端點重新確認管理者；變更密碼在寫入交易內再確認 session 與密碼雜湊；登入時的自動重算雜湊改為條件寫入。
+  3. **未登入即可讓伺服器緩衝 chunked 內容**（含 codex Std-1）：`requestBodyLimit` 改為不預讀、邊讀邊計數；未登入或超過限流的請求不再被讀入。
+  4. **降為唯讀後資料庫與資料列仍顯示可編輯**（codex Spec-2）：成員的資料庫 stamp 附上角色；有待同步草稿的資料列也更新 `access`。
+  5. **nginx 錯誤紀錄可能含公開連結 token**（codex Std-2）：nginx 的標準錯誤輸出先經過濾程式遮蔽 token 再寫出（各等級皆然），等級維持 `warn`。
+  6. 其他：變更密碼的「目前密碼」每帳號 15 分鐘 5 次；scrypt 參數改為 N=2^15、r=8、p=3（舊雜湊登入時自動重算）；HTTPS overlay 下 app 的連接埠固定綁 loopback；nginx 每來源位址同時 100 條連線；成員讀不到未分享頁面在提及中的標題（成員儲存時伺服器補回）；同時處理的上傳上限 4 個（每帳號 2 個，其餘排隊）；選用的每帳號附件總容量 `NOTES_MAX_ACCOUNT_STORAGE_MB` 與容器記憶體上限 `NOTES_MEMORY_LIMIT`（預設皆不限制）；登入、密碼、管理與分享動作的安全事件紀錄。
+- 留給使用者決定的項目：`fflate`、`markdown-it`、`tar` 三個未使用的依賴（ARCHITECTURE 原記載 M6 取消時「依賴保留但未使用」，修正當時沒有動；使用者之後指示移除，已在發布前移除，`MAX_IMPORT_MB` 設定與 `import_jobs` 表仍保留）。每帳號容量與容器記憶體上限只加了設定，預設不限制：數值要看實際使用量，而且目前沒有讓使用者刪除附件的介面，預設開啟會讓帳號卡在上限。
+- 修正前的重現（Node 24.22.1，真實 HTTP 伺服器＋記憶體資料庫，腳本在工作階段暫存目錄，未加入專案）：未登入的 chunked `POST /api/pages` 被讀入 7.0 MiB 才回 401；上傳額度用盡後 chunked 上傳讀入 4.0 MiB 才回 429；延遲的改密碼請求在本人改密碼、攻擊者 session 已 401 之後仍回 204 並奪回帳號；被移出共用名單的成員延遲中的 `PUT content` 回 200、留言回 201；A 重送操作拿到 B 的 v3 當基準後把 B 的內容覆蓋成 v4；降為唯讀前後資料庫 stamp 相同。同帳號另一裝置走同一條同步路徑時原本就會正確回 409（收據被取代），這一點與 codex 報告的描述不同。修正後同一份腳本九項都不再重現。
+- 自動化測試：新增 `tests/server/lateBody.test.ts`（9 項，含 codex 複核後補的「驗證期間密碼被變更或帳號被停用的登入」；其餘 8 項：未登入與超過限流時不讀內容、延遲的改密碼、兩個並行的改密碼只成功一個、目前密碼限流與登入失敗不記錄輸入內容、成員被移除／降級後延遲的內文／改名／留言、被停用帳號與被降級管理者的延遲請求、並行上傳與容量上限）、`tests/server/shareSync.test.ts`（3 項：`applied` 與標題變更、stamp 含角色、提及標題的隱藏與補回）；`tests/client/offline.test.ts` 加 2 項（重送後列為衝突、重送後取代本機副本）、`tests/client/outbox.test.ts` 加 1 項（只有角色改變時更新資料庫、資料列與待同步草稿的權限）。既有測試配合修改：`tests/server/auth.test.ts` 的雜湊前綴、`tests/server/shares.test.ts` 兩處同步回應多了 `applied`、`tests/server/offline.test.ts` 的輔助函式帶上 `repeatAware`。
+- 實際命令（Node 22.23.1／npm 10.9.8，裝在工作階段暫存目錄）：`npm run check`（typecheck、lint、**41 檔／311 tests**、build）全部通過，exit 0（codex 複核後的修正完成後重跑的結果；第一輪修正完成時為 310 tests）。
+- 容器（獨立專案與暫用 volume，自簽憑證，不動 `notes_notes-data`）：`NOTES_PORT=18090 NOTES_HTTPS_PORT=18443 NOTES_TLS_CERT_FILE=… NOTES_TLS_KEY_FILE=… docker compose -p notes-review-fix-check -f compose.yaml -f compose.https.yaml up -d --build --wait`，app 與 nginx 皆 healthy，`/healthz` 兩端 200。
+  - `docker compose … config`：加上 overlay 後即使 `NOTES_BIND=0.0.0.0`，app 的連接埠仍是 `127.0.0.1`；不加 overlay 時照 `NOTES_BIND`；`NOTES_MEMORY_LIMIT=2g` 轉成 `mem_limit`，預設 0 時不產生限制。
+  - `node scripts/check-app.mjs http://127.0.0.1:18090`：40 項檢查通過（exit 0）。
+  - 經 nginx 的未登入 chunked 6 MB `POST /api/pages`：回 401，只上傳了約 256 KB 就結束。
+  - 暫存的功能腳本（經 HTTPS）9 項全過：註冊且 cookie 帶 `Secure`／`HttpOnly`；上傳 20 MB；同時 8 個上傳全部 201；下載為 attachment＋`sandbox`＋`nosniff`；已登入的 chunked 10 MB JSON 回 413；延遲的改密碼請求回 401、本人新密碼可登入、攻擊者指定的密碼不能；公開連結可讀；同一來源保留 110 條連線時有 10 條與之後的請求回 429，釋放後恢復 200。
+  - 停掉 app 後請求 `/s/<token>/x`（帶含 token 的 `Referer`）與 `/api/public/<token>/pages/abc` 得到 504／502。nginx 寫出 `[error]` 等級的訊息，其中請求行、上游網址與 referrer 都顯示為 `/s/-`、`/api/public/-`；nginx 與 app 的紀錄中都找不到該 token。app 紀錄有 `user registered`、`login`、`login failed`、`password changed`、`public link enabled`。
+  - 過濾程式啟用後 nginx 仍是容器的主程序（PID 1），`docker compose stop https` 立即結束、exit code 0。
+  - 補充（codex 第三次複核後）：app 運作時 `/%73/<token>` 與 `/api/%70ublic/<token>` 都回 200（前綴以百分比編碼書寫仍到得了同一頁）。停掉 app 後依序請求 `/%73/<token>`、`/api/%70ublic/<token>`、`/%61pi/public/<token>/pages/x`、token 第一個字元編碼的 `/s/…/x`、一般的 `/s/<token>` 與 `/api/public/<token>`，每個都帶含 `/%73/<token>` 的 `Referer`：nginx 的 `[error]` 行中，含 `%` 的請求行、上游網址與 referrer 都只剩 `-`，其餘顯示為 `/s/-`、`/api/public/-`；nginx 與 app 的紀錄都找不到 token 或其片段，存取紀錄（nginx 正規化後的路徑）也都已遮蔽。
+  - 驗證後 `down -v --rmi local` 移除。
+- 沒有驗證的部分：沒有真實瀏覽器實測（重送後的衝突畫面、編輯器重新載入、成員看到的提及標記都只有單元測試與 API 層測試）；既有的瀏覽器腳本（`check-share.mjs`、`check-offline-*.mjs` 等）這次沒有重跑；上傳排隊只測到 8 個並行的小／中型檔案，沒有量測 90 MB 檔案並行時的記憶體用量；`NOTES_MEMORY_LIMIT` 只確認設定有轉成容器限制，沒有在限制下跑過上傳；nginx 的連線上限在 Docker Desktop 上所有連線都來自同一個閘道位址，沒有驗證多個真實來源的情形；實體手機、Safari、Firefox 與正式環境沒有驗收。
+- **codex 複核（同日）**：codex 重跑 typecheck、lint、test 皆通過，確認原五項中上傳預讀、延遲改密碼、資料庫降權已解決，並提出四點，全部已修正：(1) 改密碼撤銷 session 後，進行中的舊密碼登入仍會簽發 session → 登入改為在最後一次等待之後、於交易內確認密碼雜湊未變且帳號未停用才簽發；(2) `error_log crit` 仍可能在 `alert` 等級記下請求行 → 改為過濾 nginx 的標準錯誤輸出，各等級都遮蔽（上面的容器實測是這個做法的結果）；(3) 舊版前端忽略 `applied`，仍會覆寫 → 前端以 `repeatAware` 表明支援，未表明者在「重送且頁面已前進」時回 409；(4) 成員存回時提及標題被改成目標頁現在的名稱、目標頁刪除後變成空白 → 改從該頁目前儲存的內文補回原本的標題快照。對應測試已加入 `lateBody.test.ts` 與 `shareSync.test.ts`。
+- **codex 第二次複核（同日）**：確認上述 (1)(3) 已解決，再提出三點，全部已修正：(a) token 以百分比編碼書寫時過濾程式遮蔽不到 → 改為遮蔽 `/s/` 與 `/api/public/` 後面整個路徑片段；容器實測：以 `%HH` 改寫 token 第一個字元的網址在 app 運作時公開 API 回 200，停掉 app 後 nginx 的 `[error]` 行與存取紀錄都只有 `/s/-`、`/api/public/-`，紀錄中找不到 token 的其餘部分；(b) 舊雜湊升級期間兩個同時進行的正確登入有一個誤回 401 → 雜湊不同時改以輸入的密碼對新雜湊再驗證後重新確認；(c) 同一頁面的多個提及被補成同一個標題快照 → 改為逐一配對（依區塊與位置，其次取未被認領的快照），測試涵蓋同段兩個不同快照、區塊重排、刪除與提及被移到別的區塊。修正後 Node 22.23.1 的 `npm run check` 再次通過（41 檔／311 tests）。
+- **codex 第三次複核（同日）**：確認登入與提及快照已通過，提及配對的剩餘限制（見 ARCHITECTURE）可以接受；再提出一點：路由前綴本身以百分比編碼書寫（`/%73/<token>`）仍可避開過濾 → 過濾程式改為凡含 `%` 的字詞整個不寫出。容器實測結果見本段容器項目的補充。
+- **發布前檢查（使用者指定 1.1.8 並指示移除未使用依賴之後）**：以 npm 10.9.8 執行 `npm uninstall fflate markdown-it tar @types/markdown-it`，lock 只減少這四個套件與它們獨有的 12 個相依套件，其他套件版本不變；`npm version 1.1.8 --no-git-tag-version`；`src/shared/releases.ts` 與 `docs/releases/1.1.8.md` 加入更新資訊。Node 22.23.1 下 `npm run check` 通過（41 檔／311 tests、build），`npm audit --omit=dev` 0 項。容器：`docker compose -p notes-release-118-check -f compose.yaml -f compose.https.yaml up -d --build --wait`（映像內 `npm ci` 依新的 lock 安裝並建置）兩個容器皆 healthy，`/healthz` 兩端 200，`GET /api/version` 回報 1.1.8 且第一筆更新資訊是 1.1.8；`node scripts/check-app.mjs http://127.0.0.1:18090` 40 項通過；暫存的功能腳本 9 項全過。驗證後 `down -v --rmi local` 移除。這一步沒有重跑百分比編碼的紀錄遮蔽實測（`compose.https.yaml` 自上次實測後沒有再改）。正式環境尚未部署。
+
 ## 強制更新（先儲存再出現、不能延後）與更新紀錄視窗（2026-11-11，版本 1.1.7）
 
 - 使用者要求：(1) 更新公告改成先強制儲存使用者尚未儲存的內容，再出現更新視窗，取消「暫不更新」，一律都要更新；(2) 左下角版號原本點擊是檢查更新，改成以 Modal 顯示更新紀錄，讓使用者知道哪個版本更新了什麼。

@@ -2,8 +2,8 @@ import { Hono } from 'hono';
 import type { Breadcrumb, PageResponse } from '../../shared/api.ts';
 import type { DatabaseStamp } from '../../shared/offline.ts';
 import { pageIdSchema } from '../../shared/api.ts';
-import { isSchemaOp, offlineOpRequestSchema, pageBatchSchema, summarizePage, syncNoteSchema } from '../../shared/offline.ts';
-import type { DatabaseSnapshotDto, OfflineManifest, OfflineOp, OfflineOpResult } from '../../shared/offline.ts';
+import { isSchemaOp, movedSince, offlineOpRequestSchema, pageBatchSchema, summarizePage, syncNoteSchema } from '../../shared/offline.ts';
+import type { DatabaseSnapshotDto, OfflineManifest, OfflineOp, OfflineOpResult, SyncNoteResult } from '../../shared/offline.ts';
 import type { Db } from '../db/driver.ts';
 import { AppError } from '../../shared/errors.ts';
 import type { AppEnv } from '../app.ts';
@@ -15,6 +15,7 @@ import * as databases from '../services/databases.ts';
 import * as annotations from '../services/annotations.ts';
 import * as shares from '../services/shares.ts';
 import { pageResponse, requireAccess, resolveAccess, rowResponse } from '../services/access.ts';
+import type { Access } from '../services/access.ts';
 
 /** Long enough for a device that was offline for weeks to finish a retry; after that a repeat is judged on its own. */
 const RECEIPT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -79,6 +80,12 @@ function resultOf(db: Db, ownerId: string, actorId: string, op: OfflineOp): Offl
   return annotation ? { annotation } : op.type === 'annotation.delete' ? { deletedId: op.annotationId } : {};
 }
 
+/**
+ * A device downloads a database again when its stamp changes. What a member may do with it is part of what the device
+ * keeps, so the role is part of the stamp: a change of role alone reaches the device too.
+ */
+const stampFor = (access: Access, stamp: string): string => access.member ? `${stamp}.${access.member.role}` : stamp;
+
 /** A page without its text, for the lists a device checks for changes: content is never loaded just for that. */
 const LIGHT = `SELECT id, user_id, parent_id, kind, database_id, title, icon, cover_file_id, cover_preset, cover_position, full_width, version, is_favorite,
   trashed_at, created_at, updated_at, '[]' AS content FROM pages`;
@@ -108,7 +115,7 @@ export function offlineRoutes(): Hono<AppEnv> {
     for (const item of shares.incomingPages(db, userId)) {
       let access;
       try { access = resolveAccess(db, userId, item.id); } catch { continue; }
-      if (item.kind === 'database') stamps.push(...databases.databaseStamps(db, item.ownerId, item.id));
+      if (item.kind === 'database') stamps.push(...databases.databaseStamps(db, item.ownerId, item.id).map(entry => ({ id: entry.id, stamp: stampFor(access, entry.stamp) })));
       else discussed.push(item.id);
       if (item.kind !== 'page') continue;
       const row = db.get<pages.PageRow>(`${LIGHT} WHERE id = ? AND user_id = ? AND trashed_at IS NULL`, item.id, item.ownerId);
@@ -124,7 +131,7 @@ export function offlineRoutes(): Hono<AppEnv> {
     const { pages: rows, ...rest } = databases.snapshot(db, access.ownerId, c.req.param('id'));
     // Every row page shares the database's own trail; only the last step differs.
     const page = pageResponse(db, access, pages.loadPage(db, access.ownerId, c.req.param('id')));
-    return c.json<DatabaseSnapshotDto>({ ...rest, page, pages: rows.map(row => summarizePage(rowResponse(db, access, page.breadcrumbs, row))) });
+    return c.json<DatabaseSnapshotDto>({ ...rest, stamp: stampFor(access, rest.stamp), page, pages: rows.map(row => summarizePage(rowResponse(db, access, page.breadcrumbs, row))) });
   });
   /** Notes and row pages by id, content included. Unknown, trashed or unshared ids are left out, never reported. */
   app.get('/pages', c => {
@@ -166,14 +173,20 @@ export function offlineRoutes(): Hono<AppEnv> {
     if (!pageIdSchema.safeParse(id).success) throw new AppError('bad_request');
     const input = await parseBody(c, syncNoteSchema);
     if (expectedVersion(c) !== (input.baseVersion ?? 0)) throw new AppError('bad_request');
-    const response = db.transaction(() => {
+    const response = db.transaction((): SyncNoteResult => {
       const receipt = db.get<{ page_id: string; response: string }>('SELECT page_id, response FROM offline_operations WHERE user_id = ? AND operation_id = ?', userId, input.operationId);
       if (receipt) {
         if (receipt.page_id !== id) throw new AppError('bad_request');
         // A repeat is answered with the page as the caller may see it now: after a downgrade or a removal the answer
-        // stored at the time would say more than they are still entitled to.
+        // stored at the time would say more than they are still entitled to. What the operation itself left behind
+        // goes along, so the device can tell that somebody else has saved since and must not build on this answer.
         const access = requireAccess(db, userId, id, 'view');
-        return pageResponse(db, access, pages.loadPage(db, access.ownerId, id));
+        const stored = (JSON.parse(receipt.response) as PageResponse).page;
+        const result: SyncNoteResult = { ...pageResponse(db, access, pages.loadPage(db, access.ownerId, id)), applied: { version: stored.version, title: stored.title } };
+        // An interface that does not know `applied` would build its next save on this page. It gets the conflict
+        // it already knows how to handle: the draft stays on the device and the user decides.
+        if (!input.repeatAware && movedSince(result)) throw new AppError('version_conflict', undefined, { current: pages.headOf(pages.loadPage(db, access.ownerId, id)) });
+        return result;
       }
       let row, ownerId = userId;
       if (input.baseVersion === null) {
@@ -194,7 +207,7 @@ export function offlineRoutes(): Hono<AppEnv> {
       // Only the last acknowledged operation per page is needed: clients serialize operations and retry before advancing.
       db.run('DELETE FROM offline_operations WHERE user_id = ? AND page_id = ?', userId, id);
       db.run('INSERT INTO offline_operations (user_id, operation_id, page_id, response) VALUES (?, ?, ?, ?)', userId, input.operationId, id, JSON.stringify(result));
-      return result;
+      return { ...result, applied: { version: result.page.version, title: result.page.title } };
     });
     return c.json(response);
   });

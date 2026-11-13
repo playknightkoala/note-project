@@ -33,8 +33,11 @@ export const fileDto = (row: FileRow): FileDto => ({ id: row.id, url: fileUrlFor
 
 export interface SaveFileInput { bytes: Uint8Array; originalName: string; declaredMime: string | undefined; importKey?: string | null; /** Chosen by the client so an upload can be retried safely. */ id?: string; /** A member adding a file to the page of `userId`. */ uploadedBy?: string | undefined }
 
-/** Returns `created: false` when the client-chosen id is already this user's file, i.e. an earlier attempt got through. */
-export function saveFile(db: Db, dataDir: string, userId: string, input: SaveFileInput, now: number): FileRow & { created: boolean } {
+/**
+ * Returns `created: false` when the client-chosen id is already this user's file, i.e. an earlier attempt got through.
+ * `quotaBytes` (0: none) caps what one account's files add up to; a member's upload counts towards the page owner's.
+ */
+export function saveFile(db: Db, dataDir: string, userId: string, input: SaveFileInput, now: number, quotaBytes = 0): FileRow & { created: boolean } {
   if (input.bytes.byteLength === 0) throw new AppError('bad_request', '檔案是空的。');
   if (input.id) {
     const existing = db.get<FileRow>('SELECT * FROM files WHERE id = ?', input.id);
@@ -44,6 +47,10 @@ export function saveFile(db: Db, dataDir: string, userId: string, input: SaveFil
       if (existing.user_id !== userId || (existing.uploaded_by ?? null) !== (input.uploadedBy ?? null)) throw new AppError('conflict', '檔案識別碼無法使用，請重新上傳。');
       return { ...existing, created: false };
     }
+  }
+  if (quotaBytes > 0) {
+    const used = Number(db.get<{ n: number }>('SELECT COALESCE(SUM(size), 0) AS n FROM files WHERE user_id = ?', userId)?.n ?? 0);
+    if (used + input.bytes.byteLength > quotaBytes) throw new AppError('payload_too_large', `附件空間已達上限（${Math.round(quotaBytes / 1024 / 1024)} MB），無法再加入檔案。`);
   }
   const mime = sniffMime(input.bytes, input.declaredMime);
   const ext = extensionFor(mime);

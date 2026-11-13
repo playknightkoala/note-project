@@ -8,15 +8,17 @@ import type { AuthStatusDto, SessionDto } from '../../shared/api.ts';
 import { AppError } from '../../shared/errors.ts';
 import { dummyVerify, hashPassword, needsRehash, verifyPassword } from '../auth/password.ts';
 import { inviteUsable, redeemInvite } from '../auth/invites.ts';
-import { clientIp, requireAuth, requireCsrf, requireSameOrigin } from '../auth/middleware.ts';
+import { clientIp, refreshAuth, requireAuth, requireCsrf, requireSameOrigin } from '../auth/middleware.ts';
 import { ABSOLUTE_TTL_MS, SESSION_COOKIE, createSession, deleteSession, deleteUserSessions, userDto } from '../auth/session.ts';
-import { countUsers, findUserByIdentifier, insertUser } from '../services/users.ts';
+import { countUsers, findUserById, findUserByIdentifier, insertUser } from '../services/users.ts';
 import { parseBody } from './validate.ts';
 
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const LOGIN_PER_IP = 10;
 const LOGIN_PER_PAIR = 5;
 const LOGIN_PER_ACCOUNT = 30;
+/** Wrong guesses at the current password by somebody who holds a session, per account. */
+const PASSWORD_CHANGE_ATTEMPTS = 5;
 
 function secretEquals(given: string, expected: string): boolean {
   const a = createHash('sha256').update(given).digest(), b = createHash('sha256').update(expected).digest();
@@ -100,12 +102,34 @@ export function authRoutes(): Hono<AppEnv> {
     limit(idKey, LOGIN_PER_ACCOUNT);
     const user = findUserByIdentifier(deps.db, identifier);
     const ok = user ? await verifyPassword(user.password_hash, input.password) : (await dummyVerify(input.password), false);
-    if (!user || !ok) throw new AppError('unauthorized', '帳號或密碼錯誤。');
-    if (user.disabled_at !== null) throw new AppError('account_disabled');
-    if (needsRehash(user.password_hash)) deps.db.run('UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?', await hashPassword(input.password), now, user.id);
+    // The identifier is never logged: a password typed into the wrong field would end up in the log.
+    if (!user || !ok) { deps.logger.warn('login failed', { ip, ...(user ? { userId: user.id } : {}) }); throw new AppError('unauthorized', '帳號或密碼錯誤。'); }
+    if (user.disabled_at !== null) { deps.logger.warn('login refused: account disabled', { ip, userId: user.id }); throw new AppError('account_disabled'); }
+    const refuse = (): never => { deps.logger.warn('login failed', { ip, userId: user.id }); throw new AppError('unauthorized', '帳號或密碼錯誤。'); };
+    let verified = user.password_hash;
+    let rehashed = needsRehash(verified) ? await hashPassword(input.password) : undefined;
+    // Verifying (and re-hashing) took time. The session is only issued if, now, the account still has the hash that
+    // was verified and is not disabled: a password change that signed every session out in the meantime must not be
+    // followed by a new session for the old password. A hash that differs is not a refusal by itself (another
+    // sign-in may just have upgraded it): the password is verified against it, and the check is made again.
+    const settle = () => deps.db.transaction((): { csrfToken: string } | { changed: string } => {
+      const current = findUserById(deps.db, user.id);
+      if (!current) return refuse();
+      if (current.password_hash !== verified) return { changed: current.password_hash };
+      if (current.disabled_at !== null) { deps.logger.warn('login refused: account disabled', { ip, userId: user.id }); throw new AppError('account_disabled'); }
+      if (rehashed) deps.db.run('UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?', rehashed, now, user.id);
+      return { csrfToken: issueSession(c, user.id) };
+    });
+    let outcome = settle();
+    for (let attempt = 0; 'changed' in outcome; attempt++) {
+      if (attempt >= 2 || !await verifyPassword(outcome.changed, input.password)) return refuse();
+      verified = outcome.changed; rehashed = undefined;
+      outcome = settle();
+    }
+    const { csrfToken } = outcome;
     deps.rateLimiter.clear(pairKey);
     deps.rateLimiter.clear(idKey);
-    const csrfToken = issueSession(c, user.id);
+    deps.logger.info('login', { ip, userId: user.id });
     return c.json<SessionDto>({ user: userDto(user), csrfToken });
   });
 
@@ -113,6 +137,7 @@ export function authRoutes(): Hono<AppEnv> {
   app.post('/logout', c => {
     const token = getCookie(c, SESSION_COOKIE);
     if (token) deleteSession(c.get('deps').db, token);
+    c.get('deps').logger.info('logout', { userId: c.get('auth')!.user.id });
     deleteCookie(c, SESSION_COOKIE, { path: '/' });
     return c.body(null, 204);
   });
@@ -125,19 +150,37 @@ export function authRoutes(): Hono<AppEnv> {
   app.use('/password', requireAuth, requireCsrf);
   app.post('/password', async c => {
     const deps = c.get('deps');
-    const auth = c.get('auth')!;
+    const userId = c.get('auth')!.user.id;
+    // Holding a session must not be a way to try passwords without limit.
+    const limitKey = `password:${userId}`;
+    const limited = deps.rateLimiter.hit(limitKey, PASSWORD_CHANGE_ATTEMPTS, LOGIN_WINDOW_MS, deps.now());
+    if (!limited.allowed) throw new AppError('rate_limited', undefined, { retryAfterSeconds: limited.retryAfterSeconds });
     const input = await parseBody(c, passwordChangeSchema);
-    if (!await verifyPassword(auth.user.password_hash, input.currentPassword)) throw new AppError('bad_request', '目前密碼不正確。');
-    deps.db.run('UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?', await hashPassword(input.newPassword), deps.now(), auth.user.id);
-    deleteUserSessions(deps.db, auth.user.id, getCookie(c, SESSION_COOKIE));
+    // The hash as it is once the body has arrived, not as it was when the request started.
+    const verified = c.get('auth')!.user.password_hash;
+    if (!await verifyPassword(verified, input.currentPassword)) {
+      deps.logger.warn('password change refused: wrong current password', { userId });
+      throw new AppError('bad_request', '目前密碼不正確。');
+    }
+    const passwordHash = await hashPassword(input.newPassword);
+    deps.db.transaction(() => {
+      // Hashing took time as well. The session must still stand and the password must still be the one that was
+      // verified: otherwise this request was overtaken by a sign-out or by another password change.
+      const auth = refreshAuth(c)!;
+      if (auth.user.password_hash !== verified) throw new AppError('conflict', '密碼已在其他地方變更，請重新登入後再試。');
+      deps.db.run('UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?', passwordHash, deps.now(), userId);
+      deleteUserSessions(deps.db, userId, getCookie(c, SESSION_COOKIE));
+    });
+    deps.rateLimiter.clear(limitKey);
+    deps.logger.info('password changed', { userId });
     return c.body(null, 204);
   });
 
   app.use('/profile', requireAuth, requireCsrf);
   app.patch('/profile', async c => {
     const deps = c.get('deps');
-    const auth = c.get('auth')!;
     const input = await parseBody(c, profileUpdateSchema);
+    const auth = c.get('auth')!;
     const displayName = input.displayName ?? auth.user.display_name;
     const username = input.username === undefined ? auth.user.username : input.username;
     try {

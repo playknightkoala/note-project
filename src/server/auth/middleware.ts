@@ -5,6 +5,7 @@ import { getConnInfo } from '@hono/node-server/conninfo';
 import type { AppEnv } from '../app.ts';
 import { AppError } from '../../shared/errors.ts';
 import { SESSION_COOKIE, loadSession } from './session.ts';
+import type { AuthContext } from './session.ts';
 
 /**
  * Client IP for rate limiting. Behind a trusted proxy: the configured CLIENT_IP_HEADER, otherwise the LAST
@@ -51,8 +52,25 @@ export const requireAuth: MiddlewareHandler<AppEnv> = async (c, next) => {
   await next();
 };
 
+/**
+ * The session as it is now, for a request that was authenticated when it started and has waited since (for its body,
+ * or for a password hash). A session that was revoked meanwhile, or an account disabled meanwhile, ends the request
+ * here. Does nothing on routes that run without a session.
+ */
+export function refreshAuth(c: Context<AppEnv>): AuthContext | undefined {
+  const before = c.get('auth');
+  if (!before) return undefined;
+  const deps = c.get('deps');
+  const auth = loadSession(deps.db, getCookie(c, SESSION_COOKIE), deps.now());
+  if (!auth || auth.session.id !== before.session.id) throw new AppError('unauthorized');
+  if (auth.user.disabled_at !== null) throw new AppError('account_disabled');
+  c.set('auth', auth);
+  return auth;
+}
+
+export const assertAdmin = (c: Context<AppEnv>): void => { if (c.get('auth')?.user.role !== 'admin') throw new AppError('forbidden'); };
 export const requireAdmin: MiddlewareHandler<AppEnv> = async (c, next) => {
-  if (c.get('auth')?.user.role !== 'admin') throw new AppError('forbidden');
+  assertAdmin(c);
   await next();
 };
 

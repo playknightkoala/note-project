@@ -1,6 +1,6 @@
 import type { PageHeadDto, PageNode, PageResponse, SessionDto, TreeDto, UserDto } from '@shared/api';
-import { summarizePage } from '@shared/offline';
-import type { DatabaseSnapshotDto, OfflineManifest, SyncNoteInput } from '@shared/offline';
+import { movedSince, summarizePage } from '@shared/offline';
+import type { DatabaseSnapshotDto, OfflineManifest, SyncNoteInput, SyncNoteResult } from '@shared/offline';
 import type { IncomingShareDto, SharesDto } from '@shared/shares';
 import type { Annotation } from '@shared/annotations';
 import { ApiError, api, isApiError, setCsrfToken } from '../api/client.ts';
@@ -276,16 +276,24 @@ async function sendNote(owner: UserDto, id: string, waitingFiles: string[] = [])
     return { ...current, sending: { revision: current.revision, input: {
       operationId: crypto.randomUUID(), baseVersion: current.isNew ? null : current.base.page.version,
       baseTitle: current.base.page.title, title: current.local.page.title, content: current.local.page.content,
-      parentId: current.local.page.parentId, overwrite: false,
+      parentId: current.local.page.parentId, overwrite: false, repeatAware: true,
     } } };
   });
   const sent = note?.sending;
   if (!sent || user?.id !== owner.id) return;
   try {
-    const response = await api<PageResponse>('PUT', `/api/offline/pages/${id}`, { json: sent.input, headers: { 'if-match': `"${sent.input.baseVersion ?? 0}"` } });
+    const { applied, ...response } = await api<PageResponse & { applied?: SyncNoteResult['applied'] }>('PUT', `/api/offline/pages/${id}`, { json: sent.input, headers: { 'if-match': `"${sent.input.baseVersion ?? 0}"` } });
+    // The answer to a repeat (the first answer was lost) shows the page as it is now. When somebody else has saved
+    // since this operation, that page is not what the text on this device was written on.
+    const moved = movedSince({ ...response, ...(applied ? { applied } : {}) });
     await updateLocal<OfflineNote>(key, current => {
       if (!current || current.sending?.input.operationId !== sent.input.operationId) return current;
       const pending = current.revision !== sent.revision;
+      // Written on since: a conflict for the user to settle, exactly as if the server had refused it. Never a new baseline.
+      if (pending && moved) return { ...current, isNew: false, sending: undefined, problem: '此頁面已在其他地方更新。', conflict: { version: response.page.version, title: response.page.title, updatedAt: response.page.updatedAt } };
+      // Nothing written since: the newer page replaces the copy here, and an open editor is told to load it
+      // (a new revision that is not this tab's own), so it cannot go on typing over a text it no longer shows.
+      if (moved) return { ...current, base: response, local: response, revision: crypto.randomUUID(), writer: '', pending: false, isNew: false, sending: undefined, problem: undefined, conflict: undefined };
       return { ...current, base: response, local: pending ? { ...response, page: { ...response.page, content: current.local.page.content, title: current.local.page.title } } : response, pending, isNew: false, sending: undefined, problem: undefined, conflict: undefined };
     });
   } catch (error) {
@@ -382,7 +390,11 @@ async function pullDatabases(owner: UserDto, manifest: OfflineManifest, known: O
     const changed: string[] = [];
     for (const summary of snapshot.pages) {
       const current = await offlineNote(summary.page.id);
-      if (current?.pending) continue;
+      if (current?.pending) {
+        // As for notes: the draft keeps its baseline, but what the reader may do with the row is the server's to say.
+        if (JSON.stringify(current.base.access) !== JSON.stringify(summary.access)) await updateLocal<OfflineNote>(pageKey(owner.id, summary.page.id), note => note && { ...note, base: withAccess(note.base, summary.access), local: withAccess(note.local, summary.access) });
+        continue;
+      }
       if (!current || current.removed || JSON.stringify(summarizePage(current.base)) !== JSON.stringify(summary)) changed.push(summary.page.id);
     }
     for (let index = 0; index < changed.length; index += ROW_PAGE_BATCH) {
@@ -491,7 +503,7 @@ export async function resolveLocalNote(id: string, choice: 'reload' | 'overwrite
     const revision = crypto.randomUUID();
     const draft = content ?? current.local.page.content;
     return { ...current, base: fresh, local: { ...fresh, page: { ...fresh.page, title: current.local.page.title, content: draft } }, revision, writer, pending: true, isNew: false, problem: undefined, conflict: undefined, removed: undefined,
-      sending: { revision, input: { operationId: crypto.randomUUID(), baseVersion: fresh.page.version, baseTitle: fresh.page.title, parentId: fresh.page.parentId, title: current.local.page.title, content: draft, overwrite: true } } };
+      sending: { revision, input: { operationId: crypto.randomUUID(), baseVersion: fresh.page.version, baseTitle: fresh.page.title, parentId: fresh.page.parentId, title: current.local.page.title, content: draft, overwrite: true, repeatAware: true } } };
   });
   void syncNotes();
   return localResponse(note!);

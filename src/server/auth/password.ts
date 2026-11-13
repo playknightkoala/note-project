@@ -1,5 +1,7 @@
 import { randomBytes, scrypt as scryptCallback, timingSafeEqual } from 'node:crypto';
-const PARAMS = { logN: 15, r: 8, p: 1, keyLength: 64, saltLength: 16 };
+// N=2^15, r=8, p=3 is one of the equivalent settings OWASP lists for scrypt. It costs three times the time of p=1
+// at the same 32 MB per hash, which matters more than peak memory in a single small container.
+const PARAMS = { logN: 15, r: 8, p: 3, keyLength: 64, saltLength: 16 };
 const MAX_MEMORY = 128 * 1024 * 1024;
 
 /** Format: scrypt$logN$r$p$salt$hash (base64url). Parameters travel with the hash so cost can be raised later. */

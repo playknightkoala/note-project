@@ -33,7 +33,7 @@ export interface AppDeps {
   clientDir?: string;
 }
 
-export type AppEnv = { Variables: { deps: AppDeps; auth?: AuthContext } };
+export type AppEnv = { Variables: { deps: AppDeps; auth?: AuthContext; /** Set when a body without a declared length was cut off at its limit. */ bodyOverflow?: AppError } };
 
 /** Credentials and profile fields only. */
 const MAX_AUTH_BODY_BYTES = 64 * 1024;
@@ -76,7 +76,8 @@ export function createApp(input: Omit<AppDeps, 'now' | 'rateLimiter'> & Partial<
   const servesFile = (path: string, method: string) => (path.startsWith('/api/files/') && method !== 'POST') || PUBLIC_FILE.test(path);
   app.use('*', async (c, next) => servesFile(c.req.path, c.req.method) ? next() : secure(c, next));
   app.use('/api/*', async (c, next) => { c.header('Cache-Control', 'no-store'); await next(); });
-  // Nothing is read into memory beyond these sizes. Uploads get their own (authenticated) limit in the files route.
+  // Nothing is read into memory beyond these sizes, and nothing at all before a handler asks for the body: the
+  // routes check the session first. Uploads get their own limit in the files route.
   const authBody = requestBodyLimit(MAX_AUTH_BODY_BYTES), jsonBody = requestBodyLimit(MAX_JSON_BODY_BYTES);
   app.use('/api/*', async (c, next) => {
     if (c.req.method === 'POST' && /^\/api\/files\/?$/.test(c.req.path)) return next();

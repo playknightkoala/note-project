@@ -222,3 +222,58 @@ it('syncs a newly created parent before its child', async () => {
   connectivity(true); await syncNotes();
   expect(sent.map(s => s.title)).toEqual(['上層', '子頁']);
 });
+
+it('treats what was written since a lost answer as a conflict when somebody else has saved meanwhile, never as a draft on their text', async () => {
+  const initial = await cachePage(response);
+  const first = await saveLocalContent(response.page.id, [{ mine: 1 }], initial.localRevision);
+  const sent: SyncNoteInput[] = [];
+  // The first attempt reaches the server but its answer is lost. The repeat is answered with the page as it is by
+  // then: somebody else's version 9, while this operation had produced version 8.
+  const fetcher = network(async input => {
+    sent.push(input);
+    if (sent.length === 1) throw new TypeError('answer lost');
+    return reply(200, { ...response, page: { ...response.page, content: [{ theirs: true }], version: 9 }, applied: { version: 8, title: response.page.title } });
+  });
+  vi.stubGlobal('fetch', fetcher); connectivity(true);
+  await syncNotes({ force: true });
+  expect(await offlineNote(response.page.id)).toMatchObject({ pending: true, sending: { input: { baseVersion: 7 } } });
+  await saveLocalContent(response.page.id, [{ mine: 2 }], first.localRevision);
+  await syncNotes({ force: true });
+  await syncNotes({ force: true });
+  // Sent twice under one operation id, and never again on top of the other person's version.
+  expect(sent.map(input => input.baseVersion)).toEqual([7, 7]);
+  expect(new Set(sent.map(input => input.operationId)).size).toBe(1);
+  // The interface says that it reads `applied`; without that the server would have refused the repeat instead.
+  expect(sent.every(input => input.repeatAware === true)).toBe(true);
+  const note = await offlineNote(response.page.id);
+  expect(note).toMatchObject({ pending: true, problem: '此頁面已在其他地方更新。', conflict: { version: 9 }, base: { page: { version: 7 } }, local: { page: { content: [{ mine: 2 }] } } });
+  expect(note?.sending).toBeUndefined();
+  expect(syncStatus.phase).toBe('pending');
+});
+
+it('replaces the copy kept here, and tells an open editor to load it, when a repeat shows a newer page and nothing was written since', async () => {
+  const initial = await cachePage(response);
+  const saved = await saveLocalContent(response.page.id, [{ mine: 1 }], initial.localRevision);
+  let attempts = 0;
+  const fetcher = network(async () => {
+    if (++attempts === 1) throw new TypeError('answer lost');
+    return reply(200, { ...response, page: { ...response.page, content: [{ theirs: true }], version: 9 }, applied: { version: 8, title: response.page.title } });
+  });
+  vi.stubGlobal('fetch', fetcher); connectivity(true);
+  await syncNotes({ force: true });
+  await syncNotes({ force: true });
+  const note = await offlineNote(response.page.id);
+  expect(note).toMatchObject({ pending: false, writer: '', base: { page: { version: 9, content: [{ theirs: true }] } }, local: { page: { content: [{ theirs: true }] } } });
+  expect(note?.revision).not.toBe(saved.localRevision);
+  expect(note?.problem).toBeUndefined();
+  // The answer's own bookkeeping is not part of the page that is kept.
+  expect(note?.base).not.toHaveProperty('applied');
+  // An answer to the operation itself (nothing happened in between) is a new baseline as before.
+  const again = await saveLocalContent(response.page.id, [{ mine: 3 }], note?.revision);
+  attempts = 5;
+  fetcher.mockImplementation(async (path: string) => path.startsWith('/api/offline/pages/')
+    ? reply(200, { ...response, page: { ...response.page, content: [{ mine: 3 }], version: 10 }, applied: { version: 10, title: response.page.title } })
+    : path === '/api/auth/me' ? reply(200, { user: account, csrfToken: crypto.randomUUID() }) : reply(200, { userId: account.id, tree: [], pages: [], maxUploadBytes: 1 }));
+  await syncNotes({ force: true });
+  expect(await offlineNote(response.page.id)).toMatchObject({ pending: false, revision: again.localRevision, base: { page: { version: 10 } } });
+});

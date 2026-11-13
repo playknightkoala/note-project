@@ -12,6 +12,7 @@ const schema = z.object({
   PUBLIC_ORIGIN: z.preprocess(blank, z.string().url().optional()),
   MAX_UPLOAD_MB: z.coerce.number().int().min(1).max(1024).default(90),
   MAX_IMPORT_MB: z.coerce.number().int().min(1).max(4096).default(200),
+  MAX_ACCOUNT_STORAGE_MB: z.coerce.number().int().min(0).max(10_000_000).default(0),
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
   CLIENT_IP_HEADER: z.preprocess(blank, z.string().regex(/^[A-Za-z0-9-]{1,64}$/).optional()),
   SETUP_TOKEN: z.preprocess(blank, z.string().min(16).max(200).optional()),
@@ -27,6 +28,8 @@ export interface Config {
   publicOrigin: string | undefined;
   maxUploadBytes: number;
   maxImportBytes: number;
+  /** What one account's attachments may add up to; 0 means no limit. */
+  maxAccountStorageBytes: number;
   logLevel: 'debug' | 'info' | 'warn' | 'error';
   /** Header a trusted proxy sets to the real client address (e.g. cf-connecting-ip); only read when trustProxy is on. */
   clientIpHeader: string | undefined;
@@ -49,6 +52,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     publicOrigin: value.PUBLIC_ORIGIN?.replace(/\/+$/, ''),
     maxUploadBytes: value.MAX_UPLOAD_MB * 1024 * 1024,
     maxImportBytes: value.MAX_IMPORT_MB * 1024 * 1024,
+    maxAccountStorageBytes: value.MAX_ACCOUNT_STORAGE_MB * 1024 * 1024,
     logLevel: value.LOG_LEVEL,
     clientIpHeader: value.CLIENT_IP_HEADER?.toLowerCase(),
     setupToken: value.SETUP_TOKEN,
