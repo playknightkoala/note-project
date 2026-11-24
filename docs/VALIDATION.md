@@ -8,6 +8,8 @@
 - Node 22.23.1、npm 10.9.8 下執行 `VITEST_MAX_WORKERS=4 npm run check`，包含 `npm run typecheck`、`npm run lint`、`npm test` 與 `npm run build`，全部通過（42 檔、318 項測試）。預設平行度有一輪既有登入限流測試超過 5 秒，限制平行度後全套通過。Vite 仍提示主 bundle 超過 500 kB。
 - `NOTES_PORT=18195 docker compose -p notes-weak-network-browser up -d --build --wait` 在獨立容器與暫用資料卷成功建置，`curl -fsS http://127.0.0.1:18195/healthz` 回 HTTP 200。
 - 使用手機尺寸的 Chrome 與本機代理模擬一般筆記請求卡住、弱網和登入失效。已確認本機筆記先顯示，弱網編輯先保存至此裝置，連線穩定後自動同步。清除登入 Cookie 後，網站在恢復連線時轉到登入頁，原帳號重新登入後可將弱網草稿同步至伺服器。
+- 1.1.9 發布前，以 Node 22.23.1、npm 10.9.8 執行 `VITEST_MAX_WORKERS=4 npm run check`，42 檔、318 項測試與正式建置通過。以 `NOTES_PORT=18197 docker compose -p notes-release-119-check up -d --build --wait` 重新建置隔離容器，`/healthz` 回 HTTP 200，`node scripts/check-app.mjs http://127.0.0.1:18197` 的 40 項檢查通過。`/api/version`、更新紀錄首筆與 `/sw.js` 均為 1.1.9。
+- 使用 1.1.9 容器重跑 Chrome 驗收，弱網讀寫、連線恢復後同步、登入失效跳轉與重新登入後同步草稿均通過。
 
 ## Code review 與資安加強審查後的修正（2026-11-13，版本 1.1.8）
 
