@@ -1,7 +1,10 @@
 import { useSyncExternalStore } from 'react';
+import { CONNECTION_EVENT, connectionState } from './connection.ts';
 
 const subscribe = (notify: () => void) => {
-  window.addEventListener('online', notify); window.addEventListener('offline', notify);
-  return () => { window.removeEventListener('online', notify); window.removeEventListener('offline', notify); };
+  const events = [CONNECTION_EVENT, 'online', 'offline'];
+  for (const event of events) window.addEventListener(event, notify);
+  return () => { for (const event of events) window.removeEventListener(event, notify); };
 };
-export const useOnline = () => useSyncExternalStore(subscribe, () => navigator.onLine, () => true);
+export const useConnectionState = () => useSyncExternalStore(subscribe, connectionState);
+export const useOnline = () => useConnectionState() === 'online';

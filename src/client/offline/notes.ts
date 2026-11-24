@@ -3,7 +3,8 @@ import { movedSince, summarizePage } from '@shared/offline';
 import type { DatabaseSnapshotDto, OfflineManifest, SyncNoteInput, SyncNoteResult } from '@shared/offline';
 import type { IncomingShareDto, SharesDto } from '@shared/shares';
 import type { Annotation } from '@shared/annotations';
-import { ApiError, api, isApiError, setCsrfToken } from '../api/client.ts';
+import { AUTH_LOST_EVENT, ApiError, api, isApiError, setCsrfToken } from '../api/client.ts';
+import { canReachServer, connectionState } from './connection.ts';
 import { announceOfflineChange, listLocal, readLocal, removeLocal, updateLocal } from './storage.ts';
 import { fileCache, pageKey, setOfflineOwner, sharedKey, uploadCache } from './owner.ts';
 import { forgetAnnotations, forgetDatabase, mustStop, queuedOps, sendOps, storeAnnotations, storeDatabase, storedAnnotationStamp, storedAnnotations, storedDatabase, storedDatabases, transient } from './outbox.ts';
@@ -84,15 +85,22 @@ export async function rememberUser(value: UserDto): Promise<void> {
   try { await updateLocal<UserDto>('user', () => value); offlineStorageError = null; } catch (error) { storageError(error); }
   if (changed) { await purgeOtherAccounts(value.id).catch(storageError); await restoreSyncStatus(value.id); }
 }
-export async function cachedUser(): Promise<UserDto | null> {
-  try { setUser(await readLocal<UserDto>('user') ?? null); if (user) await restoreSyncStatus(user.id); return user; } catch (error) { storageError(error); return null; }
+export async function cachedUser(signal?: AbortSignal): Promise<UserDto | null> {
+  try {
+    const cached = await readLocal<UserDto>('user');
+    if (signal?.aborted) return null;
+    setUser(cached ?? null);
+    if (user) await restoreSyncStatus(user.id);
+    return user;
+  } catch (error) { storageError(error); return null; }
 }
 /** A known 401 revokes offline entry. Keep unsynced drafts for the same account's next login. */
 export async function revokeOfflineEntry(): Promise<void> {
+  const owner = user?.id;
   setUser(null);
   setSyncStatus({ phase: 'idle', completedAt: null });
   setCsrfToken(null);
-  await updateLocal('user', () => undefined).catch(storageError);
+  await updateLocal<UserDto>('user', current => owner && current?.id !== owner ? current : undefined).catch(storageError);
 }
 /** Another tab ended or replaced the session: stop acting for the old account here, without touching storage. */
 export function detachOfflineUser(): void {
@@ -121,9 +129,12 @@ export async function offlineNotes(): Promise<OfflineNote[]> {
   try { return user ? await listLocal<OfflineNote>(`page:${user.id}:`) : []; } catch (error) { storageError(error); return []; }
 }
 export async function offlineNote(id: string): Promise<OfflineNote | undefined> {
-  return user ? readLocal<OfflineNote>(pageKey(user.id, id)) : undefined;
+  const owner = user?.id;
+  const note = owner ? await readLocal<OfflineNote>(pageKey(owner, id)) : undefined;
+  return user?.id === owner && note?.userId === owner ? note : undefined;
 }
 const localResponse = (note: OfflineNote): LocalPageResponse => ({ ...note.local, localRevision: note.revision });
+const readable = (note: OfflineNote) => !note.removed || (note.pending && !note.local.access);
 
 export async function cachePage(response: PageResponse, expectedUserId = user?.id): Promise<LocalPageResponse> {
   const owner = user;
@@ -132,7 +143,8 @@ export async function cachePage(response: PageResponse, expectedUserId = user?.i
   try {
     const note = await updateLocal<OfflineNote>(pageKey(owner.id, response.page.id), current => {
       if (user?.id !== owner.id) throw new ApiError(401, 'unauthorized', '帳號已切換。');
-      if (current?.pending || (current && current.base.page.version > response.page.version)) return current;
+      if (current?.pending) return { ...current, removed: false, base: withAccess(current.base, response.access), local: withAccess(current.local, response.access) };
+      if (current && current.base.page.version > response.page.version) return current;
       // Icon, cover, favourite, position and ancestor names change without a new content version. Those must not
       // look like someone else's edit to an open editor, so the revision only changes with the text itself.
       // A row's name is one of its database cells, not part of the text that is drafted here.
@@ -144,16 +156,28 @@ export async function cachePage(response: PageResponse, expectedUserId = user?.i
   } catch (error) { if (isApiError(error, 401)) throw error; storageError(error); return response; }
 }
 
-export async function loadNote(id: string): Promise<LocalPageResponse> {
+interface Preview<T> { signal: AbortSignal; publish: (copy: T) => void }
+
+export async function loadNote(id: string, preview?: Preview<LocalPageResponse>): Promise<LocalPageResponse> {
   const owner = user?.id;
   const local = await offlineNote(id).catch(() => undefined);
-  if ((local?.isNew || local?.localOnly) && user?.id === owner) return localResponse(local);
-  try { return await cachePage(await api<PageResponse>('GET', `/api/pages/${id}`), owner); }
+  const available = local && readable(local);
+  if (available && (local.isNew || local.localOnly)) return localResponse(local);
+  if (available && !local.local.access) preview?.publish(localResponse(local));
+  try {
+    const response = await api<PageResponse>('GET', `/api/pages/${id}`, preview ? { signal: preview.signal } : {});
+    if (preview?.signal.aborted) throw preview.signal.reason;
+    return await cachePage(response, owner);
+  }
   catch (error) {
+    if (owner && user?.id === owner && local && (isApiError(error, 403) || isApiError(error, 404))) await markRemoved(owner, local);
     if (!transient(error)) throw error;
     if (user?.id !== owner) throw error;
     const cached = await offlineNote(id);
-    if (cached?.removed && !cached.pending) throw new ApiError(404, 'not_found', '此筆記已在線上刪除，無法離線開啟。');
+    if (cached && !readable(cached)) throw new ApiError(404, 'not_found', '這個頁面已刪除或停止分享。');
+    if (cached?.local.access && (connectionState() === 'unstable' || isApiError(error) && error.details?.timeout === true)) {
+      throw new ApiError(0, 'internal', '連線穩定後可重新確認共用頁面的存取權限。');
+    }
     if (cached) return localResponse(cached);
     throw new ApiError(0, 'internal', '此筆記尚未下載至此裝置，連線後開啟一次即可離線使用。');
   }
@@ -163,17 +187,30 @@ function nodeOf(note: OfflineNote): PageNode {
   const p = note.local.page;
   return { id: p.id, parentId: p.parentId, kind: p.kind, title: p.title, icon: p.icon, position: p.createdAt, isFavorite: p.isFavorite, favoritePosition: null, hasChildren: false, updatedAt: p.updatedAt };
 }
-export async function loadTree(): Promise<PageNode[]> {
+export async function loadTree(preview?: Preview<PageNode[]>): Promise<PageNode[]> {
   const owner = user;
+  const local = owner ? readLocal<PageNode[]>(`tree:${owner.id}`).catch(() => undefined) : Promise.resolve(undefined);
+  if (preview) void local.then(async nodes => {
+    if (nodes === undefined || user?.id !== owner?.id || preview.signal.aborted) return;
+    const tree = await treeWithDrafts(nodes);
+    if (user?.id === owner?.id && !preview.signal.aborted) preview.publish(tree);
+  });
   let nodes: PageNode[];
   try {
-    nodes = (await api<TreeDto>('GET', '/api/pages/tree')).pages;
+    nodes = (await api<TreeDto>('GET', '/api/pages/tree', preview ? { signal: preview.signal } : {})).pages;
+    if (preview?.signal.aborted) throw preview.signal.reason;
     if (user?.id !== owner?.id) throw new ApiError(401, 'unauthorized', '帳號已切換，請重新開啟筆記。');
     if (owner) await updateLocal<PageNode[]>(`tree:${owner.id}`, () => nodes).catch(storageError);
   } catch (error) {
-    if (!transient(error)) throw error;
-    nodes = owner ? await readLocal<PageNode[]>(`tree:${owner.id}`) ?? [] : [];
+    if (!transient(error) || user?.id !== owner?.id) throw error;
+    nodes = await local ?? [];
   }
+  const tree = await treeWithDrafts(nodes);
+  if (user?.id !== owner?.id) throw new ApiError(401, 'unauthorized', '帳號已切換，請重新開啟筆記。');
+  return tree;
+}
+
+async function treeWithDrafts(nodes: PageNode[]): Promise<PageNode[]> {
   // Rows are listed inside their database, never in the page tree, also while their text waits to be synced.
   // Neither is somebody else's page that waits here: it belongs under 「與我共用」, not among the user's own pages.
   const pending = (await offlineNotes()).filter(n => n.pending && n.local.page.kind === 'page' && !n.local.access);
@@ -319,7 +356,7 @@ async function pullNotes(owner: UserDto): Promise<void> {
   for (const note of known) {
     if (user?.id !== owner.id) return;
     if (note.local.page.kind === 'page' && !active.has(note.local.page.id) && !note.isNew) {
-      await markRemoved(owner, note);
+      await markRemoved(owner.id, note);
     }
   }
   for (const summary of manifest.pages) {
@@ -327,7 +364,7 @@ async function pullNotes(owner: UserDto): Promise<void> {
     const current = await offlineNote(summary.page.id);
     if (current?.pending) {
       // The draft keeps its baseline, but what the reader may do with a shared page is the server's to say.
-      if (JSON.stringify(current.base.access) !== JSON.stringify(summary.access)) await updateLocal<OfflineNote>(pageKey(owner.id, summary.page.id), note => note && { ...note, base: withAccess(note.base, summary.access), local: withAccess(note.local, summary.access) });
+      if (current.removed || JSON.stringify(current.base.access) !== JSON.stringify(summary.access)) await updateLocal<OfflineNote>(pageKey(owner.id, summary.page.id), note => note && { ...note, removed: false, base: withAccess(note.base, summary.access), local: withAccess(note.local, summary.access) });
       continue;
     }
     if (current && !current.removed && JSON.stringify(summarizePage(current.base)) === JSON.stringify(summary)) continue;
@@ -362,15 +399,18 @@ export async function loadShares(): Promise<SharesDto> {
     if (owner && user?.id === owner.id) await updateLocal<IncomingShareDto[]>(sharedKey(owner.id), () => shares.incoming).catch(storageError);
     return shares;
   } catch (error) {
-    if (!transient(error) || !owner) throw error;
-    return { outgoing: [], incoming: await readLocal<IncomingShareDto[]>(sharedKey(owner.id)) ?? [] };
+    if (!transient(error) || !owner || user?.id !== owner.id) throw error;
+    const incoming = await readLocal<IncomingShareDto[]>(sharedKey(owner.id));
+    if (user?.id !== owner.id) throw error;
+    return { outgoing: [], incoming: incoming ?? [] };
   }
 }
 
-/** A clean copy of something deleted online: keep a marker for an open editor, but not its text. */
-async function markRemoved(owner: UserDto, note: OfflineNote): Promise<void> {
-  await updateLocal<OfflineNote>(pageKey(owner.id, note.local.page.id), current => {
-    if (!current || user?.id !== owner.id || current.revision !== note.revision || current.pending) return current;
+/** Keep a marker for the editor after a deletion or revocation, and preserve drafts for export. */
+async function markRemoved(owner: string, note: OfflineNote): Promise<void> {
+  await updateLocal<OfflineNote>(pageKey(owner, note.local.page.id), current => {
+    if (!current || user?.id !== owner || (!current.local.access && current.revision !== note.revision)) return current;
+    if (current.pending) return current.local.access ? { ...current, removed: true } : current;
     const emptied = (response: PageResponse): PageResponse => ({ ...response, page: { ...response.page, content: [] } });
     return { ...current, removed: true, base: emptied(current.base), local: emptied(current.local) };
   });
@@ -392,7 +432,7 @@ async function pullDatabases(owner: UserDto, manifest: OfflineManifest, known: O
       const current = await offlineNote(summary.page.id);
       if (current?.pending) {
         // As for notes: the draft keeps its baseline, but what the reader may do with the row is the server's to say.
-        if (JSON.stringify(current.base.access) !== JSON.stringify(summary.access)) await updateLocal<OfflineNote>(pageKey(owner.id, summary.page.id), note => note && { ...note, base: withAccess(note.base, summary.access), local: withAccess(note.local, summary.access) });
+        if (current.removed || JSON.stringify(current.base.access) !== JSON.stringify(summary.access)) await updateLocal<OfflineNote>(pageKey(owner.id, summary.page.id), note => note && { ...note, removed: false, base: withAccess(note.base, summary.access), local: withAccess(note.local, summary.access) });
         continue;
       }
       if (!current || current.removed || JSON.stringify(summarizePage(current.base)) !== JSON.stringify(summary)) changed.push(summary.page.id);
@@ -408,7 +448,7 @@ async function pullDatabases(owner: UserDto, manifest: OfflineManifest, known: O
     const alive = new Set(snapshot.pages.map(summary => summary.page.id));
     // The server lists a row that is still marked as existing only here (its "create" was confirmed from another tab).
     for (const note of known) if (note.localOnly && alive.has(note.local.page.id)) await updateLocal<OfflineNote>(pageKey(owner.id, note.local.page.id), current => current?.localOnly ? { ...current, localOnly: undefined } : current);
-    for (const note of known) if (note.local.page.kind === 'row' && note.local.page.databaseId === id && !alive.has(note.local.page.id) && !note.localOnly) await markRemoved(owner, note);
+    for (const note of known) if (note.local.page.kind === 'row' && note.local.page.databaseId === id && !alive.has(note.local.page.id) && !note.localOnly) await markRemoved(owner.id, note);
     if (user?.id !== owner.id) return;
     await storeDatabase(owner.id, snapshot);
   }
@@ -417,7 +457,7 @@ async function pullDatabases(owner: UserDto, manifest: OfflineManifest, known: O
     if (user?.id !== owner.id) return;
     if (listed.has(stored.meta.id)) continue;
     await forgetDatabase(owner.id, stored.meta.id);
-    for (const note of known) if (note.local.page.id === stored.meta.id || (note.local.page.kind === 'row' && note.local.page.databaseId === stored.meta.id && !note.localOnly)) await markRemoved(owner, note);
+    for (const note of known) if (note.local.page.id === stored.meta.id || (note.local.page.kind === 'row' && note.local.page.databaseId === stored.meta.id && !note.localOnly)) await markRemoved(owner.id, note);
   }
 }
 
@@ -434,22 +474,33 @@ async function pullAnnotations(owner: UserDto, manifest: OfflineManifest): Promi
   for (const stored of await storedAnnotations(owner.id)) if (!stamps.has(stored.pageId) && user?.id === owner.id) await forgetAnnotations(owner.id, stored.pageId);
 }
 
+/** The offline profile identifies a queue. Only a fresh server session can authorize sending it. */
+export async function verifySyncSession(): Promise<boolean> {
+  const owner = user?.id;
+  if (!owner) return false;
+  const session = await api<SessionDto>('GET', '/api/auth/me', { cache: 'no-store' });
+  if (user?.id !== owner) return false;
+  if (session.user.id !== owner) {
+    window.dispatchEvent(new Event(AUTH_LOST_EVENT));
+    return false;
+  }
+  setCsrfToken(session.csrfToken);
+  return true;
+}
+
 export function syncNotes({ force = false }: { force?: boolean } = {}): Promise<void> {
   if (force) { nextDownloadAt = 0; retryAt = 0; }
   if (syncing) return syncing;
   syncing = (async () => {
     const owner = user;
-    if (!owner || navigator.onLine === false || Date.now() < retryAt) return;
+    if (!owner || !canReachServer() || Date.now() < retryAt) return;
     const pending = (await offlineNotes()).some(note => note.pending && !note.problem && !note.localOnly)
       || (await queuedOps(owner.id)).some(item => !item.problem) || (await pendingUploads(owner.id)).some(item => !item.problem);
     if (!pending && Date.now() < nextDownloadAt) return;
     setSyncStatus({ ...syncStatus, phase: 'syncing', error: undefined });
     try {
       // Never replay one account's local queue under another account's cookies. CSRF is freshly fetched, not persisted.
-      const session = await api<SessionDto>('GET', '/api/auth/me');
-      if (user?.id !== owner.id) return;
-      if (session.user.id !== owner.id) throw new ApiError(401, 'unauthorized', '登入帳號已變更，請重新登入。');
-      setCsrfToken(session.csrfToken);
+      if (!await verifySyncSession() || user?.id !== owner.id || !canReachServer()) return;
       // Files first, so no other device ever sees a note that refers to a file the server does not have. Then the
       // changes to databases (a new row must exist before its page is synced), the notes, and once more the queue:
       // a discussion on a page created offline can only be sent after that page.

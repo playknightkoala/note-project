@@ -7,6 +7,7 @@ const FILE_PREFIX = 'notes-files-';
 /** Files added offline wait here, under their final address, until the page has uploaded them. Never trimmed. */
 const UPLOAD_PREFIX = 'notes-uploads-';
 const DEFAULT_FILE_BUDGET = 500 * 1024 * 1024;
+const NAVIGATION_WAIT_MS = 800;
 let fileCacheTask = Promise.resolve();
 function serializeFileCache(task) {
   const result = fileCacheTask.then(task);
@@ -123,31 +124,55 @@ async function storeFile(owner, request, response) {
 
 /** The signed-in account's own file that has not reached the server yet. The page stored it with download-safe headers. */
 async function pendingUpload(owner, request) {
-  if (!owner || await currentUser() !== owner) return undefined;
-  return (await caches.open(UPLOAD_PREFIX + owner)).match(request.url);
+  if (!owner) return undefined;
+  const cached = await caches.match(request.url, { cacheName: UPLOAD_PREFIX + owner });
+  return cached && await currentUser() === owner ? cached : undefined;
 }
 
 async function fileResponse(event) {
   const request = event.request;
   const owner = await currentUser();
+  const pending = await pendingUpload(owner, request).catch(() => undefined);
+  // Newly added files should remain available even when the connection hangs. Previously downloaded files
+  // still wait for the server to answer, and a definite denial always takes precedence.
+  const timeout = pending ? new AbortController() : undefined;
+  const timer = timeout && setTimeout(() => timeout.abort(), 3_000);
   try {
     // The browser's HTTP cache may revalidate with the ETag (304), so an unchanged file is not downloaded again.
-    const response = await fetch(request);
+    const response = timeout ? await fetch(request, { signal: timeout.signal }) : await fetch(request);
     // The server does not know a file that is still waiting on this device; that is the only 404 answered locally.
-    if (response.status === 404) return await pendingUpload(owner, request) ?? response;
+    if (owner && (response.status === 401 || response.status === 403 || response.status === 404)) {
+      const remove = caches.open(FILE_PREFIX + owner).then(cache => cache.delete(request)).catch(() => {});
+      if (event.waitUntil) event.waitUntil(remove);
+    }
+    if (response.status === 404) return await pendingUpload(owner, request).catch(() => undefined) ?? response;
     if (owner && response.ok && response.status === 200 && response.headers.get('x-notes-user') === owner && response.headers.has('content-length')) {
       const work = storeFile(owner, request, response.clone());
       if (event.waitUntil) event.waitUntil(work);
     }
-    // An explicit 401/404 must never fall back to a cached private file.
+    // An explicit denial must never fall back to a downloaded private file.
     return response;
   } catch {
     if (owner && await currentUser() === owner) {
-      const cached = await (await caches.open(FILE_PREFIX + owner)).match(request) ?? await pendingUpload(owner, request);
+      const cached = timeout?.signal.aborted ? await pendingUpload(owner, request)
+        : await (await caches.open(FILE_PREFIX + owner)).match(request) ?? await pendingUpload(owner, request);
       if (cached) return cached;
     }
     return new Response('此附件尚未下載至此裝置，請連線後再開啟。', { status: 503, headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' } });
-  }
+  } finally { if (timer !== undefined) clearTimeout(timer); }
+}
+
+async function navigationResponse(request, isPublic) {
+  const network = fetch(request).catch(() => undefined);
+  const shell = () => caches.open(SHELL).then(cache => cache.match('/')).catch(() => undefined);
+  if (isPublic) return await network ?? await shell() ?? Response.error();
+  const cached = await shell();
+  if (!cached) return await network ?? Response.error();
+  // Prefer a fresh shell when the server answers quickly, including when it has newer security headers.
+  let timer;
+  const deadline = new Promise(resolve => { timer = setTimeout(resolve, NAVIGATION_WAIT_MS); });
+  try { return await Promise.race([network, deadline]) ?? cached; }
+  finally { clearTimeout(timer); }
 }
 
 self.addEventListener('fetch', event => {
@@ -158,7 +183,7 @@ self.addEventListener('fetch', event => {
   // Authentication and JSON data always go to the API, never to the shared shell cache.
   if (url.pathname.startsWith('/api/') || url.pathname === '/healthz') return;
   if (request.mode === 'navigate') {
-    event.respondWith(fetch(request).catch(async () => (await (await caches.open(SHELL)).match('/')) ?? Response.error()));
+    event.respondWith(navigationResponse(request, url.pathname.startsWith('/s/')));
   } else if (url.pathname.startsWith('/assets/')) {
     event.respondWith((async () => {
       const cache = await caches.open(SHELL);

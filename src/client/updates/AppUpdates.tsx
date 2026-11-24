@@ -10,6 +10,7 @@ import { activateAppUpdate } from './activate.ts';
 import { prepareForUpdate } from './guards.ts';
 import { APP_VERSION } from './version.ts';
 import { pendingFileUploads } from '../api/files.ts';
+import { useOnline } from '../offline/useOnline.ts';
 
 /** How soon saving is tried again while something only the user can finish is still open. */
 const RETRY_MS = 2000;
@@ -47,18 +48,13 @@ export function AppUpdates() {
   const [failure, setFailure] = useState<string | null>(null);
   const [logOpened, setLogOpened] = useState(false);
   const [composing, setComposing] = useState(false);
-  const [online, setOnline] = useState(() => navigator.onLine !== false);
+  const online = useOnline();
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const start = () => { clearTimeout(timer); setComposing(true); };
     const end = () => { timer = setTimeout(() => setComposing(false), 100); };
     document.addEventListener('compositionstart', start, true); document.addEventListener('compositionend', end, true);
     return () => { clearTimeout(timer); document.removeEventListener('compositionstart', start, true); document.removeEventListener('compositionend', end, true); };
-  }, []);
-  useEffect(() => {
-    const changed = () => setOnline(navigator.onLine !== false);
-    window.addEventListener('online', changed); window.addEventListener('offline', changed);
-    return () => { window.removeEventListener('online', changed); window.removeEventListener('offline', changed); };
   }, []);
   // A new version: save first, then show the window. It cannot be put off, so it must never open over unsaved work.
   useEffect(() => {

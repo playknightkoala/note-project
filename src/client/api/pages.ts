@@ -13,14 +13,24 @@ export const pageKeys = {
 };
 
 export function useTree() {
-  return useQuery({ queryKey: pageKeys.tree, queryFn: loadTree, networkMode: 'always', staleTime: 30_000 });
+  const client = useQueryClient();
+  return useQuery({
+    queryKey: pageKeys.tree, networkMode: 'always', staleTime: 30_000,
+    queryFn: ({ signal }) => loadTree({ signal, publish: copy => {
+      if (!signal.aborted && client.getQueryState(pageKeys.tree)?.status === 'pending') client.setQueryData(pageKeys.tree, copy);
+    } }),
+  });
 }
 
 /** The full page (content included). gcTime 0 so re-entering a page always refetches; the editor owns the content while mounted. */
 export function usePage(id: string | undefined) {
+  const client = useQueryClient();
+  const key = pageKeys.page(id ?? '');
   return useQuery({
-    queryKey: pageKeys.page(id ?? ''),
-    queryFn: () => loadNote(id!), networkMode: 'always',
+    queryKey: key,
+    queryFn: ({ signal }) => loadNote(id!, { signal, publish: copy => {
+      if (!signal.aborted && client.getQueryState(key)?.status === 'pending') client.setQueryData(key, copy);
+    } }), networkMode: 'always',
     enabled: !!id, staleTime: Infinity, gcTime: 0, retry: false,
   });
 }

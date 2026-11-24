@@ -4,6 +4,7 @@ import { applyAnnotationOp, applyDatabaseOp, describeOp, isDatabaseOp, isSchemaO
 import type { DatabaseSnapshot, DatabaseSnapshotDto, OfflineOp, OfflineOpResult } from '@shared/offline';
 import { newId } from '@shared/ids';
 import { ApiError, api, isApiError } from '../api/client.ts';
+import { canReachServer } from './connection.ts';
 import { annotationsKey, databaseKey, offlineActor, offlineOwner, opPrefix, pageKey } from './owner.ts';
 import { listLocal, readLocal, removeLocal, updateLocal } from './storage.ts';
 
@@ -29,7 +30,8 @@ export const transient = (error: unknown) => isApiError(error) && (error.status 
  * The whole sync has to stop and try again later: no connection, no session, or a session that is no longer the one
  * the sync started with (its CSRF token is refused). None of these says anything about the item being sent.
  */
-export const mustStop = (error: unknown) => transient(error) || isApiError(error, 401) || (isApiError(error, 403) && error.code === 'csrf');
+export const mustStop = (error: unknown) => transient(error) || isApiError(error, 401)
+  || (isApiError(error, 403) && (error.code === 'csrf' || error.code === 'internal'));
 
 const writer = newId();
 let counter = 0;
@@ -155,7 +157,7 @@ export function submitOp(op: OfflineOp): Promise<SubmittedOp> {
     const id = newId();
     // Without an account to keep data for, there is nowhere to queue: the change is sent now or fails visibly.
     if (!owner) return { ...await send({ id, force: false, op }), queued: false };
-    if (navigator.onLine !== false && (await inScope(owner, scope)).length === 0 && !(await pageNotUploaded(owner, op))) {
+    if (canReachServer() && (await inScope(owner, scope)).length === 0 && !(await pageNotUploaded(owner, op))) {
       try {
         const result = await send({ id, force: false, op });
         if (offlineOwner() === owner) { await absorb(owner, op, result).catch(() => {}); announce(scope); }

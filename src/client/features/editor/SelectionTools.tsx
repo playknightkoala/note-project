@@ -17,6 +17,7 @@ import { IconPicker } from '../page/PageHeader.tsx';
 import { markAnnotation, removeAnnotation, updateAnnotationHighlights } from './annotationStyle.ts';
 import { readLocal, updateLocal } from '../../offline/storage.ts';
 import { hasQueued, localAnnotations, OUTBOX_EVENT, rememberAnnotations, submitOp, transient } from '../../offline/outbox.ts';
+import { CONNECTION_EVENT } from '../../offline/connection.ts';
 import type { AppEditor } from './schema.ts';
 import { SelectionToolbar } from './SelectionToolbar.tsx';
 import { MobileSelectionTools } from './MobileSelectionTools.tsx';
@@ -86,8 +87,8 @@ export function SelectionTools({ editor, pageId, composing = false, annotationsE
   useEffect(() => {
     const refresh = () => { void client.invalidateQueries({ queryKey }); };
     const changed = (event: Event) => { if ((event as CustomEvent<string>).detail === `ann:${pageId}`) refresh(); };
-    window.addEventListener(OUTBOX_EVENT, changed); window.addEventListener('online', refresh);
-    return () => { window.removeEventListener(OUTBOX_EVENT, changed); window.removeEventListener('online', refresh); };
+    window.addEventListener(OUTBOX_EVENT, changed); window.addEventListener(CONNECTION_EVENT, refresh);
+    return () => { window.removeEventListener(OUTBOX_EVENT, changed); window.removeEventListener(CONNECTION_EVENT, refresh); };
   }, [client, queryKey, pageId]);
   const highlightKey = me.data ? `annotation-highlights:${me.data.id}:${pageId}` : null;
   const [cachedHighlights, setCachedHighlights] = useState<{ key: string; ids: string[] } | null>(null);

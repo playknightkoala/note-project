@@ -3,6 +3,7 @@ import { api } from './client.ts';
 import { transient } from '../offline/outbox.ts';
 import { queueUpload } from '../offline/uploads.ts';
 import { syncStatus } from '../offline/notes.ts';
+import { canReachServer } from '../offline/connection.ts';
 
 export interface UploadedFile { id: string; url: string; name: string; mime: string; size: number; sha256: string; createdAt: number; /** Kept on this device; uploaded at the next sync. */ queued?: boolean }
 export let pendingFileUploads = 0;
@@ -17,7 +18,7 @@ export async function uploadFile(file: File, { offline = false, pageId }: { offl
   const id = newId();
   pendingFileUploads++;
   try {
-    if (navigator.onLine !== false || !offline) {
+    if (canReachServer() || !offline) {
       const form = new FormData();
       form.append('file', file, file.name);
       form.append('id', id);

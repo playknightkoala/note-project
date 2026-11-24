@@ -8,7 +8,8 @@ import { ApiError, api } from './client.ts';
 import { pageKeys } from './pages.ts';
 import { hasQueued, localDatabase, OUTBOX_EVENT, storeDatabase, submitOp, transient } from '../offline/outbox.ts';
 import { offlineOwner } from '../offline/owner.ts';
-import { createLocalRow, dropLocalRow, renameLocalRow } from '../offline/notes.ts';
+import { createLocalRow, dropLocalRow, offlineNote, renameLocalRow } from '../offline/notes.ts';
+import { CONNECTION_EVENT } from '../offline/connection.ts';
 
 export const databaseKeys = {
   meta: (id: string) => ['database', id] as const,
@@ -38,9 +39,9 @@ async function deviceCopy(id: string) {
  * The server's answer while nothing is waiting for this database; otherwise (changes not yet synced, or no
  * connection) the copy on this device with those changes applied, so the user keeps seeing their own edits.
  */
-async function loadDatabase(id: string): Promise<LoadedDatabase> {
+async function loadDatabase(id: string, signal?: AbortSignal): Promise<LoadedDatabase> {
   if (!await hasQueued(`db:${id}`)) {
-    try { return { ...await api<DatabaseDto>('GET', `/api/databases/${id}`), local: false }; }
+    try { return { ...await api<DatabaseDto>('GET', `/api/databases/${id}`, signal ? { signal } : {}), local: false }; }
     catch (error) { if (!transient(error)) throw error; }
   }
   return { ...(await deviceCopy(id)).meta, local: true };
@@ -59,13 +60,29 @@ export function useDatabaseSync(id: string): void {
   useEffect(() => {
     const refresh = () => { for (const key of [databaseKeys.meta(id), databaseKeys.rows(id), ['database-row']]) void client.invalidateQueries({ queryKey: key }); };
     const changed = (event: Event) => { if ((event as CustomEvent<string>).detail === `db:${id}`) refresh(); };
-    window.addEventListener(OUTBOX_EVENT, changed); window.addEventListener('online', refresh); window.addEventListener('offline', refresh);
-    return () => { window.removeEventListener(OUTBOX_EVENT, changed); window.removeEventListener('online', refresh); window.removeEventListener('offline', refresh); };
+    window.addEventListener(OUTBOX_EVENT, changed); window.addEventListener(CONNECTION_EVENT, refresh);
+    return () => { window.removeEventListener(OUTBOX_EVENT, changed); window.removeEventListener(CONNECTION_EVENT, refresh); };
   }, [client, id]);
 }
 
 export function useDatabase(id: string) {
-  return useQuery({ queryKey: databaseKeys.meta(id), queryFn: () => loadDatabase(id), networkMode: 'always', retry: false, staleTime: 0, gcTime: 0, refetchInterval: 30_000 });
+  const client = useQueryClient();
+  const key = databaseKeys.meta(id);
+  return useQuery({
+    queryKey: key, networkMode: 'always', retry: false, staleTime: 0, gcTime: 0, refetchInterval: 30_000,
+    queryFn: ({ signal }) => {
+      const owner = offlineOwner();
+      void (async () => {
+        const note = await offlineNote(id);
+        if (!note || note.removed || note.local.access || signal.aborted) return;
+        const copy = await localDatabase(id);
+        if (copy && !signal.aborted && offlineOwner() === owner && client.getQueryState(key)?.status === 'pending') {
+          client.setQueryData<LoadedDatabase>(key, { ...copy.meta, local: true });
+        }
+      })().catch(() => {});
+      return loadDatabase(id, signal);
+    },
+  });
 }
 export function useDatabaseRows(id: string, version: number, config: ViewConfig, enabled = true, local = false) {
   return useInfiniteQuery({

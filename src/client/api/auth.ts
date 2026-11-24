@@ -5,15 +5,17 @@ import { cachedUser, forgetOfflineData, rememberUser, revokeOfflineEntry, transi
 
 export const authKeys = { me: ['me'] as const, status: ['auth', 'status'] as const, users: ['admin', 'users'] as const, invites: ['admin', 'invites'] as const };
 
-async function fetchMe(): Promise<UserDto | null> {
+async function fetchMe({ signal }: { signal: AbortSignal }): Promise<UserDto | null> {
   try {
-    const session = await api<SessionDto>('GET', '/api/auth/me');
+    const session = await api<SessionDto>('GET', '/api/auth/me', { cache: 'no-store', signal });
+    signal.throwIfAborted();
     setCsrfToken(session.csrfToken);
     await rememberUser(session.user);
     return session.user;
   } catch (error) {
+    signal.throwIfAborted();
     if (isApiError(error, 401)) { setCsrfToken(null); await revokeOfflineEntry(); return null; }
-    if (transient(error)) { const cached = await cachedUser(); if (cached) return cached; }
+    if (transient(error)) { const cached = await cachedUser(signal); if (cached) return cached; }
     throw error;
   }
 }

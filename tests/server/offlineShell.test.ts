@@ -24,6 +24,7 @@ async function worker(owner: string | null = 'user-a', limitMB?: number, clients
   const cacheApi = {
     keys: async () => [...stores.keys()],
     delete: async (key: string) => stores.delete(key),
+    match: async (key: string, { cacheName }: { cacheName: string }) => stores.get(cacheName)?.get(key)?.clone(),
     open: async (name: string) => {
       if (!stores.has(name)) stores.set(name, new Map());
       const entries = stores.get(name)!;
@@ -31,7 +32,7 @@ async function worker(owner: string | null = 'user-a', limitMB?: number, clients
         match: async (key: string | { url: string }) => entries.get(normalize(key))?.clone(),
         put: async (key: string | { url: string }, response: Response) => { puts.push(normalize(key)); entries.set(normalize(key), response); },
         keys: async () => [...entries.keys()],
-        delete: async (key: string) => entries.delete(key),
+        delete: async (key: string | { url: string }) => entries.delete(normalize(key)),
         addAll: async (keys: string[]) => { for (const key of keys) entries.set(key, new Response(`fetched ${key}`)); },
       };
     },
@@ -40,7 +41,7 @@ async function worker(owner: string | null = 'user-a', limitMB?: number, clients
   const skipWaiting = vi.fn().mockResolvedValue(undefined);
   runInNewContext(readFileSync('src/client/offline/service-worker.js', 'utf8').replace('/* __NOTES_ASSETS__ */ []', JSON.stringify(assets)), {
     self: { skipWaiting, registration, clients: { claim: async () => {}, matchAll: async () => clients }, location: { origin: 'https://notes.example.test' }, addEventListener: (name: string, listener: (event: unknown) => void) => listeners.set(name, listener) },
-    indexedDB, caches: cacheApi, fetch: fetcher, URL, Response,
+    indexedDB, caches: cacheApi, fetch: fetcher, URL, Response, AbortController, setTimeout, clearTimeout,
   });
   const request = async (path: string, mode = 'cors', method = 'GET'): Promise<Response | undefined> => {
     let result: Promise<Response> | undefined;
@@ -117,6 +118,26 @@ it('serves cached shell on offline deep-link navigation but never intercepts JSO
   expect(await w.request('/api/auth/me')).toBeUndefined();
   expect(await w.request('/api/pages/some-id', 'navigate')).toBeUndefined();
   expect(await w.request('/api/files/file-id', 'cors', 'DELETE')).toBeUndefined();
+});
+
+it('uses the cached shell during slow navigation, while a fast response still supplies the new shell', async () => {
+  const w = await worker();
+  await (await w.cacheApi.open('__NOTES_SHELL__')).put('/', new Response('本機介面'));
+  w.fetcher.mockImplementationOnce(() => new Promise(() => {}));
+  expect(await (await w.request('/p/synthetic', 'navigate'))?.text()).toBe('本機介面');
+  w.fetcher.mockResolvedValueOnce(new Response('新介面'));
+  expect(await (await w.request('/p/synthetic', 'navigate'))?.text()).toBe('新介面');
+  expect(await w.request('/healthz')).toBeUndefined();
+});
+
+it('stops serving a downloaded attachment after a definite access denial', async () => {
+  const w = await worker();
+  const path = '/api/files/synthetic';
+  const cache = await w.cacheApi.open('notes-files-user-a');
+  await cache.put(`https://notes.example.test${path}`, new Response('已下載的附件'));
+  w.fetcher.mockResolvedValueOnce(new Response(null, { status: 404 }));
+  expect((await w.request(path))?.status).toBe(404);
+  expect((await w.request(path))?.status).toBe(503);
 });
 
 it('caches attachments larger than 20 MB and evicts by total bytes rather than a file count', async () => {
