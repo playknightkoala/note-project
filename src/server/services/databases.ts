@@ -32,6 +32,9 @@ function bumpSchema(db: Db, userId: string, id: string, now: number): DatabaseDt
   db.run('UPDATE pages SET schema_version = schema_version + 1, updated_at = ? WHERE id = ? AND user_id = ?', now, id, userId);
   return getDatabase(db, userId, id);
 }
+function propertyOptions(input: PropertyInput): string {
+  return JSON.stringify({ choices: input.choices, ...(input.type === 'number' && input.groupThousands ? { groupThousands: true } : {}) });
+}
 function checkChoices(input: PropertyInput): void {
   if (!['select', 'multi_select'].includes(input.type) && input.choices.length) throw new AppError('bad_request', '只有單選與多選欄位能設定選項。');
   if (new Set(input.choices.map(choice => choice.label.toLowerCase())).size !== input.choices.length) throw new AppError('bad_request', '選項名稱不可重複。');
@@ -52,7 +55,7 @@ export function addProperty(db: Db, userId: string, id: string, input: PropertyI
     const current = properties(db, userId, id);
     if (current.length >= 50) throw new AppError('conflict', '每個資料庫最多 50 個屬性。');
     db.run('INSERT INTO db_properties (id, database_id, name, type, options, position, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      propertyId ?? crypto.randomUUID(), id, input.name, input.type, JSON.stringify({ choices: input.choices }), (current.at(-1)?.position ?? 0) + 1024, now);
+      propertyId ?? crypto.randomUUID(), id, input.name, input.type, propertyOptions(input), (current.at(-1)?.position ?? 0) + 1024, now);
     return bumpSchema(db, userId, id, now);
   });
 }
@@ -74,7 +77,7 @@ export function updateProperty(db: Db, userId: string, id: string, propertyId: s
     if (input.type === current.type && values.some(value => !valueSchema(candidate).safeParse(JSON.parse(value.value_json)).success)) throw new AppError('conflict', '選項仍有資料列使用，請先更新資料列後再移除。');
     if (input.type !== current.type) pruneViews(db, userId, id, propertyId, { remove: false, clearGrouping: input.type !== 'select' });
     else if (JSON.stringify(input.choices) !== JSON.stringify(current.choices)) pruneViews(db, userId, id, propertyId, { remove: false, clearGrouping: false, validChoices: new Set(input.choices.map(choice => choice.id)) });
-    db.run('UPDATE db_properties SET name = ?, type = ?, options = ? WHERE id = ? AND database_id = ?', input.name, input.type, JSON.stringify({ choices: input.choices }), propertyId, id);
+    db.run('UPDATE db_properties SET name = ?, type = ?, options = ? WHERE id = ? AND database_id = ?', input.name, input.type, propertyOptions(input), propertyId, id);
     return bumpSchema(db, userId, id, now);
   });
 }

@@ -3,6 +3,8 @@ import { DateInput } from '@mantine/dates';
 import 'dayjs/locale/zh-tw';
 import type { CellValue, DatabaseProperty, PropertyChoice } from '@shared/database';
 
+const amountFormat = new Intl.NumberFormat('zh-TW', { useGrouping: true, maximumSignificantDigits: 21 });
+
 export function ChoiceTag({ choice }: { choice: PropertyChoice }) {
   return <span className="choice-tag" data-color={choice.color}>{choice.label}</span>;
 }
@@ -26,5 +28,6 @@ export function CellDisplay({ property, value }: { property: DatabaseProperty | 
     const ids = Array.isArray(value) ? value : value ? [value] : [];
     return <span className="choice-tags">{property.choices.filter(choice => ids.includes(choice.id)).map(choice => <ChoiceTag key={choice.id} choice={choice} />)}</span>;
   }
+  if (property?.type === 'number' && property.groupThousands && typeof value === 'number') return <>{amountFormat.format(value)}</>;
   return <>{value === null || value === '' ? <span className="cell-empty">{property ? '空白' : '無標題'}</span> : String(value)}</>;
 }

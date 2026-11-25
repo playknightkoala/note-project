@@ -20,6 +20,8 @@ import { PageHeader } from './PageHeader.tsx';
 import { uploadFile } from '../../api/files.ts';
 import { useAutosave } from './useAutosave.ts';
 import { useTableBleed } from './useTableBleed.ts';
+import { RowPeek, useRowPeekId } from '../database/RowPeek.tsx';
+import { SaveStatus } from './SaveStatus.tsx';
 import { HistoryDrawer } from './HistoryDrawer.tsx';
 import { DatabaseView } from '../database/DatabaseView.tsx';
 import { RowPropertiesPanel } from '../database/RowPropertiesPanel.tsx';
@@ -40,14 +42,25 @@ type Blocks = PartialBlock<typeof schema.blockSchema, typeof schema.inlineConten
 export function PageRoute() {
   const { pageId = '' } = useParams();
   const page = usePage(pageId);
+  const rowId = useRowPeekId();
   if (page.isPending) return <Center h="60vh"><Loader size="sm" /></Center>;
   if (page.error || !page.data) {
     return <Center h="60vh"><Text c="dimmed">{isApiError(page.error, 404) ? '找不到這個頁面，可能已被刪除。' : errorText(page.error)}</Text></Center>;
   }
-  return <PageView key={pageId} initial={page.data} />;
+  return <><PageView key={pageId} initial={page.data} />
+    {rowId && page.data.page.kind === 'database' && <RowPeek fullHref={`/p/${rowId}`}><PeekPage key={rowId} databaseId={pageId} rowId={rowId} /></RowPeek>}
+  </>;
 }
 
-function PageView({ initial }: { initial: LocalPageResponse }) {
+function PeekPage({ databaseId, rowId }: { databaseId: string; rowId: string }) {
+  const row = usePage(rowId);
+  if (row.isPending) return <Center p="xl"><Loader size="sm" /></Center>;
+  if (!row.data || row.error || row.data.page.kind !== 'row' || row.data.page.databaseId !== databaseId)
+    return <Alert color="red">{row.error ? errorText(row.error) : '找不到這筆資料列。'}</Alert>;
+  return <PageView initial={row.data} peek />;
+}
+
+function PageView({ initial, peek = false }: { initial: LocalPageResponse; peek?: boolean }) {
   const pageId = initial.page.id;
   // Set when the page belongs to somebody else. What the reader may do follows from the role; the server enforces it.
   const access = initial.access;
@@ -81,8 +94,8 @@ function PageView({ initial }: { initial: LocalPageResponse }) {
   const editedAt = Math.max(editedHere, initial.page.updatedAt);
   const touch = useCallback(() => setEditedAt(Date.now()), []);
   const [meta, setMeta] = useState({ title: initial.page.title, icon: initial.page.icon, fullWidth: initial.page.fullWidth, coverUrl: initial.page.coverUrl, coverPosition: initial.page.coverPosition });
-  useDocumentHead(meta.title, meta.icon);
-  useEffect(() => { rememberPage(pageId); expandMany(initial.breadcrumbs.slice(0, -1).map(b => b.id)); }, [pageId, rememberPage, expandMany, initial.breadcrumbs]);
+
+  useEffect(() => { if (peek) return; rememberPage(pageId); expandMany(initial.breadcrumbs.slice(0, -1).map(b => b.id)); }, [peek, pageId, rememberPage, expandMany, initial.breadcrumbs]);
 
   const replaceContent = useCallback((content: unknown[]) => {
     const editor = editorRef.current; if (!editor) return;
@@ -127,22 +140,6 @@ function PageView({ initial }: { initial: LocalPageResponse }) {
   const onComposingChange = useCallback(() => { if (replacingRef.current) return; localRevisionRef.current++; autosave.markComposing(); }, [autosave]);
   const [actionError, setActionError] = useState<string | null>(null);
 
-  // A conflict blocks saving. Before the page is left, the draft is stored on this device; where that is not
-  // possible (no local copy, or a newer draft from another tab) the user decides whether to give the edits up.
-  const autosaveRef = useRef(autosave); autosaveRef.current = autosave;
-  const blocker = useBlocker(useCallback(() => autosaveRef.current.unsavedConflict(), []));
-  const blockerRef = useRef(blocker); blockerRef.current = blocker;
-  useEffect(() => {
-    if (blocker.state !== 'blocked') return;
-    let active = true;
-    void autosaveRef.current.keepDraft(true).then(kept => {
-      if (!active || blockerRef.current.state !== 'blocked') return;
-      if (kept || window.confirm('這裡的修改與線上版本衝突，尚未保存。離開這個頁面會遺失這些修改（可先按「匯出此處草稿」）。確定離開？')) blockerRef.current.proceed();
-      else blockerRef.current.reset();
-    });
-    return () => { active = false; };
-  }, [blocker.state]);
-
   /** Everything typed here must be on the server before a history restore replaces the content. */
   const prepareRestore = useCallback(async (): Promise<number> => {
     await autosave.settle();
@@ -180,10 +177,12 @@ function PageView({ initial }: { initial: LocalPageResponse }) {
 
   return <ContextMenu label="頁面右鍵選單" items={<PageMenuItems page={currentPage} access={access} onToggleFullWidth={toggleFullWidth} smallText={smallText} onToggleSmallText={toggleSmallText} onOpenHistory={() => setHistoryOpen(true)} {...(hasText ? { onFind: openFind } : {})} />}>
     {handlers => <div className="page" ref={pageRef} {...handlers}>
-    <TopBar page={currentPage} breadcrumbs={initial.breadcrumbs}
+    {!peek && <PageHead title={meta.title} icon={meta.icon} />}
+    {hasText && <PageLeaveGuard autosave={autosave} />}
+    {peek ? <SaveStatus status={autosave.state.status} error={autosave.state.error} onRetry={() => { void autosave.saveNow(); }} /> : <TopBar page={currentPage} breadcrumbs={initial.breadcrumbs}
       saveStatus={autosave.state.status} saveError={autosave.state.error} onRetry={() => { void autosave.saveNow(); }}
       onToggleFullWidth={toggleFullWidth}
-      smallText={smallText} onToggleSmallText={toggleSmallText} onOpenHistory={() => setHistoryOpen(true)} access={access} editedAt={hasText ? editedAt : undefined} {...(hasText ? { onFind: openFind } : {})} />
+      smallText={smallText} onToggleSmallText={toggleSmallText} onOpenHistory={() => setHistoryOpen(true)} access={access} editedAt={hasText ? editedAt : undefined} {...(hasText ? { onFind: openFind } : {})} />}
     {hasText && <FindBar ref={findRef} editor={getEditor} canReplace={!readOnly} />}
     {!access && <HistoryDrawer pageId={pageId} opened={historyOpen} onClose={() => setHistoryOpen(false)} currentVersion={autosave.state.version}
       prepare={prepareRestore} onRestored={() => { if (editorRef.current) void autosave.resolveConflict('reload'); else window.location.reload(); }} />}
@@ -210,7 +209,7 @@ function PageView({ initial }: { initial: LocalPageResponse }) {
       {initial.page.kind === 'database'
         ? <DatabaseView databaseId={pageId} />
         : <>
-          {initial.page.kind === 'row' && initial.page.databaseId && <RowPropertiesPanel rowId={pageId} databaseId={initial.page.databaseId} />}
+          {initial.page.kind === 'row' && initial.page.databaseId && <RowPropertiesPanel peek={peek} rowId={pageId} databaseId={initial.page.databaseId} />}
           {/* Content the editor cannot build must not take the page down with it: the owner still reaches the history. */}
           <ErrorBoundary fallback={<Alert color="red" title="這個頁面的內容無法顯示" role="alert">
             <Text size="sm">內容含有編輯器無法處理的資料。{access ? '請通知頁面的擁有者。' : '可以從頁面歷史還原較早的版本。'}</Text>
@@ -225,4 +224,29 @@ function PageView({ initial }: { initial: LocalPageResponse }) {
     </div>
   </div>}
   </ContextMenu>;
+}
+
+function PageLeaveGuard({ autosave }: { autosave: ReturnType<typeof useAutosave> }) {
+  // A conflict blocks saving. Before the page is left, the draft is stored on this device; where that is not
+  // possible (no local copy, or a newer draft from another tab) the user decides whether to give the edits up.
+  const autosaveRef = useRef(autosave); autosaveRef.current = autosave;
+  const blocker = useBlocker(useCallback(() => autosaveRef.current.unsavedConflict(), []));
+  const blockerRef = useRef(blocker); blockerRef.current = blocker;
+  useEffect(() => {
+    if (blocker.state !== 'blocked') return;
+    let active = true;
+    void autosaveRef.current.keepDraft(true).then(kept => {
+      if (!active || blockerRef.current.state !== 'blocked') return;
+      if (kept || window.confirm('這裡的修改與線上版本衝突，尚未保存。離開這個頁面會遺失這些修改（可先按「匯出此處草稿」）。確定離開？')) blockerRef.current.proceed();
+      else blockerRef.current.reset();
+    });
+    return () => { active = false; };
+  }, [blocker.state]);
+
+  return null;
+}
+
+function PageHead({ title, icon }: { title: string; icon: string | null }) {
+  useDocumentHead(title, icon);
+  return null;
 }

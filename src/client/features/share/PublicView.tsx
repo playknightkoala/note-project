@@ -21,6 +21,7 @@ import { PageLinkContext } from '../editor/pageLink/PageLinkContext.ts';
 import type { PageLinks } from '../editor/pageLink/PageLinkContext.ts';
 import { DatabaseAccessContext } from '../database/access.ts';
 import type { DatabaseAccess } from '../database/access.ts';
+import { RowPeek, useRowPeekId } from '../database/RowPeek.tsx';
 import { DataGrid } from '../database/DataGrid.tsx';
 import { BoardView, ListView } from '../database/CollectionViews.tsx';
 import { CellDisplay } from '../database/CellValueInput.tsx';
@@ -69,6 +70,7 @@ function PublicPages({ token, pageId, share, error: shareError }: { token: strin
   // The page is asked for once the link has answered: an account the link takes into the app needs no public copy.
   const id = pageId ?? share?.rootId;
   const page = useQuery({ queryKey: ['public', token, id], queryFn: () => api<PublicPageDto>('GET', `/api/public/${token}/pages/${id}`), enabled: !!id && !!share, retry: false });
+  const rowId = useRowPeekId();
   const title = page.data?.page.title;
   useDocumentHead(title, page.data?.page.icon);
   const links = useMemo<PageLinks>(() => ({ pages: share?.tree ?? [], href: target => publicLinkPath(token, target) }), [share, token]);
@@ -93,20 +95,35 @@ function PublicPages({ token, pageId, share, error: shareError }: { token: strin
         <PageHeader title={shown.title} icon={shown.icon} coverUrl={shown.coverUrl} coverPosition={shown.coverPosition} editable="none"
           onTitle={nothing} onIcon={nothing} onCover={nothing} onCoverPosition={nothing} onEnter={nothing} />
         <PageLinkContext.Provider value={links}><DatabaseAccessContext.Provider value={databaseAccess}>
-          {page.data.database ? <PublicDatabase key={shown.id} data={page.data.database} /> : <>
-            {page.data.row && <Stack gap="xs" className="row-properties">{page.data.row.properties.map(property => <div className="row-property" key={property.id}>
-              <Text size="sm" c="dimmed" className="row-property__name">{property.name}</Text>
-              <div className="database-cell database-cell--static"><CellDisplay property={property} value={page.data.row!.values[property.id] ?? null} /></div>
-            </div>)}</Stack>}
-            <ErrorBoundary key={`${shown.id}:${shown.updatedAt}`} fallback={<Text c="dimmed" role="alert">這個頁面的內容無法顯示。</Text>}>
-              <PublicBlocks content={shown.content} fullWidth={shown.fullWidth} />
-            </ErrorBoundary>
-            <AttachmentList content={shown.content} />
-          </>}
+          {page.data.database ? <>
+            <PublicDatabase key={shown.id} data={page.data.database} />
+            {rowId && <RowPeek fullHref={publicLinkPath(token, rowId)}><PublicPeekRow token={token} rowId={rowId} databaseId={shown.id} /></RowPeek>}
+          </> : <PublicDocument data={page.data} />}
         </DatabaseAccessContext.Provider></PageLinkContext.Provider>
       </main></div>
     </div>
   </div>;
+}
+
+function PublicPeekRow({ token, rowId, databaseId }: { token: string; rowId: string; databaseId: string }) {
+  const row = useQuery({ queryKey: ['public', token, rowId], queryFn: () => api<PublicPageDto>('GET', `/api/public/${token}/pages/${rowId}`), retry: false });
+  if (row.isPending) return <Loader size="sm" />;
+  if (row.error || !row.data?.row || row.data.page.databaseId !== databaseId) return <Text>找不到這筆資料列。</Text>;
+  return <><h1>{row.data.page.title || '無標題'}</h1><PublicDocument data={row.data} /></>;
+}
+
+function PublicDocument({ data }: { data: PublicPageDto }) {
+  const shown = data.page;
+  return <>
+    {data.row && <Stack gap="xs" className="row-properties">{data.row.properties.map(property => <div className="row-property" key={property.id}>
+      <Text size="sm" c="dimmed" className="row-property__name">{property.name}</Text>
+      <div className="database-cell database-cell--static"><CellDisplay property={property} value={data.row!.values[property.id] ?? null} /></div>
+    </div>)}</Stack>}
+    <ErrorBoundary key={`${shown.id}:${shown.updatedAt}`} fallback={<Text c="dimmed" role="alert">這個頁面的內容無法顯示。</Text>}>
+      <PublicBlocks content={shown.content} fullWidth={shown.fullWidth} />
+    </ErrorBoundary>
+    <AttachmentList content={shown.content} />
+  </>;
 }
 
 /** The pages the link reaches, as an indented list. */

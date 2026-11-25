@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
-import { ActionIcon, Button, Menu, Text } from '@mantine/core';
+import { ActionIcon, Button, Checkbox, Group, Menu, Text } from '@mantine/core';
 import { ExternalLink, MoreHorizontal, Trash2 } from 'lucide-react';
 import { defaultRangeExtractor, useVirtualizer } from '@tanstack/react-virtual';
 import { useNavigate } from 'react-router';
+import { perPersonTwd } from '@shared/database';
 import type { CellValue, DatabaseProperty, DatabaseRow, ViewConfig } from '@shared/database';
-import { propertyLabels } from '@shared/database';
 import { EditableCell } from './EditableCell.tsx';
 import { ContextMenu } from '../shell/ContextMenu.tsx';
 import { NewRowInput } from './NewRowInput.tsx';
+import { useRowPeekHref } from './RowPeek.tsx';
 import { useDatabaseAccess } from './access.ts';
 
 interface Props {
@@ -29,6 +30,7 @@ function readWidths(key: string): Record<string, number> {
 }
 export function DataGrid({ databaseId, properties, rows, total, config, onSave, onReload, onEditProperty, onConfig, onFilter, onTrash, hasMore, loadingMore, onMore, onCreate, onAddProperty, adding, onCloseAdd }: Props) {
   const navigate = useNavigate();
+  const peekHref = useRowPeekHref();
   const access = useDatabaseAccess();
   const scrollRef = useRef<HTMLDivElement>(null);
   const widthKey = `notes:column-widths:${databaseId}`;
@@ -36,10 +38,28 @@ export function DataGrid({ databaseId, properties, rows, total, config, onSave, 
   const resizing = useRef<{ id: string; x: number; width: number } | null>(null);
   const [active, setActive] = useState({ row: 0, col: 0 });
   const [activeId, setActiveId] = useState<string | null>(null);
+  const expense = config.expense;
+  const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  const amounts = new Map<string, number | null>();
+  let selectedCount = 0, incomplete = 0, sum = 0n;
+  if (expense) for (const row of rows) {
+    const amount = perPersonTwd(row.values, expense);
+    amounts.set(row.id, amount);
+    if (selected.has(row.id)) {
+      selectedCount++;
+      if (amount === null) incomplete++;
+      else sum += BigInt(amount);
+    }
+  }
+  const toggle = (id: string) => setSelected(current => {
+    const next = new Set(current);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
   const pinnedIndex = activeId ? rows.findIndex(row => row.id === activeId) : -1;
   const visible = properties.filter(property => !config.columns || config.columns.includes(property.id));
   const columns = [{ id: 'title', name: '名稱', property: null }, ...visible.map(property => ({ id: property.id, name: property.name, property }))];
-  const template = columns.map(col => `${widths[col.id] ?? (col.id === 'title' ? 280 : 180)}px`).join(' ') + ' minmax(140px, 1fr)';
+  const template = columns.map(col => `${widths[col.id] ?? (col.id === 'title' ? 280 : 180)}px`).join(' ') + (expense ? ' 190px' : '') + ' minmax(140px, 1fr)';
   const blanks = access.canEditRows && config.filters.length === 0 ? Math.max(0, 2 - total) : 0;
   const virtual = useVirtualizer({ count: rows.length, getScrollElement: () => scrollRef.current, estimateSize: () => 34, overscan: 8,
     rangeExtractor: range => [...new Set([...defaultRangeExtractor(range), ...(pinnedIndex >= 0 ? [pinnedIndex] : [])])].sort((a, b) => a - b),
@@ -52,12 +72,15 @@ export function DataGrid({ databaseId, properties, rows, total, config, onSave, 
     try { localStorage.setItem(widthKey, JSON.stringify(next)); } catch { /* storage unavailable */ }
     return next;
   });
-  return <div className="database-grid-scroll" ref={scrollRef} role="grid" aria-label="資料庫表格" aria-rowcount={total + blanks + 1} aria-colcount={columns.length + 1}
+  return <>{expense && <Group gap="sm" mb="xs">
+    <Text size="sm" role="status">已選 {selectedCount} 項 · {incomplete ? `已算小計 NT$${sum.toLocaleString('zh-TW')}（另有 ${incomplete} 項待補資料）` : `每人合計 NT$${sum.toLocaleString('zh-TW')}`}</Text>
+    {selected.size > 0 && <Button size="compact-xs" variant="subtle" onClick={() => setSelected(new Set())}>清除勾選</Button>}
+  </Group>}<div className="database-grid-scroll" ref={scrollRef} role="grid" aria-label="資料庫表格" aria-rowcount={total + blanks + 1} aria-colcount={columns.length + (expense ? 2 : 1)}
     onKeyDown={event => {
       if (event.nativeEvent.isComposing || event.keyCode === 229) return;
       const target = event.target as HTMLElement;
       if (target.getAttribute('role') !== 'gridcell') return;
-      if (event.altKey && event.key === 'Enter') { event.preventDefault(); const row = rows[active.row]; if (row) navigate(access.rowHref(row.id)); return; }
+      if (event.altKey && event.key === 'Enter') { event.preventDefault(); const row = rows[active.row]; if (row) navigate(peekHref(row.id)); return; }
       const dr = event.key === 'ArrowDown' ? 1 : event.key === 'ArrowUp' ? -1 : 0;
       const dc = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0;
       if (!dr && !dc) return;
@@ -75,7 +98,7 @@ export function DataGrid({ databaseId, properties, rows, total, config, onSave, 
             {column.property && <Menu.Item onClick={() => onConfig({ ...config, columns: visible.filter(p => p.id !== column.id).map(p => p.id) })}>隱藏欄位</Menu.Item>}
           </>;
         return <ContextMenu key={column.id} label="欄位右鍵選單" items={columnItems}>{handlers => <div className="database-column" role="columnheader" {...handlers}>
-        <Menu position="bottom-start" withinPortal shadow="md"><Menu.Target><Button variant="subtle" color="gray" className="database-column__button" size="compact-sm" aria-label={`欄位選單：${column.name}`}><span>{column.property ? propertyLabels[column.property.type] : 'Aa'}</span> {column.name}</Button></Menu.Target>
+        <Menu position="bottom-start" withinPortal shadow="md"><Menu.Target><Button variant="subtle" color="gray" className="database-column__button" size="compact-sm" aria-label={`欄位選單：${column.name}`}>{column.name}</Button></Menu.Target>
           <Menu.Dropdown>{columnItems}</Menu.Dropdown></Menu>
         <span className="database-column__resize" role="separator" tabIndex={0} aria-label={`調整${column.name}欄寬`} aria-orientation="vertical" aria-valuemin={100} aria-valuemax={600} aria-valuenow={widths[column.id] ?? (column.id === 'title' ? 280 : 180)}
           onPointerDown={event => { event.preventDefault(); resizing.current = { id: column.id, x: event.clientX, width: widths[column.id] ?? (column.id === 'title' ? 280 : 180) }; event.currentTarget.setPointerCapture(event.pointerId); }}
@@ -83,7 +106,7 @@ export function DataGrid({ databaseId, properties, rows, total, config, onSave, 
           onPointerUp={() => { resizing.current = null; }} onPointerCancel={() => { resizing.current = null; }}
           onKeyDown={event => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); saveWidth(column.id, (widths[column.id] ?? (column.id === 'title' ? 280 : 180)) + (event.key === 'ArrowRight' ? 10 : -10)); } }} />
       </div>}</ContextMenu>;
-      })}<div role="columnheader">{access.canManage && <Button variant="subtle" color="gray" size="compact-sm" onClick={onAddProperty}>＋ 新增屬性</Button>}</div>
+      })}{expense && <div role="columnheader" className="expense-cell">每人台幣（勾選加總）</div>}<div role="columnheader">{access.canManage && <Button variant="subtle" color="gray" size="compact-sm" onClick={onAddProperty}>＋ 新增屬性</Button>}</div>
     </div>
     <div className="database-grid-body" style={{ height: virtual.getTotalSize() }}>
       {items.map(item => {
@@ -94,8 +117,12 @@ export function DataGrid({ databaseId, properties, rows, total, config, onSave, 
             <EditableCell property={column.property} value={column.id === 'title' ? row.title : row.values[column.id] ?? null}
               label={`${row.title || '無標題'}／${column.name}`} rowIndex={item.index} columnIndex={col} tabIndex={active.row === item.index && active.col === col ? 0 : -1}
               onFocus={() => { setActive({ row: item.index, col }); setActiveId(row.id); }} onSave={(value, base) => onSave(row, column.id, value, base)} onReload={onReload} />
-            {column.id === 'title' && <ActionIcon size="xs" className="database-open-row" variant="subtle" aria-label={`開啟資料列：${row.title || '無標題'}`} onClick={() => navigate(access.rowHref(row.id))}><ExternalLink size={13} /></ActionIcon>}
+            {column.id === 'title' && <ActionIcon size="xs" className="database-open-row" variant="subtle" aria-label={`開啟資料列：${row.title || '無標題'}`} onClick={() => navigate(peekHref(row.id))}><ExternalLink size={13} /></ActionIcon>}
           </div>)}
+          {expense && <div role="gridcell" className="expense-cell">
+            <Checkbox size="xs" aria-label={`計入合計：${row.title || '無標題'}`} checked={selected.has(row.id)} onChange={() => toggle(row.id)} />
+            <span>{amounts.get(row.id)?.toLocaleString('zh-TW') ?? '待補資料'}</span>
+          </div>}
           <Menu withinPortal position="bottom-end"><Menu.Target><ActionIcon variant="subtle" color="gray" aria-label={`資料列選單：${row.title || '無標題'}`}><MoreHorizontal size={16} /></ActionIcon></Menu.Target>
             <Menu.Dropdown>{rowItems}</Menu.Dropdown>
           </Menu>
@@ -104,10 +131,10 @@ export function DataGrid({ databaseId, properties, rows, total, config, onSave, 
     </div>
     {Array.from({ length: blanks }, (_, index) => <div className="database-grid-row database-draft-row" key={`blank-${index}`} role="row" aria-rowindex={total + index + 2} style={{ gridTemplateColumns: template }}>
       {columns.map(column => <div className="database-grid-slot" key={column.id}><EditableCell property={column.property} value={null} label={`空白列 ${index + 1}／${column.name}`} emptyLabel="" onReload={onReload}
-        onSave={value => value === null || value === '' ? Promise.resolve() : onCreate(column.id === 'title' && typeof value === 'string' ? value : '', column.id === 'title' ? {} : { [column.id]: value })} /></div>)}<div />
+        onSave={value => value === null || value === '' ? Promise.resolve() : onCreate(column.id === 'title' && typeof value === 'string' ? value : '', column.id === 'title' ? {} : { [column.id]: value })} /></div>)}{expense && <div />}<div />
     </div>)}
     {rows.length === 0 && !blanks && <Text size="sm" c="dimmed" p="xl">沒有符合條件的資料列。</Text>}
     {hasMore && <Button variant="subtle" size="xs" loading={loadingMore} onClick={onMore}>載入更多資料列</Button>}
     {access.canEditRows && <NewRowInput key={String(adding)} opened={adding} onClose={onCloseAdd} onCreate={title => onCreate(title, {})} />}
-  </div>;
+  </div></>;
 }

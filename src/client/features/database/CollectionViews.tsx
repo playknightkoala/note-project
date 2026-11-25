@@ -8,6 +8,7 @@ import type { CellValue, DatabaseProperty, DatabaseRow, ViewConfig } from '@shar
 import { EditableCell } from './EditableCell.tsx';
 import { ChoiceTag, CellDisplay } from './CellValueInput.tsx';
 import { NewRowInput } from './NewRowInput.tsx';
+import { useRowPeekHref } from './RowPeek.tsx';
 import { useDatabaseAccess } from './access.ts';
 
 interface Props {
@@ -18,7 +19,8 @@ interface Props {
 }
 function RowActions({ row, onTrash }: Pick<Props, 'onTrash'> & { row: DatabaseRow }) {
   const access = useDatabaseAccess();
-  return <Group gap={2} wrap="nowrap"><ActionIcon component={Link} to={access.rowHref(row.id)} variant="subtle" color="gray" aria-label={`開啟資料列：${row.title || '無標題'}`}><ExternalLink size={14} /></ActionIcon>
+  const peekHref = useRowPeekHref();
+  return <Group gap={2} wrap="nowrap"><ActionIcon component={Link} to={peekHref(row.id)} variant="subtle" color="gray" aria-label={`開啟資料列：${row.title || '無標題'}`}><ExternalLink size={14} /></ActionIcon>
     <Menu withinPortal><Menu.Target><ActionIcon variant="subtle" color="gray" aria-label={`資料列選單：${row.title || '無標題'}`}><MoreHorizontal size={14} /></ActionIcon></Menu.Target>
       <Menu.Dropdown><Menu.Item component={Link} to={access.rowHref(row.id)}>開啟為頁面</Menu.Item>{access.canManage && <Menu.Item color="red" leftSection={<Trash2 size={14} />} onClick={() => onTrash(row)}>移至垃圾桶</Menu.Item>}</Menu.Dropdown></Menu>
   </Group>;
@@ -71,13 +73,14 @@ function BoardColumn({ id, label, children }: { id: string; label: string; child
 }
 function BoardCard({ row, group, props }: { row: DatabaseRow; group: DatabaseProperty; props: Props & { onMove: (row: DatabaseRow, groupBy: string, choice: string | null) => void; moving: boolean } }) {
   const access = useDatabaseAccess();
+  const peekHref = useRowPeekHref();
   const { setNodeRef, attributes, listeners, isDragging } = useDraggable({ id: row.id, disabled: props.moving || !access.canEditRows });
   const visible = props.properties.filter(property => property.id !== group.id && (!props.config.columns || props.config.columns.includes(property.id)));
   return <div ref={setNodeRef} className={`database-board-card${isDragging ? ' database-board-card--dragging' : ''}`}>
     <div className="database-board-card-title">{access.canEditRows && <button type="button" className="database-drag-handle" aria-label={`拖曳卡片：${row.title || '無標題'}`} {...attributes} {...listeners}><GripVertical size={14} /></button>}
       <EditableCell property={null} value={row.title} label={`${row.title || '無標題'}／名稱`} onReload={props.onReload} onSave={(value, base) => props.onSave(row, 'title', value, base)} />
       <Menu withinPortal><Menu.Target><ActionIcon size="sm" color="gray" variant="subtle" aria-label={`卡片選單：${row.title || '無標題'}`}><MoreHorizontal size={14} /></ActionIcon></Menu.Target>
-        <Menu.Dropdown><Menu.Item component={Link} to={access.rowHref(row.id)}>開啟為頁面</Menu.Item>{access.canEditRows && <><Menu.Label>移至</Menu.Label>{[...group.choices.map(choice => ({ id: choice.id, label: choice.label })), { id: '', label: '未設定' }].map(choice => <Menu.Item key={choice.id} disabled={props.moving || (row.values[group.id] ?? '') === choice.id} onClick={() => props.onMove(row, group.id, choice.id || null)}>{choice.label}</Menu.Item>)}</>}
+        <Menu.Dropdown><Menu.Item component={Link} to={peekHref(row.id)}>開啟資料列</Menu.Item><Menu.Item component={Link} to={access.rowHref(row.id)}>開啟為頁面</Menu.Item>{access.canEditRows && <><Menu.Label>移至</Menu.Label>{[...group.choices.map(choice => ({ id: choice.id, label: choice.label })), { id: '', label: '未設定' }].map(choice => <Menu.Item key={choice.id} disabled={props.moving || (row.values[group.id] ?? '') === choice.id} onClick={() => props.onMove(row, group.id, choice.id || null)}>{choice.label}</Menu.Item>)}</>}
           {access.canManage && <><Menu.Divider /><Menu.Item color="red" onClick={() => props.onTrash(row)}>移至垃圾桶</Menu.Item></>}</Menu.Dropdown>
       </Menu>
     </div>

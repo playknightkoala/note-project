@@ -11,7 +11,7 @@ import { useUpdateGuard } from '../../updates/guards.ts';
 const colors = ['灰', '棕', '橙', '黃', '綠', '藍', '紫', '粉紅', '紅'];
 export function PropertyDialog({ meta, property, onClose, onReload }: { meta: DatabaseDto; property: DatabaseProperty | null; onClose: () => void; onReload: () => void }) {
   const [name, setName] = useState(property?.name ?? '');
-  const [type, setType] = useState<PropertyType>(property?.type ?? 'text');
+  const [type, setType] = useState<PropertyType | 'amount'>(property?.type === 'number' && property.groupThousands ? 'amount' : property?.type ?? 'text');
   const [choices, setChoices] = useState<PropertyChoice[]>(property?.choices ?? []);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [baseVersion] = useState(meta.version);
@@ -19,14 +19,14 @@ export function PropertyDialog({ meta, property, onClose, onReload }: { meta: Da
   useUpdateGuard(() => { throw new Error('請先儲存或關閉欄位設定，再更新。'); });
   const select = type === 'select' || type === 'multi_select';
   const save = () => {
-    const input = { name, type, choices: select ? choices : [] };
+    const input = { name, type: type === 'amount' ? 'number' as const : type, groupThousands: type === 'amount', choices: select ? choices : [] };
     mutation.mutate(property ? { action: 'update', id: property.id, input, version: baseVersion } : { action: 'add', input, version: baseVersion }, { onSuccess: onClose });
   };
   return <Modal opened onClose={() => { if (!mutation.isPending) onClose(); }} title={property ? '編輯欄位' : '新增欄位'} closeButtonProps={{ 'aria-label': '關閉欄位編輯' }}>
     <form onSubmit={event => { event.preventDefault(); save(); }}><Stack gap="md">
       <TextInput label="欄位名稱" value={name} onChange={e => setName(e.currentTarget.value)} maxLength={80} required data-autofocus />
-      <Select label="欄位型別" data={PROPERTY_TYPES.map(value => ({ value, label: propertyLabels[value] }))} value={type} onChange={value => { if (value) setType(value as PropertyType); }} allowDeselect={false} />
-      {property && <Text size="xs" c="dimmed">已有資料的欄位須先清空，才能變更型別；仍被使用的選項無法移除。</Text>}
+      <Select label="欄位型別" data={PROPERTY_TYPES.flatMap(value => value === 'number' ? [{ value, label: propertyLabels[value] }, { value: 'amount', label: '金額' }] : [{ value, label: propertyLabels[value] }])} value={type} onChange={value => { if (value) setType(value as PropertyType | 'amount'); }} allowDeselect={false} />
+      {property && <Text size="xs" c="dimmed">數字與金額可直接互換。其他型別須先清空資料才能變更。</Text>}
       {select && <Stack gap="xs"><Text size="sm" fw={500}>選項</Text>{choices.map((choice, index) => <Group key={choice.id} gap="xs" wrap="nowrap">
         <TextInput aria-label={`選項 ${index + 1} 名稱`} value={choice.label} required maxLength={80} onChange={e => { const label = e.currentTarget.value; setChoices(current => current.map(item => item.id === choice.id ? { ...item, label } : item)); }} style={{ flex: 1 }} />
         <Select aria-label={`選項 ${index + 1} 顏色`} data={CHOICE_COLORS.map((value, i) => ({ value, label: colors[i]! }))} value={choice.color} w={92} allowDeselect={false} onChange={color => { if (color) setChoices(current => current.map(item => item.id === choice.id ? { ...item, color: color as PropertyChoice['color'] } : item)); }} />

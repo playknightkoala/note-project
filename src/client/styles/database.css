@@ -67,3 +67,9 @@
 }
 @media (max-width: 767px) { .database-view { margin: 16px; } .row-properties { padding-inline: 24px; } }
 .database-cell--static { cursor: default; }
+.row-peek-body .page { min-height: 0; }
+.row-peek-body .page-body { padding: 20px 16px 24vh; }
+.row-peek-body .row-properties { padding-inline: 8px; }
+.row-peek-body .page-cover { margin-inline: 0; }
+.row-peek-body .page-header--cover { margin-top: 0; }
+.expense-cell { display: flex; align-items: center; gap: 10px; height: 34px; padding-inline: 10px; border-right: 1px solid var(--app-border); font-variant-numeric: tabular-nums; }

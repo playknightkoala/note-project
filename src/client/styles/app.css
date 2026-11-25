@@ -26,3 +26,4 @@ body { background: var(--app-bg); color: var(--app-fg); -webkit-font-smoothing: 
 .search-result__path, .search-result__snippet { font-size: 12px; color: var(--app-fg-muted); overflow-wrap: anywhere; }
 .search-result__snippet { white-space: pre-wrap; }
 .search-result mark { background: var(--app-selection); color: inherit; border-radius: 2px; }
+.tree-row[data-drop-parent] { outline: 2px solid var(--app-accent); outline-offset: -2px; background: var(--app-selection); }

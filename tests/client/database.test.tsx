@@ -45,7 +45,7 @@ it('keeps a rejected draft visible and lets the user explicitly discard and relo
   expect(reload).toHaveBeenCalledOnce();
 });
 
-it('keeps the cell editor open when selecting an option from the nested dropdown', async () => {
+it('saves the selected option once and closes the cell editor', async () => {
   const choice = { id: crypto.randomUUID(), label: '進行中', color: 'blue' as const };
   const select: DatabaseProperty = { ...property, type: 'select', choices: [choice] };
   const save = vi.fn().mockResolvedValue({});
@@ -53,9 +53,22 @@ it('keeps the cell editor open when selecting an option from the nested dropdown
   fireEvent.click(screen.getByRole('button', { name: '編輯狀態' }));
   fireEvent.click(screen.getByRole('combobox'));
   const option = screen.getByRole('option', { name: '進行中' });
-  fireEvent.mouseDown(option); fireEvent.click(option);
-  await act(async () => { fireEvent.click(screen.getByRole('button', { name: '儲存' })); });
-  expect(save).toHaveBeenCalledWith(choice.id, null);
+  await act(async () => { fireEvent.mouseDown(option); fireEvent.click(option); });
+  expect(save).toHaveBeenCalledExactlyOnceWith(choice.id, null);
+  expect(screen.queryByRole('combobox')).toBeNull();
+});
+
+it('groups amounts for display and edits their original numeric value', async () => {
+  const save = vi.fn().mockResolvedValue({});
+  render(<MantineProvider env="test"><EditableCell property={{ ...property, type: 'number', groupThousands: true }} value={-12345.67} label="金額" onSave={save} onReload={vi.fn()} /></MantineProvider>);
+  const cell = screen.getByRole('button', { name: '金額' });
+  expect(cell.textContent).toBe('-12,345.67');
+  fireEvent.click(cell);
+  const input = screen.getByRole('textbox') as HTMLInputElement;
+  expect(input.value).toBe('-12345.67');
+  fireEvent.change(input, { target: { value: '1234.56' } });
+  await act(async () => { fireEvent.blur(input); });
+  expect(save).toHaveBeenCalledExactlyOnceWith(1234.56, -12345.67);
 });
 
 it('rejects an incomplete number instead of serializing NaN as null and clearing a cell', async () => {

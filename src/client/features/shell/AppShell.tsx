@@ -15,6 +15,8 @@ import { OfflineStatus } from '../../offline/OfflineStatus.tsx';
 import { AppUpdates } from '../../updates/AppUpdates.tsx';
 import { useShares } from '../../api/shares.ts';
 import { ShareDialogHost } from '../share/ShareDialog.tsx';
+import type { PageNode } from '@shared/api';
+import { MovePageDialog } from './MovePageDialog.tsx';
 import { SharedTree } from '../share/SharedTree.tsx';
 
 export const SIDEBAR_BREAKPOINT = 768;
@@ -35,6 +37,7 @@ export function AppShell() {
   const [opened, { toggle, close }] = useDisclosure(false);
   const [desktopCollapsed, setDesktopCollapsed] = useState(() => { try { return localStorage.getItem('notes:sidebar-collapsed') === '1'; } catch { return false; } });
   const toggleDesktop = () => setDesktopCollapsed(value => { try { localStorage.setItem('notes:sidebar-collapsed', value ? '0' : '1'); } catch { /* ignore */ } return !value; });
+  const [movingPage, setMovingPage] = useState<PageNode | null>(null);
   const [searchOpened, setSearchOpened] = useState(false);
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
@@ -96,10 +99,10 @@ export function AppShell() {
         <ScrollArea className="sidebar-scroll" type="auto">
           {favoriteRows.length > 0 && <>
             <div className="sidebar-section">最愛</div>
-            <div className="page-tree">{favoriteRows.map(row => <PageTreeItem key={row.id} row={row} depth={0} active={row.id === pageId} dragging={false} dragEnabled={false} />)}</div>
+            <div className="page-tree">{favoriteRows.map(row => <PageTreeItem onMove={setMovingPage} key={row.id} row={row} depth={0} active={row.id === pageId} dragging={false} dragEnabled={false} />)}</div>
           </>}
           <div className="sidebar-section">頁面</div>
-          {tree.isPending ? <Text size="xs" c="dimmed" px="sm">載入中…</Text> : <PageTree index={index} currentId={pageId ?? null} dragEnabled={!isMobile} />}
+          {tree.isPending ? <Text size="xs" c="dimmed" px="sm">載入中…</Text> : <PageTree onMove={setMovingPage} index={index} currentId={pageId ?? null} dragEnabled={!isMobile} />}
           {incoming.length > 0 && <>
             <div className="sidebar-section">與我共用</div>
             <SharedTree shares={incoming} currentId={pageId ?? null} />
@@ -118,6 +121,7 @@ export function AppShell() {
         <Outlet />
       </MantineAppShell.Main>
     </MantineAppShell>
+    {movingPage && <MovePageDialog page={movingPage} index={index} onClose={() => setMovingPage(null)} />}
     {user && <CommandPalette key={user.id} userId={user.id} opened={searchOpened} onClose={() => setSearchOpened(false)} />}
   </ShareDialogHost></ShellCtx.Provider>;
 }

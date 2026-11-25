@@ -53,7 +53,8 @@ describe('drag projection', () => {
     // dragging one indent to the left puts it at the root after b.
     expect(projectDrop(rows, 'a1', 'b', 0, 24)).toEqual({ parentId: 'b', index: 0, depth: 1 });
     expect(projectDrop(rows, 'a1', 'b', -24, 24)).toEqual({ parentId: null, index: 2, depth: 0 });
-    expect(projectDrop(rows, 'a1', 'a2x', 24, 24)).toEqual({ parentId: 'a2', index: 1, depth: 2 });
+    expect(projectDrop(rows, 'db', 'a', 24, 24)).toEqual({ parentId: 'a', index: 0, depth: 1 });
+    expect(projectDrop(rows, 'a1', 'a2x', 24, 24)).toEqual({ parentId: 'a2x', index: 0, depth: 3 });
   });
 
   it('refuses dropping into its own subtree or under a database', () => {

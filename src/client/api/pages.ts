@@ -77,10 +77,14 @@ export function useCreatePage() {
   });
 }
 
-export const useMovePage = () => useTreeMutation(
-  (input: { id: string; parentId: string | null; index: number }) => api('POST', `/api/pages/${input.id}/move`, { json: { parentId: input.parentId, index: input.index } }),
-  (nodes, input) => applyMove(nodes, input.id, input.parentId, input.index),
-);
+export function useMovePage() {
+  const client = useQueryClient();
+  return useTreeMutation(async (input: { id: string; parentId: string | null; index: number }) => {
+    await api('POST', `/api/pages/${input.id}/move`, { json: { parentId: input.parentId, index: input.index } });
+    // The active page may be the moved page itself or a descendant with a new breadcrumb.
+    await client.invalidateQueries({ queryKey: ['page'] });
+  }, (nodes, input) => applyMove(nodes, input.id, input.parentId, input.index));
+}
 
 export const useToggleFavorite = () => useTreeMutation(
   (input: { id: string; favorite: boolean }) => api('POST', `/api/pages/${input.id}/favorite`, { json: { favorite: input.favorite } }),

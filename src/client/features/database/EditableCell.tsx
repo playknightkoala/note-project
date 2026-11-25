@@ -93,14 +93,21 @@ function PopoverCell({ property, value, label, onSave, onReload, tabIndex = 0, r
   const [pending, setPending] = useState(false);
   const [composing, setComposing] = useState(false);
   useUpdateGuard(() => { if (opened && (JSON.stringify(draft) !== JSON.stringify(value) || pending)) throw new Error('請先儲存或取消資料格的修改，再更新。'); });
-  const save = async () => {
-    if (pending || composing) return;
+  const instant = property?.type === 'select';
+  const busy = useRef(false);
+  const save = async (next = draft) => {
+    if (busy.current || composing) return;
+    busy.current = true;
     setPending(true); setError(null);
     try {
-      const value = property?.type === 'number' && typeof draft === 'string' && draft.trim() ? Number(draft) : draft;
-      if (property && !valueSchema(property).safeParse(value).success) throw new Error('輸入值與欄位型別不符，請檢查後再儲存。');
-      await onSave(value, base); setOpened(false);
-    } catch (error) { setError(error); } finally { setPending(false); }
+      if (property && !valueSchema(property).safeParse(next).success) throw new Error('輸入值與欄位型別不符，請檢查後再儲存。');
+      await onSave(next, base); setOpened(false);
+    } catch (error) { setError(error); } finally { busy.current = false; setPending(false); }
+  };
+  const change = (next: CellValue) => {
+    if (busy.current) return;
+    setDraft(next);
+    if (instant) void save(next);
   };
   return <Popover opened={opened} onChange={next => { if (!pending) setOpened(next); }} position="bottom-start" width={320} shadow="md" trapFocus withinPortal closeOnEscape={!composing && !pending}>
     <Popover.Target><button type="button" role={rowIndex === undefined ? undefined : 'gridcell'} tabIndex={tabIndex} className="database-cell" aria-label={label}
@@ -108,10 +115,10 @@ function PopoverCell({ property, value, label, onSave, onReload, tabIndex = 0, r
       onClick={() => { setDraft(value); setBase(value); setError(null); setOpened(true); }}>{emptyLabel !== undefined && (value === null || value === '') ? emptyLabel : <CellDisplay property={property} value={value} />}</button></Popover.Target>
     <Popover.Dropdown><form onSubmit={event => { event.preventDefault(); void save(); }} onCompositionStart={() => setComposing(true)} onCompositionEnd={() => setComposing(false)}>
       <Stack gap="sm">
-        <CellValueInput property={property} label={property?.name ?? '名稱'} value={draft} onChange={setDraft} autoFocus />
+        <CellValueInput property={property} label={property?.name ?? '名稱'} value={draft} onChange={change} autoFocus />
         {!!error && <Alert color="red" role="alert">{errorText(error)}{isApiError(error, 409) && <Button mt="xs" size="compact-xs" variant="white" onClick={() => { setOpened(false); onReload(); }}>重新載入並捨棄草稿</Button>}</Alert>}
-        <Group justify="space-between"><Button size="compact-xs" variant="subtle" disabled={pending} onClick={() => setDraft(null)}>清除</Button>
-          <Group gap="xs"><Button size="compact-xs" variant="default" disabled={pending} onClick={() => setOpened(false)}>取消</Button><Button size="compact-xs" type="submit" loading={pending}>儲存</Button></Group>
+        <Group justify="space-between"><Button size="compact-xs" variant="subtle" disabled={pending} onClick={() => change(null)}>清除</Button>
+          <Group gap="xs"><Button size="compact-xs" variant="default" disabled={pending} onClick={() => setOpened(false)}>取消</Button>{(!instant || !!error) && <Button size="compact-xs" type="submit" loading={pending}>{error ? '重試儲存' : '儲存'}</Button>}</Group>
         </Group>
       </Stack>
     </form></Popover.Dropdown>

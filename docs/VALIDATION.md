@@ -1,5 +1,24 @@
 # 驗證紀錄
 
+## 1.1.10 發布前檢查（2026-11-25）
+
+- `VITEST_MAX_WORKERS=4 npm run check` 通過型別檢查、lint、全套 327 項測試與正式建置。
+- `docker compose up --build --wait` 通過，`/healthz` 回應 `ok`，`/api/version` 與更新紀錄首筆皆為 `1.1.10`。
+- `npm run test:app -- http://127.0.0.1:8080` 的 40 項容器檢查通過。
+
+## 費用試算與側欄頁面搬移（2026-11-25）
+
+- Chrome 使用暫存資料庫驗證兩種幣別換算、勾選與取消、修改人數後即時重算，以及重載後保留設定。兩筆合成費用的每人合計依序為 NT$15,605、NT$13,999，取消其中一筆後為 NT$1,606。
+- 在 390 像素寬的側欄用「移動到…」將資料庫移入一般頁面。在 1440 像素寬的側欄移回最上層，再拖曳到同一個上層頁面。從 API 確認搬移結果，重載後兩筆資料仍在。
+- `npm run typecheck`、`npm run lint`、`npm run build` 通過。一般平行度的 `npm test` 有一輪既有登入限流測試逾時，使用 `VITEST_MAX_WORKERS=4 npm test` 全套 43 檔、327 項通過。
+- `docker compose up --build --wait` 通過，`curl -fsS http://127.0.0.1:8080/healthz` 回應 `ok`。
+
+## 資料庫金額、單選與資料列側窗（2026-11-25）
+
+- `npm run typecheck`、`npm run lint`、`npm test` 與 `npm run build` 通過，42 檔共 320 項測試。
+- 使用獨立暫存資料庫與 Chrome 驗證欄名、將已填值的數字欄切換為金額、單選後儲存與關閉。分別以 1440 與 390 像素寬度開啟資料列，驗證右側與全寬面板、編輯金額與內文、關閉後表格顯示新值，並透過 API 讀回內文。
+- `docker compose up --build --wait` 建置並啟動本機容器，`curl -fsS http://127.0.0.1:8080/healthz` 回應 `ok`。
+
 ## 弱網離線切換（2026-11-24）
 
 - 兩次連續的網路失敗會暫停同步。前景每 5 秒檢查一次 `/healthz`，連續 3 次在 2 秒內成功，再以 `/api/auth/me` 驗證原帳號並取得 CSRF，才恢復既有同步佇列。健康檢查使用同源、無憑證且不走快取的請求。

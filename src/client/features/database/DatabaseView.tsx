@@ -12,6 +12,7 @@ import { DataGrid } from './DataGrid.tsx';
 import { PropertyDialog } from './PropertyDialog.tsx';
 import { RulesDialog } from './RulesDialog.tsx';
 import { readViewParams, writeViewParams } from './viewParams.ts';
+import { ExpenseDialog } from './ExpenseDialog.tsx';
 import { ViewDialog } from './ViewDialog.tsx';
 import { BoardView, ListView } from './CollectionViews.tsx';
 import { useDatabaseAccess } from './access.ts';
@@ -38,6 +39,7 @@ function DatabaseContent({ meta }: { meta: LoadedDatabase }) {
   const [property, setProperty] = useState<DatabaseProperty | null | undefined>();
   const [rules, setRules] = useState<'sort' | 'filter' | null>(null);
   const [columnFilter, setColumnFilter] = useState<DatabaseFilter | null>(null);
+  const [expenseOpen, setExpenseOpen] = useState(false);
   const [adding, setAdding] = useState(false);
   const [viewDialog, setViewDialog] = useState<View | null | undefined>();
   const [notice, setNotice] = useState('');
@@ -71,6 +73,7 @@ function DatabaseContent({ meta }: { meta: LoadedDatabase }) {
         {access.canManage && <ActionIcon variant="subtle" color="gray" aria-label="新增視圖" disabled={meta.views.length >= 20} onClick={() => setViewDialog(null)}><Plus size={16} /></ActionIcon>}
       </Group>
       <Group gap="xs">
+        {view?.type === 'table' && access.canManage && <Button size="compact-xs" variant="subtle" onClick={() => setExpenseOpen(true)}>費用試算</Button>}
         <Tooltip label={`排序${config.sorts.length ? `（${config.sorts.length}）` : ''}`}><ActionIcon color="gray" variant={config.sorts.length ? 'light' : 'subtle'} aria-label="排序" onClick={() => setRules('sort')}><ArrowDownUp size={15} /></ActionIcon></Tooltip>
         <Tooltip label={`篩選${config.filters.length ? `（${config.filters.length}）` : ''}`}><ActionIcon color="gray" variant={config.filters.length ? 'light' : 'subtle'} aria-label="篩選" onClick={() => { setColumnFilter(null); setRules('filter'); }}><Filter size={15} /></ActionIcon></Tooltip>
         <Popover position="bottom-end" shadow="md"><Popover.Target><ActionIcon color="gray" variant="subtle" aria-label="顯示欄位" title="顯示欄位"><Columns3 size={15} /></ActionIcon></Popover.Target><Popover.Dropdown><Stack gap="xs">
@@ -106,6 +109,7 @@ function DatabaseContent({ meta }: { meta: LoadedDatabase }) {
     <Text size="xs" c="dimmed" mt="xs">{data.length < total ? `已載入 ${data.length}／${total} 列；看板計數為已載入數量。` : `${total} 列`}{view?.type === 'table' && (access.canEditRows ? ' · 方向鍵移動 · Enter 編輯／儲存 · Alt+Enter 開啟頁面' : ' · 方向鍵移動 · Alt+Enter 開啟頁面')}{view?.type === 'board' && access.canEditRows && ' · 拖曳把手移組，或使用卡片選單'}</Text>
     {property !== undefined && <PropertyDialog meta={meta} property={property} onClose={() => setProperty(undefined)} onReload={reload} />}
     {rules && <RulesDialog mode={rules} properties={meta.properties} config={rules === 'filter' && columnFilter ? { ...config, filters: [...config.filters.filter(filter => filter.propertyId !== columnFilter.propertyId), columnFilter] } : config} onApply={apply} onClose={() => { setRules(null); setColumnFilter(null); }} />}
+    {expenseOpen && view && <ExpenseDialog meta={meta} view={view} onClose={() => setExpenseOpen(false)} />}
     {viewDialog !== undefined && <ViewDialog meta={meta} view={viewDialog} onClose={() => setViewDialog(undefined)} onSelect={selectView} />}
   </div>;
 }

@@ -169,7 +169,7 @@ describe('a public link in the browser', () => {
     open(`/s/${token}/${databaseId}`);
     expect((await screen.findByRole('button', { name: '第一列／狀態' })).textContent).toBe('進行中');
     expect(screen.getByRole('button', { name: '第一列／名稱' }).getAttribute('aria-readonly')).toBe('true');
-    expect(screen.getByRole('link', { name: '開啟資料列：第一列' }).getAttribute('href')).toBe(`/s/${token}/${rowId}`);
+    expect(screen.getByRole('link', { name: '開啟資料列：第一列' }).getAttribute('href')).toBe(`/s/${token}/${databaseId}?row=${rowId}`);
     fireEvent.click(screen.getByRole('button', { name: '第一列／狀態' }));
     expect(screen.queryByRole('textbox')).toBeNull();
     expect(screen.queryByRole('button', { name: /新增/ })).toBeNull();

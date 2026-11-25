@@ -5,7 +5,7 @@ import { errorText } from '../../api/client.ts';
 import { EditableCell } from './EditableCell.tsx';
 import { useDatabaseAccess } from './access.ts';
 
-export function RowPropertiesPanel({ rowId, databaseId }: { rowId: string; databaseId: string }) {
+export function RowPropertiesPanel({ rowId, databaseId, peek = false }: { rowId: string; databaseId: string; peek?: boolean }) {
   useDatabaseSync(databaseId);
   const meta = useDatabase(databaseId);
   const row = useDatabaseRow(rowId, databaseId);
@@ -13,7 +13,7 @@ export function RowPropertiesPanel({ rowId, databaseId }: { rowId: string; datab
   const access = useDatabaseAccess();
   const reload = () => { void meta.refetch(); void row.refetch(); };
   return <Stack gap="xs" className="row-properties">
-    <Anchor component={Link} to={access.rowHref(databaseId)} size="sm">← 返回資料庫</Anchor>
+    {!peek && <Anchor component={Link} to={access.rowHref(databaseId)} size="sm">← 返回資料庫</Anchor>}
     {(meta.isPending || row.isPending) && <Loader size="xs" />}
     {(meta.error || row.error) && <Alert color="red">{errorText(meta.error ?? row.error)}<Button size="compact-xs" onClick={reload}>重試</Button></Alert>}
     {meta.data?.local && <Text size="xs" c="orange" role="status">目前顯示此裝置上的副本，修改會在連線後自動同步。</Text>}

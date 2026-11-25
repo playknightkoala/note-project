@@ -5,6 +5,12 @@ import type { VersionInfo } from './version.ts';
  * own part as the update log, which therefore also works without a connection.
  */
 export const releases: VersionInfo['releases'] = [
+  { version: '1.1.10', title: '費用試算、資料列側窗與頁面搬移', changes: [
+    '資料庫表格可依幣別、匯率與分攤人數自動換算每人台幣，勾選項目即可查看合計。',
+    '金額欄自動顯示千分位，既有數字欄可直接切換為金額。表頭只顯示欄名，單選選定後即儲存並關閉。',
+    '開啟資料列時可在桌面右側或手機全寬面板編輯，關閉後回到原表格。',
+    '在側欄頁面的「⋯」選擇「移動到…」即可指定上層頁面。桌面也可拖到目標頁面並向右縮排。',
+  ] },
   { version: '1.1.9', title: '弱網時自動切換離線使用', changes: [
     '已下載的個人筆記、頁面樹與資料庫會先顯示本機副本，即使伺服器回應很慢也能繼續閱讀。',
     '連線不穩時暫停同步，編輯先存到此裝置。連續三次連線檢查成功且伺服器重新驗證原帳號後，會自動同步。',

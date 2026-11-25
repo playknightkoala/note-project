@@ -8,7 +8,7 @@ export const propertyLabels: Record<PropertyType, string> = { text: '文字', nu
 export const choiceSchema = z.object({ id: z.string().uuid(), label: z.string().trim().min(1).max(80), color: z.enum(CHOICE_COLORS).default('gray') });
 export type PropertyChoice = z.infer<typeof choiceSchema>;
 const choicesSchema = z.array(choiceSchema).max(100).refine(choices => new Set(choices.map(c => c.id)).size === choices.length, '選項 ID 不可重複。');
-export const propertyInputSchema = z.object({ name: z.string().trim().min(1).max(80), type: propertyTypeSchema, choices: choicesSchema.default([]) });
+export const propertyInputSchema = z.object({ name: z.string().trim().min(1).max(80), type: propertyTypeSchema, groupThousands: z.boolean().optional(), choices: choicesSchema.default([]) });
 export type PropertyInput = z.infer<typeof propertyInputSchema>;
 export const propertyPatchSchema = propertyInputSchema.partial();
 export type PropertyPatch = z.infer<typeof propertyPatchSchema>;
@@ -25,7 +25,25 @@ export const FILTER_OPERATORS = ['contains', 'not_contains', 'equals', 'not_equa
 export type FilterOperator = typeof FILTER_OPERATORS[number];
 export const filterLabels: Record<FilterOperator, string> = { contains: '包含', not_contains: '不包含', equals: '等於', not_equals: '不等於', gt: '大於／晚於', gte: '大於等於／不早於', lt: '小於／早於', lte: '小於等於／不晚於', is_empty: '為空', is_not_empty: '不為空' };
 export const filterSchema = z.object({ propertyId: fieldIdSchema, operator: z.enum(FILTER_OPERATORS), value: z.union([z.string().max(2000), z.number().finite(), z.boolean(), z.null()]).default(null) });
+const expenseSchema = z.object({
+  amountId: z.uuid(), peopleId: z.uuid(), currencyId: z.uuid(), rateId: z.uuid().optional(),
+  rates: z.record(z.uuid(), z.number().positive().finite()).refine(rates => Object.keys(rates).length <= 100),
+});
+export type ExpenseConfig = z.infer<typeof expenseSchema>;
+
+/** Rate is original currency units per NT$1; each person's share is rounded to whole Taiwan dollars. */
+export function perPersonTwd(values: DatabaseRow['values'], expense: ExpenseConfig): number | null {
+  const amount = values[expense.amountId], people = values[expense.peopleId], currency = values[expense.currencyId];
+  if (typeof amount !== 'number' || typeof people !== 'number' || !Number.isInteger(people) || people < 1 || typeof currency !== 'string') return null;
+  const override = expense.rateId ? values[expense.rateId] : null;
+  const rate = override ?? expense.rates[currency];
+  if (typeof rate !== 'number' || !Number.isFinite(rate) || rate <= 0) return null;
+  const result = Math.sign(amount) * Math.round(Math.abs(amount) / rate / people);
+  return Number.isSafeInteger(result) ? result : null;
+}
+
 export const viewConfigSchema = z.object({
+  expense: expenseSchema.optional(),
   groupBy: z.string().uuid().optional(),
   sorts: z.array(sortSchema).max(10).default([]), filters: z.array(filterSchema).max(20).default([]),
   columns: z.array(z.string().uuid()).max(50).refine(ids => new Set(ids).size === ids.length, '欄位不可重複。').optional(),
@@ -69,6 +87,12 @@ export function valueSchema(property: DatabaseProperty) {
 
 export function validateView(config: ViewConfig, properties: DatabaseProperty[]): string | null {
   const byId = new Map(properties.map(p => [p.id, p]));
+  if (config.expense) {
+    const { amountId, peopleId, currencyId, rateId } = config.expense;
+    const numeric = [amountId, peopleId, ...(rateId ? [rateId] : [])];
+    if (new Set(numeric).size !== numeric.length || numeric.some(id => byId.get(id)?.type !== 'number') || byId.get(currencyId)?.type !== 'select')
+      return '請為費用試算選擇不同的數字欄位，以及單選幣別欄位。';
+  }
   if (config.groupBy && byId.get(config.groupBy)?.type !== 'select') return '看板分組必須使用此資料庫的單選欄位。';
   for (const id of [...config.sorts.map(s => s.propertyId), ...config.filters.map(f => f.propertyId), ...(config.columns ?? [])]) {
     if (id !== 'title' && !byId.has(id)) return '視圖包含不存在的欄位。';
@@ -94,6 +118,10 @@ export function pruneViewConfig(view: ViewConfig, propertyId: string, options: {
     sorts: validChoices ? view.sorts : view.sorts.filter(sort => sort.propertyId !== propertyId),
     filters: view.filters.filter(filter => filter.propertyId !== propertyId || (validChoices !== undefined && (typeof filter.value !== 'string' || validChoices.has(filter.value)))),
     ...(remove && view.columns ? { columns: view.columns.filter(col => col !== propertyId) } : {}) };
+  if (config.expense && !validChoices && [config.expense.amountId, config.expense.peopleId, config.expense.currencyId, config.expense.rateId].includes(propertyId)) delete config.expense;
+  if (config.expense?.currencyId === propertyId && validChoices) {
+    config.expense = { ...config.expense, rates: Object.fromEntries(Object.entries(config.expense.rates).filter(([id]) => validChoices.has(id))) };
+  }
   if (clearGrouping && config.groupBy === propertyId) delete config.groupBy;
   return config;
 }

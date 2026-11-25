@@ -32,6 +32,11 @@ export function projectDrop(rows: FlatRow[], activeId: string, overId: string, o
   const subtree = new Set<string>([activeId]);
   for (let i = activeIndex + 1; i < rows.length && rows[i]!.depth > active.depth; i++) subtree.add(rows[i]!.id);
   if (subtree.has(overId)) return null;
+  // A deliberate rightward drag onto another page nests the item even when the target is above it or collapsed.
+  if (offsetX >= indentWidth) {
+    const target = rows[overIndex]!;
+    return target.node.kind === 'page' ? { parentId: target.id, index: 0, depth: target.depth + 1 } : null;
+  }
   const list = rows.filter(row => !subtree.has(row.id));
   const insertAt = Math.min(list.findIndex(row => row.id === overId) + (overIndex > activeIndex ? 1 : 0), list.length);
   const previous = list[insertAt - 1];

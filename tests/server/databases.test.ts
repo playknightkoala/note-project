@@ -58,6 +58,17 @@ describe('database API', () => {
     expect((await (await c.request('GET', `/api/rows/${task.id}`)).json() as DatabaseRow).version).toBe(2);
   });
 
+  it('switches a populated numeric column to amounts without rewriting its rows', async () => {
+    const prop = await property('number');
+    const original = await row('機票', { [prop.id]: 37180 });
+    const path = `/api/databases/${meta.id}/properties/${prop.id}`;
+    const result = await c.request('PATCH', path, { headers: match(meta.version), json: { groupThousands: true } });
+    expect(result.status).toBe(200);
+    const saved = await (await c.request('GET', `/api/databases/${meta.id}`)).json() as DatabaseDto;
+    expect(saved.properties[0]).toMatchObject({ id: prop.id, type: 'number', groupThousands: true });
+    expect((await rows()).rows).toEqual([original]);
+  });
+
   it('requires If-Match for schema and row writes, rejects stale clients and rolls back complete writes', async () => {
     const prop = await property('number');
     const task = await row('原標題', { [prop.id]: 10 });
