@@ -1,5 +1,18 @@
 # 驗證紀錄
 
+## 1.1.11 發布前檢查（2026-11-25）
+
+- `VITEST_MAX_WORKERS=4 npm run check` 通過型別檢查、lint、323 項測試與正式建置。
+- `docker compose up --build --wait` 通過，`/healthz` 回應 `ok`。`/api/version` 與更新紀錄首筆皆為 `1.1.11`。
+- `npm run test:app -- http://127.0.0.1:8080` 的 40 項容器檢查通過。
+
+## 幣值換算與欄位加總（2026-11-25）
+
+- `npm run typecheck`、`npm run lint`、`VITEST_MAX_WORKERS=4 npm test`、`npm run build` 通過。共 43 檔、323 項測試。
+- 使用獨立暫存資料庫與 Chrome 確認兩種幣別及有效匯率均必填、匯率反向換算、輸入日圓金額後反算新台幣、101 列跨分頁加總，以及 API 依篩選條件計算合計。
+- 在 Chrome 量測最後一筆資料列與合計列相接。在 390 像素寬度從表格下方按「新增頁面」後，新資料列出現在合計上方。
+- `docker compose up --build --wait` 通過，`curl -fsS http://127.0.0.1:8080/healthz` 回應 `ok`。
+
 ## 1.1.10 發布前檢查（2026-11-25）
 
 - `VITEST_MAX_WORKERS=4 npm run check` 通過型別檢查、lint、全套 327 項測試與正式建置。

@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { CellValue, DatabaseDto, DatabaseRow, PropertyInput, RowsDto, ViewConfig, ViewInput } from '@shared/database';
-import { evaluateRows, validateView } from '@shared/database';
+import { evaluateRows, sumColumns, validateView } from '@shared/database';
 import type { DatabaseSnapshotDto, OfflineOp } from '@shared/offline';
 import { newId } from '@shared/ids';
 import { ApiError, api } from './client.ts';
@@ -51,7 +51,8 @@ async function localRows(id: string, config: ViewConfig): Promise<RowsDto> {
   const error = validateView(config, view.meta.properties);
   if (error) throw new ApiError(400, 'bad_request', error);
   const rows = evaluateRows(view.rows, view.meta.properties, config);
-  return { rows, total: rows.length, offset: 0, limit: Math.max(rows.length, 1) };
+  return { rows, total: rows.length, offset: 0, limit: Math.max(rows.length, 1),
+    ...(config.sumColumns?.length ? { totals: sumColumns(rows, config.sumColumns) } : {}) };
 }
 
 /** Re-reads a database's queries when its waiting changes or its copy on this device change, and when the connection does. */
@@ -86,10 +87,10 @@ export function useDatabase(id: string) {
 }
 export function useDatabaseRows(id: string, version: number, config: ViewConfig, enabled = true, local = false) {
   return useInfiniteQuery({
-    queryKey: [...databaseKeys.rows(id), version, config.sorts, config.filters, local], initialPageParam: 0, networkMode: 'always', retry: false,
+    queryKey: [...databaseKeys.rows(id), version, config.sorts, config.filters, config.sumColumns ?? [], local], initialPageParam: 0, networkMode: 'always', retry: false,
     queryFn: async ({ pageParam, signal }) => {
       if (local) return localRows(id, config);
-      try { return await api<RowsDto>('GET', `/api/databases/${id}/rows?${new URLSearchParams({ sort: JSON.stringify(config.sorts), filter: JSON.stringify(config.filters), offset: String(pageParam), limit: '100' })}`, { signal }); }
+      try { return await api<RowsDto>('GET', `/api/databases/${id}/rows?${new URLSearchParams({ sort: JSON.stringify(config.sorts), filter: JSON.stringify(config.filters), offset: String(pageParam), limit: '100', ...(config.sumColumns?.length ? { sums: JSON.stringify(config.sumColumns) } : {}) })}`, { signal }); }
       catch (error) {
         // The connection dropped between loading the structure and the rows: show the copy kept here instead.
         if (!transient(error) || signal.aborted || pageParam !== 0 || !await localDatabase(id)) throw error;

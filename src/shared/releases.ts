@@ -5,6 +5,12 @@ import type { VersionInfo } from './version.ts';
  * own part as the update log, which therefore also works without a connection.
  */
 export const releases: VersionInfo['releases'] = [
+  { version: '1.1.11', title: '幣值換算與欄位加總', changes: [
+    '原本的費用試算改為「幣值換算」欄位與「欄位加總」功能。',
+    '幣值換算支援新台幣與日圓。選定兩種幣別後，填寫任一方向的匯率即可帶出另一方向。資料格也可從任一幣別輸入金額。',
+    '欄位加總可選擇數字或金額欄位，計算符合目前篩選條件的所有資料列。',
+    '合計列緊貼最後一筆資料。使用「新增頁面」時，新資料會出現在合計上方。',
+  ] },
   { version: '1.1.10', title: '費用試算、資料列側窗與頁面搬移', changes: [
     '資料庫表格可依幣別、匯率與分攤人數自動換算每人台幣，勾選項目即可查看合計。',
     '金額欄自動顯示千分位，既有數字欄可直接切換為金額。表頭只顯示欄名，單選選定後即儲存並關閉。',

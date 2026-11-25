@@ -1,6 +1,8 @@
 import { Checkbox, MultiSelect, Select, TextInput } from '@mantine/core';
 import { DateInput } from '@mantine/dates';
 import 'dayjs/locale/zh-tw';
+import { convertCurrency } from '@shared/database';
+import { currencyAmountFormat } from './CurrencyValueInput.tsx';
 import type { CellValue, DatabaseProperty, PropertyChoice } from '@shared/database';
 
 const amountFormat = new Intl.NumberFormat('zh-TW', { useGrouping: true, maximumSignificantDigits: 21 });
@@ -27,6 +29,12 @@ export function CellDisplay({ property, value }: { property: DatabaseProperty | 
   if (property?.type === 'select' || property?.type === 'multi_select') {
     const ids = Array.isArray(value) ? value : value ? [value] : [];
     return <span className="choice-tags">{property.choices.filter(choice => ids.includes(choice.id)).map(choice => <ChoiceTag key={choice.id} choice={choice} />)}</span>;
+  }
+  if (property?.currencyConversion && typeof value === 'number') {
+    const { from, to, rate } = property.currencyConversion;
+    const equivalent = convertCurrency(value, rate);
+    const text = `${from} ${currencyAmountFormat.format(value)} · ${to} ${equivalent === null ? '—' : currencyAmountFormat.format(equivalent)}`;
+    return <span title={text}>{text}</span>;
   }
   if (property?.type === 'number' && property.groupThousands && typeof value === 'number') return <>{amountFormat.format(value)}</>;
   return <>{value === null || value === '' ? <span className="cell-empty">{property ? '空白' : '無標題'}</span> : String(value)}</>;

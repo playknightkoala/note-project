@@ -46,7 +46,7 @@ export function databaseRoutes(): Hono<AppEnv> {
   });
   app.get('/:id/rows', c => {
     const { db, ownerId } = reader(c); const query = parseValue(c.req.query(), rowsQuerySchema);
-    const config = parseValue({ sorts: queryJson(query.sort), filters: queryJson(query.filter) }, viewConfigSchema);
+    const config = parseValue({ sorts: queryJson(query.sort), filters: queryJson(query.filter), sumColumns: queryJson(query.sums) }, viewConfigSchema);
     return c.json(databases.listRows(db, ownerId, c.req.param('id'), config, query.offset, query.limit));
   });
   app.post('/:id/rows', async c => {

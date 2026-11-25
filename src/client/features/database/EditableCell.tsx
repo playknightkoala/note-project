@@ -3,6 +3,7 @@ import { Alert, Button, Group, Popover, Stack } from '@mantine/core';
 import type { CellValue, DatabaseProperty } from '@shared/database';
 import { valueSchema } from '@shared/database';
 import { errorText, isApiError } from '../../api/client.ts';
+import { CurrencyValueInput } from './CurrencyValueInput.tsx';
 import { CellDisplay, CellValueInput } from './CellValueInput.tsx';
 import { useUpdateGuard } from '../../updates/guards.ts';
 import { useDatabaseAccess } from './access.ts';
@@ -16,6 +17,7 @@ export interface EditableCellProps {
 export function EditableCell(props: EditableCellProps) {
   const { canEditRows } = useDatabaseAccess();
   if (!canEditRows) return <StaticCell {...props} />;
+  if (props.property?.currencyConversion) return <PopoverCell {...props} />;
   if (!props.property || ['text', 'number', 'url'].includes(props.property.type)) return <InlineCell {...props} />;
   if (props.property.type === 'checkbox') return <CheckboxCell {...props} />;
   return <PopoverCell {...props} />;
@@ -93,6 +95,7 @@ function PopoverCell({ property, value, label, onSave, onReload, tabIndex = 0, r
   const [pending, setPending] = useState(false);
   const [composing, setComposing] = useState(false);
   useUpdateGuard(() => { if (opened && (JSON.stringify(draft) !== JSON.stringify(value) || pending)) throw new Error('請先儲存或取消資料格的修改，再更新。'); });
+  const [inputKey, setInputKey] = useState(0);
   const instant = property?.type === 'select';
   const busy = useRef(false);
   const save = async (next = draft) => {
@@ -115,9 +118,10 @@ function PopoverCell({ property, value, label, onSave, onReload, tabIndex = 0, r
       onClick={() => { setDraft(value); setBase(value); setError(null); setOpened(true); }}>{emptyLabel !== undefined && (value === null || value === '') ? emptyLabel : <CellDisplay property={property} value={value} />}</button></Popover.Target>
     <Popover.Dropdown><form onSubmit={event => { event.preventDefault(); void save(); }} onCompositionStart={() => setComposing(true)} onCompositionEnd={() => setComposing(false)}>
       <Stack gap="sm">
-        <CellValueInput property={property} label={property?.name ?? '名稱'} value={draft} onChange={change} autoFocus />
+        {property?.currencyConversion ? <CurrencyValueInput key={inputKey} conversion={property.currencyConversion} value={draft} onChange={change} />
+          : <CellValueInput property={property} label={property?.name ?? '名稱'} value={draft} onChange={change} autoFocus />}
         {!!error && <Alert color="red" role="alert">{errorText(error)}{isApiError(error, 409) && <Button mt="xs" size="compact-xs" variant="white" onClick={() => { setOpened(false); onReload(); }}>重新載入並捨棄草稿</Button>}</Alert>}
-        <Group justify="space-between"><Button size="compact-xs" variant="subtle" disabled={pending} onClick={() => change(null)}>清除</Button>
+        <Group justify="space-between"><Button size="compact-xs" variant="subtle" disabled={pending} onClick={() => { change(null); setInputKey(key => key + 1); }}>清除</Button>
           <Group gap="xs"><Button size="compact-xs" variant="default" disabled={pending} onClick={() => setOpened(false)}>取消</Button>{(!instant || !!error) && <Button size="compact-xs" type="submit" loading={pending}>{error ? '重試儲存' : '儲存'}</Button>}</Group>
         </Group>
       </Stack>

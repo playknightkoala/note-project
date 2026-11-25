@@ -1,6 +1,6 @@
 import type { Db } from '../db/driver.ts';
 import type { DatabaseDto, DatabaseProperty, DatabaseRow, PropertyInput, PropertyPatch, RowInput, CellValue, ViewConfig, ViewInput, RowsDto, ViewType } from '../../shared/database.ts';
-import { evaluateRows, propertyInputSchema, pruneViewConfig, sameValue, validateView, valueSchema, viewConfigSchema } from '../../shared/database.ts';
+import { evaluateRows, propertyInputSchema, pruneViewConfig, sameValue, sumColumns, validateView, valueSchema, viewConfigSchema } from '../../shared/database.ts';
 import { emptyParagraph } from '../../shared/blocks.ts';
 import { AppError } from '../../shared/errors.ts';
 import { loadPage } from './pages.ts';
@@ -33,9 +33,10 @@ function bumpSchema(db: Db, userId: string, id: string, now: number): DatabaseDt
   return getDatabase(db, userId, id);
 }
 function propertyOptions(input: PropertyInput): string {
-  return JSON.stringify({ choices: input.choices, ...(input.type === 'number' && input.groupThousands ? { groupThousands: true } : {}) });
+  return JSON.stringify({ choices: input.choices, ...(input.type === 'number' && input.groupThousands ? { groupThousands: true } : {}), ...(input.currencyConversion ? { currencyConversion: input.currencyConversion } : {}) });
 }
-function checkChoices(input: PropertyInput): void {
+function checkProperty(input: PropertyInput): void {
+  if (input.currencyConversion && input.type !== 'number') throw new AppError('bad_request', '幣值換算須使用數字欄位。');
   if (!['select', 'multi_select'].includes(input.type) && input.choices.length) throw new AppError('bad_request', '只有單選與多選欄位能設定選項。');
   if (new Set(input.choices.map(choice => choice.label.toLowerCase())).size !== input.choices.length) throw new AppError('bad_request', '選項名稱不可重複。');
 }
@@ -51,7 +52,7 @@ export function addProperty(db: Db, userId: string, id: string, input: PropertyI
     const page = database(db, userId, id);
     if (alreadyThere(db, 'db_properties', propertyId, id)) return getDatabase(db, userId, id);
     assertVersion(page.schema_version, version);
-    checkChoices(input);
+    checkProperty(input);
     const current = properties(db, userId, id);
     if (current.length >= 50) throw new AppError('conflict', '每個資料庫最多 50 個屬性。');
     db.run('INSERT INTO db_properties (id, database_id, name, type, options, position, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
@@ -59,7 +60,7 @@ export function addProperty(db: Db, userId: string, id: string, input: PropertyI
     return bumpSchema(db, userId, id, now);
   });
 }
-function pruneViews(db: Db, userId: string, id: string, propertyId: string, options: { remove: boolean; clearGrouping: boolean; validChoices?: Set<string> }): void {
+function pruneViews(db: Db, userId: string, id: string, propertyId: string, options: Parameters<typeof pruneViewConfig>[2]): void {
   for (const view of getDatabase(db, userId, id).views) {
     db.run('UPDATE db_views SET config = ? WHERE id = ? AND database_id = ? AND EXISTS (SELECT 1 FROM pages WHERE id = db_views.database_id AND user_id = ?)', JSON.stringify(pruneViewConfig(view.config, propertyId, options)), view.id, id, userId);
   }
@@ -70,12 +71,15 @@ export function updateProperty(db: Db, userId: string, id: string, propertyId: s
     const current = properties(db, userId, id).find(property => property.id === propertyId);
     if (!current) throw new AppError('not_found');
     const input = parseValue({ ...current, ...patch }, propertyInputSchema);
-    checkChoices(input);
+    checkProperty(input);
     const values = db.all<{ value_json: string }>(`SELECT v.value_json FROM row_values v JOIN pages p ON p.id = v.page_id WHERE v.property_id = ? AND p.database_id = ? AND p.user_id = ?`, propertyId, id, userId);
     if (input.type !== current.type && values.length) throw new AppError('conflict', '此欄位已有資料，請先清空後再變更型別。');
+    if (current.currencyConversion && input.currencyConversion && current.currencyConversion.from !== input.currencyConversion.from && values.length)
+      throw new AppError('conflict', '這個欄位已有金額，請先清空後再更換基準幣別。');
     const candidate: DatabaseProperty = { ...current, ...input };
     if (input.type === current.type && values.some(value => !valueSchema(candidate).safeParse(JSON.parse(value.value_json)).success)) throw new AppError('conflict', '選項仍有資料列使用，請先更新資料列後再移除。');
     if (input.type !== current.type) pruneViews(db, userId, id, propertyId, { remove: false, clearGrouping: input.type !== 'select' });
+    else if (!current.currencyConversion && input.currencyConversion) pruneViews(db, userId, id, propertyId, { remove: false, clearGrouping: false, sumOnly: true });
     else if (JSON.stringify(input.choices) !== JSON.stringify(current.choices)) pruneViews(db, userId, id, propertyId, { remove: false, clearGrouping: false, validChoices: new Set(input.choices.map(choice => choice.id)) });
     db.run('UPDATE db_properties SET name = ?, type = ?, options = ? WHERE id = ? AND database_id = ?', input.name, input.type, propertyOptions(input), propertyId, id);
     return bumpSchema(db, userId, id, now);
@@ -249,7 +253,8 @@ export function listRows(db: Db, userId: string, id: string, config: ViewConfig,
   if (error) throw new AppError('bad_request', error);
   const values = readValues(db, userId, id);
   const rows = evaluateRows(allRows(db, userId, id).map(page => rowDto(page, values.get(page.id) ?? {})), props, config);
-  return { rows: rows.slice(offset, offset + limit), total: rows.length, limit, offset };
+  return { rows: rows.slice(offset, offset + limit), total: rows.length, limit, offset,
+    ...(config.sumColumns?.length ? { totals: sumColumns(rows, config.sumColumns) } : {}) };
 }
 
 /** One entry per database; the stamp changes with its structure, its title and any row (values, title, content, count). */

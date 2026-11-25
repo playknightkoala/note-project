@@ -8,7 +8,21 @@ export const propertyLabels: Record<PropertyType, string> = { text: '文字', nu
 export const choiceSchema = z.object({ id: z.string().uuid(), label: z.string().trim().min(1).max(80), color: z.enum(CHOICE_COLORS).default('gray') });
 export type PropertyChoice = z.infer<typeof choiceSchema>;
 const choicesSchema = z.array(choiceSchema).max(100).refine(choices => new Set(choices.map(c => c.id)).size === choices.length, '選項 ID 不可重複。');
-export const propertyInputSchema = z.object({ name: z.string().trim().min(1).max(80), type: propertyTypeSchema, groupThousands: z.boolean().optional(), choices: choicesSchema.default([]) });
+export const CURRENCIES = ['TWD', 'JPY'] as const;
+export const currencySchema = z.enum(CURRENCIES);
+export const currencyLabels = { TWD: '新台幣（TWD）', JPY: '日圓（JPY）' } as const;
+export const currencyConversionSchema = z.object({
+  from: currencySchema, to: currencySchema,
+  rate: z.number().positive().finite().refine(rate => Number.isFinite(1 / rate)),
+}).refine(({ from, to }) => from !== to, '請選擇兩種不同的幣別。');
+export type CurrencyConversion = z.infer<typeof currencyConversionSchema>;
+
+export function convertCurrency(amount: number, rate: number): number | null {
+  const converted = amount * rate;
+  return Number.isFinite(converted) ? converted : null;
+}
+
+export const propertyInputSchema = z.object({ name: z.string().trim().min(1).max(80), type: propertyTypeSchema, groupThousands: z.boolean().optional(), currencyConversion: currencyConversionSchema.nullable().optional(), choices: choicesSchema.default([]) });
 export type PropertyInput = z.infer<typeof propertyInputSchema>;
 export const propertyPatchSchema = propertyInputSchema.partial();
 export type PropertyPatch = z.infer<typeof propertyPatchSchema>;
@@ -25,28 +39,12 @@ export const FILTER_OPERATORS = ['contains', 'not_contains', 'equals', 'not_equa
 export type FilterOperator = typeof FILTER_OPERATORS[number];
 export const filterLabels: Record<FilterOperator, string> = { contains: '包含', not_contains: '不包含', equals: '等於', not_equals: '不等於', gt: '大於／晚於', gte: '大於等於／不早於', lt: '小於／早於', lte: '小於等於／不晚於', is_empty: '為空', is_not_empty: '不為空' };
 export const filterSchema = z.object({ propertyId: fieldIdSchema, operator: z.enum(FILTER_OPERATORS), value: z.union([z.string().max(2000), z.number().finite(), z.boolean(), z.null()]).default(null) });
-const expenseSchema = z.object({
-  amountId: z.uuid(), peopleId: z.uuid(), currencyId: z.uuid(), rateId: z.uuid().optional(),
-  rates: z.record(z.uuid(), z.number().positive().finite()).refine(rates => Object.keys(rates).length <= 100),
-});
-export type ExpenseConfig = z.infer<typeof expenseSchema>;
-
-/** Rate is original currency units per NT$1; each person's share is rounded to whole Taiwan dollars. */
-export function perPersonTwd(values: DatabaseRow['values'], expense: ExpenseConfig): number | null {
-  const amount = values[expense.amountId], people = values[expense.peopleId], currency = values[expense.currencyId];
-  if (typeof amount !== 'number' || typeof people !== 'number' || !Number.isInteger(people) || people < 1 || typeof currency !== 'string') return null;
-  const override = expense.rateId ? values[expense.rateId] : null;
-  const rate = override ?? expense.rates[currency];
-  if (typeof rate !== 'number' || !Number.isFinite(rate) || rate <= 0) return null;
-  const result = Math.sign(amount) * Math.round(Math.abs(amount) / rate / people);
-  return Number.isSafeInteger(result) ? result : null;
-}
-
+const columnIds = z.array(z.uuid()).max(50).refine(ids => new Set(ids).size === ids.length, '欄位不可重複。');
 export const viewConfigSchema = z.object({
-  expense: expenseSchema.optional(),
+  sumColumns: columnIds.optional(),
   groupBy: z.string().uuid().optional(),
   sorts: z.array(sortSchema).max(10).default([]), filters: z.array(filterSchema).max(20).default([]),
-  columns: z.array(z.string().uuid()).max(50).refine(ids => new Set(ids).size === ids.length, '欄位不可重複。').optional(),
+  columns: columnIds.optional(),
 });
 export type ViewConfig = z.infer<typeof viewConfigSchema>;
 export type DatabaseSort = z.infer<typeof sortSchema>;
@@ -58,8 +56,9 @@ export const viewInputSchema = z.object({ name: z.string().trim().min(1).max(80)
 export type ViewInput = z.infer<typeof viewInputSchema>;
 export interface DatabaseView { id: string; name: string; type: ViewType; config: ViewConfig }
 export interface DatabaseDto { id: string; version: number; properties: DatabaseProperty[]; views: DatabaseView[] }
-export interface RowsDto { rows: DatabaseRow[]; total: number; offset: number; limit: number }
-export const rowsQuerySchema = z.object({ offset: z.coerce.number().int().min(0).max(5000).default(0), limit: z.coerce.number().int().min(1).max(200).default(100), sort: z.string().max(5000).optional(), filter: z.string().max(20000).optional() });
+export type ColumnTotals = Record<string, string>;
+export interface RowsDto { rows: DatabaseRow[]; total: number; offset: number; limit: number; totals?: ColumnTotals }
+export const rowsQuerySchema = z.object({ offset: z.coerce.number().int().min(0).max(5000).default(0), limit: z.coerce.number().int().min(1).max(200).default(100), sort: z.string().max(5000).optional(), filter: z.string().max(20000).optional(), sums: z.string().max(2000).optional() });
 
 const emptyOperators: FilterOperator[] = ['is_empty', 'is_not_empty'];
 export function operatorsFor(type: PropertyType | 'title'): FilterOperator[] {
@@ -87,12 +86,7 @@ export function valueSchema(property: DatabaseProperty) {
 
 export function validateView(config: ViewConfig, properties: DatabaseProperty[]): string | null {
   const byId = new Map(properties.map(p => [p.id, p]));
-  if (config.expense) {
-    const { amountId, peopleId, currencyId, rateId } = config.expense;
-    const numeric = [amountId, peopleId, ...(rateId ? [rateId] : [])];
-    if (new Set(numeric).size !== numeric.length || numeric.some(id => byId.get(id)?.type !== 'number') || byId.get(currencyId)?.type !== 'select')
-      return '請為費用試算選擇不同的數字欄位，以及單選幣別欄位。';
-  }
+  if (config.sumColumns?.some(id => !canSumColumn(byId.get(id)))) return '加總須使用數字或金額欄位。';
   if (config.groupBy && byId.get(config.groupBy)?.type !== 'select') return '看板分組必須使用此資料庫的單選欄位。';
   for (const id of [...config.sorts.map(s => s.propertyId), ...config.filters.map(f => f.propertyId), ...(config.columns ?? [])]) {
     if (id !== 'title' && !byId.has(id)) return '視圖包含不存在的欄位。';
@@ -112,16 +106,14 @@ export function validateView(config: ViewConfig, properties: DatabaseProperty[])
  * Drops references to a property from a saved view. `validChoices` narrows this to filters that name a choice which
  * no longer exists, so adding or renaming a choice leaves sorts and the remaining filters alone.
  */
-export function pruneViewConfig(view: ViewConfig, propertyId: string, options: { remove: boolean; clearGrouping: boolean; validChoices?: Set<string> }): ViewConfig {
+export function pruneViewConfig(view: ViewConfig, propertyId: string, options: { remove: boolean; clearGrouping: boolean; validChoices?: Set<string>; sumOnly?: boolean }): ViewConfig {
+  if (options.sumOnly) return view.sumColumns ? { ...view, sumColumns: view.sumColumns.filter(id => id !== propertyId) } : view;
   const { remove, clearGrouping, validChoices } = options;
   const config: ViewConfig = { ...view,
     sorts: validChoices ? view.sorts : view.sorts.filter(sort => sort.propertyId !== propertyId),
     filters: view.filters.filter(filter => filter.propertyId !== propertyId || (validChoices !== undefined && (typeof filter.value !== 'string' || validChoices.has(filter.value)))),
     ...(remove && view.columns ? { columns: view.columns.filter(col => col !== propertyId) } : {}) };
-  if (config.expense && !validChoices && [config.expense.amountId, config.expense.peopleId, config.expense.currencyId, config.expense.rateId].includes(propertyId)) delete config.expense;
-  if (config.expense?.currencyId === propertyId && validChoices) {
-    config.expense = { ...config.expense, rates: Object.fromEntries(Object.entries(config.expense.rates).filter(([id]) => validChoices.has(id))) };
-  }
+  if (!validChoices && view.sumColumns) config.sumColumns = view.sumColumns.filter(id => id !== propertyId);
   if (clearGrouping && config.groupBy === propertyId) delete config.groupBy;
   return config;
 }
@@ -177,4 +169,29 @@ export function evaluateRows(rows: DatabaseRow[], properties: DatabaseProperty[]
     }
     return 0;
   });
+}
+
+export function canSumColumn(property: DatabaseProperty | undefined): boolean {
+  return property?.type === 'number' && !property.currencyConversion;
+}
+
+/** Sum the decimal values supplied by the rows without introducing floating-point rounding artifacts.
+ * A common scale accommodates the smallest finite exponent and all digits of a number’s mantissa.
+ */
+export function sumColumns(rows: DatabaseRow[], ids: readonly string[]): ColumnTotals {
+  const scale = 340;
+  return Object.fromEntries(ids.map(id => {
+    let total = 0n;
+    for (const row of rows) {
+      const value = row.values[id];
+      if (typeof value !== 'number' || !Number.isFinite(value) || value === 0) continue;
+      const [mantissa, exponent] = value.toExponential().split('e');
+      const [whole, fraction = ''] = mantissa!.split('.');
+      total += BigInt(whole + fraction) * 10n ** BigInt(scale + Number(exponent) - fraction.length);
+    }
+    const digits = (total < 0n ? -total : total).toString().padStart(scale + 1, '0');
+    const integer = digits.slice(0, -scale);
+    const fraction = digits.slice(-scale).replace(/0+$/, '');
+    return [id, (total < 0n ? '-' : '') + integer + (fraction ? '.' + fraction : '')];
+  }));
 }

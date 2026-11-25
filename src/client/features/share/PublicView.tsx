@@ -7,7 +7,7 @@ import { Anchor, Breadcrumbs, Button, Center, Group, Loader, Stack, Text, useCom
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Database, FileText, Kanban, List, Table2 } from 'lucide-react';
 import { Link, Navigate, useParams } from 'react-router';
-import { evaluateRows } from '@shared/database';
+import { evaluateRows, sumColumns } from '@shared/database';
 import type { ViewConfig } from '@shared/database';
 import { publicLinkPath } from '@shared/shares';
 import type { AccountLinkDto, PublicNode, PublicPageDto, PublicShareDto } from '@shared/shares';
@@ -175,7 +175,7 @@ function PublicDatabase({ data }: { data: NonNullable<PublicPageDto['database']>
         onClick={() => { setViewId(item.id); setOverride(null); }}>{item.name}</Button>; })}
     </Group>
     {view?.type === 'list' ? <ListView {...common} /> : view?.type === 'board' ? <BoardView {...common} moving={false} onMove={nothing} />
-      : <DataGrid databaseId={data.meta.id} properties={data.meta.properties} rows={rows} total={rows.length} config={config} onSave={resolved} onReload={nothing} onEditProperty={nothing} onConfig={setOverride}
+      : <DataGrid databaseId={data.meta.id} properties={data.meta.properties} rows={rows} total={rows.length} totals={sumColumns(rows, config.sumColumns ?? [])} config={config} onSave={resolved} onReload={nothing} onEditProperty={nothing} onConfig={setOverride}
         onTrash={nothing} onCreate={resolved} onAddProperty={nothing} adding={false} onCloseAdd={nothing} hasMore={false} loadingMore={false} onMore={nothing} />}
     <Text size="xs" c="dimmed" mt="xs">{rows.length} 列</Text>
   </div>;

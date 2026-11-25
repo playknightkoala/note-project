@@ -156,7 +156,10 @@ export function applyDatabaseOp(snapshot: DatabaseSnapshot, op: DatabaseOp, now:
       const current = meta.properties.find(property => property.id === op.propertyId);
       if (!current) return snapshot;
       const next: DatabaseProperty = { ...current, ...op.input };
+      if (current.currencyConversion && next.currencyConversion && current.currencyConversion.from !== next.currencyConversion.from
+        && rows.some(row => typeof row.values[current.id] === 'number')) return snapshot;
       const views = next.type !== current.type ? prune(current.id, { remove: false, clearGrouping: next.type !== 'select' })
+        : !current.currencyConversion && next.currencyConversion ? prune(current.id, { remove: false, clearGrouping: false, sumOnly: true })
         : JSON.stringify(next.choices) !== JSON.stringify(current.choices) ? prune(current.id, { remove: false, clearGrouping: false, validChoices: new Set(next.choices.map(choice => choice.id)) }) : meta.views;
       return { rows, meta: { ...meta, views, properties: meta.properties.map(property => property.id === current.id ? next : property) } };
     }
