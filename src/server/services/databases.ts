@@ -1,6 +1,6 @@
 import type { Db } from '../db/driver.ts';
 import type { DatabaseDto, DatabaseProperty, DatabaseRow, PropertyInput, PropertyPatch, RowInput, CellValue, ViewConfig, ViewInput, RowsDto, ViewType } from '../../shared/database.ts';
-import { conversionIssue, evaluateRows, isCalculated, propertyInputSchema, propertyIssue, pruneViewConfig, sameValue, sumColumns, validateView, valueSchema, viewConfigSchema } from '../../shared/database.ts';
+import { conversionIssue, evaluateRows, isCalculated, moveProperty as reorder, propertyInputSchema, propertyIssue, pruneViewConfig, sameValue, sumColumns, validateView, valueSchema, viewConfigSchema } from '../../shared/database.ts';
 import { emptyParagraph } from '../../shared/blocks.ts';
 import { AppError } from '../../shared/errors.ts';
 import { loadPage } from './pages.ts';
@@ -105,6 +105,18 @@ export function deleteProperty(db: Db, userId: string, id: string, propertyId: s
     checkConversions(all.filter(p => p.id !== propertyId), null);
     pruneViews(db, userId, id, propertyId, { remove: true, clearGrouping: true });
     db.run('DELETE FROM db_properties WHERE id = ? AND database_id = ?', propertyId, id);
+    return bumpSchema(db, userId, id, now);
+  });
+}
+/** Puts a column at `index` among the others. Moving it to where it already is changes nothing, not even the version. */
+export function moveProperty(db: Db, userId: string, id: string, propertyId: string, index: number, version: number | null, now: number): DatabaseDto {
+  return db.transaction(() => {
+    assertVersion(database(db, userId, id).schema_version, version);
+    const current = properties(db, userId, id);
+    const next = reorder(current, propertyId, index);
+    if (!next) throw new AppError('not_found');
+    if (next.every((property, at) => property.id === current[at]!.id)) return getDatabase(db, userId, id);
+    for (const property of next) db.run('UPDATE db_properties SET position = ? WHERE id = ? AND database_id = ?', property.position, property.id, id);
     return bumpSchema(db, userId, id, now);
   });
 }

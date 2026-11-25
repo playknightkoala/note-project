@@ -1,5 +1,17 @@
 # 驗證紀錄
 
+## 1.1.13 發布前檢查（2026-11-25）
+
+- `VITEST_MAX_WORKERS=4 npm run check` 通過型別檢查、lint、44 檔共 338 項測試與正式建置。
+- 以隔離的 Compose 專案執行 `docker compose up --build --wait` 通過，`/healthz` 回應 `ok`。`/api/version` 與更新紀錄首筆皆為 `1.1.13`。
+- `npm run test:app` 的 40 項容器檢查通過。
+
+## 調整欄位順序（2026-11-25）
+
+- Node 22.23.1、npm 10.9.8 下執行 `VITEST_MAX_WORKERS=4 npm run check`，型別檢查、lint、44 檔共 338 項測試與正式建置全部通過。
+- 使用獨立暫存資料庫與 Chrome 驗證：1440 像素寬以滑鼠拖曳表頭欄名到另一欄，該欄取代目標欄的位置，資料格跟著換位，伺服器讀回的順序一致；拖曳不會打開欄位選單，單純點選仍會打開；拖到名稱欄上方會排到第一個屬性欄，名稱欄維持最前；欄寬調整不受影響；重載後順序保留。390 像素寬、觸控模式下點欄名，選單出現「向左移動」「向右移動」，第一欄的「向左移動」停用，點選後順序改變並由伺服器讀回確認。
+- 以隔離的 Compose 專案執行 `docker compose up --build --wait` 通過，`/healthz` 回應 `ok`，`npm run test:app` 的 40 項容器檢查通過，結束後移除該專案的容器、volume 與映像。
+
 ## 1.1.12 發布前檢查（2026-11-25）
 
 - `VITEST_MAX_WORKERS=4 npm run check` 通過型別檢查、lint、44 檔共 334 項測試與正式建置。

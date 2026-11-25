@@ -54,6 +54,11 @@ function DatabaseContent({ meta }: { meta: LoadedDatabase }) {
   const onMore = useCallback(() => { void rows.fetchNextPage(); }, [rows.fetchNextPage]);
   const saveCell = (row: DatabaseRow, propertyId: string, value: CellValue, base: CellValue) => update.mutateAsync({ id: row.id, databaseId: meta.id,
     ...(propertyId === 'title' ? { title: { base: typeof base === 'string' ? base : '', value: typeof value === 'string' ? value : '' } } : { values: { [propertyId]: { base, value } } }) });
+  const moveProperty = (propertyId: string, index: number) => {
+    const from = meta.version;
+    // Unsaved sorts and filters stay savable: they were made on the structure as it was just before this change.
+    schema.mutate({ action: 'move', id: propertyId, index, version: from }, { onSuccess: next => setViewVersion(current => current === from ? next.version : current) });
+  };
   const data = rows.data?.pages.flatMap(page => page.rows) ?? [];
   const total = rows.data?.pages[0]?.total ?? 0;
   const createRow = async (title: string, values: Record<string, CellValue>) => {
@@ -96,7 +101,7 @@ function DatabaseContent({ meta }: { meta: LoadedDatabase }) {
     {(error || rows.error || schema.error || trash.error || update.error) && <Alert color="red" mb="sm">{error ?? errorText(rows.error ?? schema.error ?? trash.error ?? update.error)}<Group mt="xs"><Button size="compact-xs" variant="white" onClick={() => { schema.reset(); reload(); }}>重新載入資料</Button><Button size="compact-xs" variant="white" onClick={reset}>重設視圖</Button></Group></Alert>}
     <div role="tabpanel" id={`view-panel-${view?.id}`} aria-labelledby={`view-tab-${view?.id}`} key={view?.id}>
     {rows.isPending && !error ? <Center p="xl"><Loader size="sm" /></Center> : !error && (view?.type === 'list' ? <ListView {...collectionProps} /> : view?.type === 'board' ? <BoardView {...collectionProps} moving={update.isPending} onMove={(row, groupBy, choice) => update.mutate({ id: row.id, databaseId: meta.id, values: { [groupBy]: { base: row.values[groupBy] ?? null, value: choice } } })} /> : <DataGrid databaseId={meta.id} properties={meta.properties} rows={data} total={total} config={config} totals={rows.isPlaceholderData || rows.isError ? undefined : rows.data?.pages[0]?.totals}
-      onSave={saveCell} onReload={reload} onEditProperty={setProperty} onConfig={apply}
+      onSave={saveCell} onReload={reload} onEditProperty={setProperty} onConfig={apply} onMoveProperty={moveProperty} movingProperty={schema.isPending}
       onFilter={property => {
         setColumnFilter({ propertyId: property?.id ?? 'title', operator: property?.type === 'checkbox' ? 'equals' : 'is_not_empty', value: property?.type === 'checkbox' ? true : null });
         setRules('filter');

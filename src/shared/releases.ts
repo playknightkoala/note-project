@@ -5,6 +5,11 @@ import type { VersionInfo } from './version.ts';
  * own part as the update log, which therefore also works without a connection.
  */
 export const releases: VersionInfo['releases'] = [
+  { version: '1.1.13', title: '調整欄位順序', changes: [
+    '資料庫的欄位順序可以調整：電腦上用滑鼠拖曳表頭的欄名，放到另一欄上即取代它的位置。',
+    '手機上點欄名，在選單選「向左移動」或「向右移動」。電腦的欄位選單與右鍵選單也有這兩項。',
+    '順序屬於資料庫本身，所有視圖與資料列面板一致，離線時也能調整。名稱欄固定在最前面。',
+  ] },
   { version: '1.1.12', title: '幣別欄位與自動幣值換算', changes: [
     '新增「幣別」欄位型別：從常見幣別中勾選會用到的幾種，資料格以單選方式填寫。既有的單選欄可直接改為幣別，資料列不需重填。',
     '幣值換算可指定「要換算的金額欄位」與「依據的幣別欄位」，依每列的幣別自動換算成另一種幣別，不需逐格輸入。',

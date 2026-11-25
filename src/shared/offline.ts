@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { pageIdSchema } from './api.ts';
 import type { PageResponse, PageNode } from './api.ts';
-import { cellValueSchema, conversionIssue, isCalculated, isEmptyValue, propertyInputSchema, pruneViewConfig, viewInputSchema } from './database.ts';
+import { cellValueSchema, conversionIssue, isCalculated, isEmptyValue, moveProperty, propertyInputSchema, propertyMoveSchema, pruneViewConfig, viewInputSchema } from './database.ts';
 import type { DatabaseDto, DatabaseProperty, DatabaseRow } from './database.ts';
 import { reactionSchema } from './annotations.ts';
 import { myReactions } from './annotations.ts';
@@ -80,6 +80,7 @@ export const offlineOpSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('property.add'), ...schemaOp, propertyId: id, input: propertyInputSchema }),
   z.object({ type: z.literal('property.update'), ...schemaOp, propertyId: id, input: propertyInputSchema }),
   z.object({ type: z.literal('property.delete'), ...schemaOp, propertyId: id }),
+  z.object({ type: z.literal('property.move'), ...schemaOp, propertyId: id, index: propertyMoveSchema.shape.index }),
   z.object({ type: z.literal('view.add'), ...schemaOp, viewId: id, input: viewInputSchema }),
   z.object({ type: z.literal('view.update'), ...schemaOp, viewId: id, input: viewInputSchema }),
   z.object({ type: z.literal('view.delete'), ...schemaOp, viewId: id }),
@@ -114,6 +115,7 @@ export function describeOp(op: OfflineOp): string {
     case 'property.add': return `新增欄位「${op.input.name}」`;
     case 'property.update': return `修改欄位「${op.input.name}」`;
     case 'property.delete': return '刪除欄位';
+    case 'property.move': return '調整欄位順序';
     case 'view.add': return `新增視圖「${op.input.name}」`;
     case 'view.update': return `修改視圖「${op.input.name}」`;
     case 'view.delete': return '刪除視圖';
@@ -172,6 +174,10 @@ export function applyDatabaseOp(snapshot: DatabaseSnapshot, op: DatabaseOp, now:
         meta: { ...meta, properties: meta.properties.filter(property => property.id !== op.propertyId), views: prune(op.propertyId, { remove: true, clearGrouping: true }) },
         rows: rows.map(row => { if (!(op.propertyId in row.values)) return row; const values = { ...row.values }; delete values[op.propertyId]; return { ...row, values }; }),
       });
+    case 'property.move': {
+      const properties = moveProperty(meta.properties, op.propertyId, op.index);
+      return properties ? { rows, meta: { ...meta, properties } } : snapshot;
+    }
     case 'view.add':
       if (meta.views.some(view => view.id === op.viewId) || meta.views.length >= 20) return snapshot;
       return { rows, meta: { ...meta, views: [...meta.views, { id: op.viewId, name: op.input.name, type: op.input.type ?? 'table', config: op.input.config }] } };

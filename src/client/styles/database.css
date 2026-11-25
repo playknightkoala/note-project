@@ -9,6 +9,11 @@
 .database-grid-body { position: relative; min-width: max-content; }
 .database-grid-row { position: absolute; top: 0; left: 0; border-bottom: 1px solid var(--app-border); }
 .database-column { position: relative; height: 34px; min-width: 0; border-right: 1px solid var(--app-border); }
+.database-column[data-dragging] { opacity: .45; }
+.database-column[data-drop]::before { content: ''; position: absolute; top: 0; bottom: 0; width: 2px; background: var(--app-accent); z-index: 4; }
+.database-column[data-drop="before"]::before { left: -1px; }
+.database-column[data-drop="after"]::before { right: -1px; }
+.database-column-overlay { display: inline-block; max-width: 240px; padding: 6px 10px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; border: 1px solid var(--app-border); border-radius: 6px; background: var(--app-sidebar-bg); color: var(--app-fg); font-size: 14px; font-weight: 500; box-shadow: 0 4px 14px rgb(0 0 0 / .25); cursor: grabbing; }
 .database-column__button { max-width: 100%; height: 34px; padding: 4px 10px; font-weight: 500; }
 .database-column__button span { overflow: hidden; text-overflow: ellipsis; }
 .database-column__resize { position: absolute; right: -3px; top: 0; width: 6px; height: 34px; cursor: col-resize; touch-action: none; z-index: 3; }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { conversionIssue, convertCurrency, convertedAmount, currencyConversionSchema, evaluateRows, propertyIssue, pruneViewConfig, sumColumns, validateView, viewConfigSchema } from '../../src/shared/database.ts';
+import { moveProperty, moveTargetIndex, conversionIssue, convertCurrency, convertedAmount, currencyConversionSchema, evaluateRows, propertyIssue, pruneViewConfig, sumColumns, validateView, viewConfigSchema } from '../../src/shared/database.ts';
 import type { DatabaseProperty, DatabaseRow } from '../../src/shared/database.ts';
 
 const numeric: DatabaseProperty = { id: crypto.randomUUID(), name: '費用', position: 1, type: 'number', choices: [] };
@@ -32,6 +32,29 @@ describe('資料庫計算', () => {
     expect(validateView(config, [numeric])).toBeNull();
     expect(validateView(config, [{ ...numeric, currencyConversion: conversion }])).toBeTruthy();
     expect(pruneViewConfig(config, numeric.id, { remove: false, clearGrouping: false, sumOnly: true }).sumColumns).toEqual([]);
+  });
+
+  it('moves a column among the others, renumbers positions and maps a place among the visible columns', () => {
+    const [a, b, c, d] = ['A', 'B', 'C', 'D'].map((name, at): DatabaseProperty => ({ id: crypto.randomUUID(), name, position: (at + 1) * 1024, type: 'text', choices: [] }));
+    const all = [a!, b!, c!, d!];
+    const names = (list: DatabaseProperty[] | null) => list?.map(property => property.name).join('');
+    expect(names(moveProperty(all, d!.id, 0))).toBe('DABC');
+    expect(names(moveProperty(all, a!.id, 2))).toBe('BCAD');
+    expect(names(moveProperty(all, b!.id, 99))).toBe('ACDB');
+    expect(names(moveProperty(all, b!.id, 1))).toBe('ABCD');
+    expect(moveProperty(all, d!.id, 0)!.map(property => property.position)).toEqual([1024, 2048, 3072, 4096]);
+    expect(moveProperty(all, crypto.randomUUID(), 0)).toBeNull();
+    expect(all.map(property => property.name).join('')).toBe('ABCD');
+    // B is hidden: it stays right after A wherever the visible columns go.
+    const visible = [a!.id, c!.id, d!.id];
+    const place = (id: string, to: number) => names(moveProperty(all, id, moveTargetIndex(all, visible, id, to)));
+    expect(place(d!.id, 0)).toBe('DABC');
+    expect(place(d!.id, 1)).toBe('ABDC');
+    expect(place(a!.id, 1)).toBe('BCAD');
+    expect(place(a!.id, 2)).toBe('BCDA');
+    expect(place(c!.id, 1)).toBe('ABCD');
+    expect(place(c!.id, 9)).toBe('ABDC');
+    expect(moveTargetIndex(all, [c!.id], c!.id, 0)).toBe(2);
   });
 
   describe('a conversion that follows an amount column', () => {

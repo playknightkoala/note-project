@@ -124,6 +124,34 @@ it('shows two empty table inputs without creating records and creates only after
   expect(create).toHaveBeenCalledExactlyOnceWith('', { [property.id]: '先填屬性' });
 });
 
+it('moves a column left or right from its menu, past hidden columns, and offers neither where columns cannot be reordered', async () => {
+  const [a, hidden, b, c] = ['甲', '隱藏', '乙', '丙'].map((name, at): DatabaseProperty => ({ id: crypto.randomUUID(), name, type: 'text', choices: [], position: (at + 1) * 1024 }));
+  const all = [a!, hidden!, b!, c!];
+  const move = vi.fn();
+  const grid = (onMoveProperty?: typeof move) => <MantineProvider env="test"><MemoryRouter><DataGrid databaseId="synthetic" rows={[]} properties={all} total={0} config={{ sorts: [], filters: [], columns: [a!.id, b!.id, c!.id] }}
+    onSave={vi.fn()} onReload={vi.fn()} onEditProperty={vi.fn()} onConfig={vi.fn()} onFilter={vi.fn()} onTrash={vi.fn()} hasMore={false} loadingMore={false} onMore={vi.fn()} onCreate={vi.fn()} onAddProperty={vi.fn()} adding={false} onCloseAdd={vi.fn()}
+    {...(onMoveProperty ? { onMoveProperty } : {})} /></MemoryRouter></MantineProvider>;
+  const { rerender } = render(grid(move));
+  const item = async (column: string, name: string) => { fireEvent.click(screen.getByRole('button', { name: `欄位選單：${column}` })); return await screen.findByRole('menuitem', { name }); };
+  expect((await item('甲', '向左移動') as HTMLButtonElement).disabled).toBe(true);
+  // 甲 goes after 乙: third among the other columns, the hidden one still following nothing but its old neighbour's place.
+  fireEvent.click(screen.getByRole('menuitem', { name: '向右移動' }));
+  expect(move).toHaveBeenLastCalledWith(a!.id, 2);
+  expect((await item('丙', '向右移動') as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(screen.getByRole('menuitem', { name: '向左移動' }));
+  expect(move).toHaveBeenLastCalledWith(c!.id, 2);
+  expect(move).toHaveBeenCalledTimes(2);
+  expect(screen.queryByRole('menuitem', { name: '向左移動' })).toBeNull();
+  // The name column has no place to move to.
+  fireEvent.click(screen.getByRole('button', { name: '欄位選單：名稱' }));
+  await screen.findByRole('menuitem', { name: '依此欄遞增' });
+  expect(screen.queryByRole('menuitem', { name: '向右移動' })).toBeNull();
+  rerender(grid());
+  fireEvent.click(screen.getByRole('button', { name: '欄位選單：乙' }));
+  await screen.findByRole('menuitem', { name: '隱藏欄位' });
+  expect(screen.queryByRole('menuitem', { name: '向左移動' })).toBeNull();
+});
+
 it('creates from the bottom input on Enter and keeps a failed title for retry', async () => {
   const create = vi.fn().mockRejectedValueOnce(new Error('連線失敗')).mockResolvedValueOnce({});
   render(<MantineProvider env="test"><NewRowInput onCreate={create} /></MantineProvider>);

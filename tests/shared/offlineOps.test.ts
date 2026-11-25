@@ -68,6 +68,16 @@ describe('the local view of a database', () => {
     expect(apply([again], manual).meta.properties.at(-1)!.currencyConversion).toMatchObject({ sourceId: amountId });
   });
 
+  it('reorders columns, and leaves the order alone when the column is gone', () => {
+    const moved = apply([{ type: 'property.move', databaseId, baseVersion: 3, propertyId: textId, index: 0 }]);
+    expect(moved.meta.properties.map(property => [property.id, property.position])).toEqual([[textId, 1024], [statusId, 2048]]);
+    expect(moved.rows).toEqual(snapshot().rows);
+    expect(apply([{ type: 'property.move', databaseId, baseVersion: 3, propertyId: textId, index: 0 }], moved)).toEqual(moved);
+    const start = snapshot();
+    expect(apply([{ type: 'property.move', databaseId, baseVersion: 3, propertyId: uuid(), index: 0 }], start)).toBe(start);
+    expect(describeOp({ type: 'property.move', databaseId, baseVersion: 3, propertyId: textId, index: 0 })).toBe('調整欄位順序');
+  });
+
   it('adds, changes and removes views and columns, keeping the last view', () => {
     const added = uuid(), column = uuid();
     const view = apply([

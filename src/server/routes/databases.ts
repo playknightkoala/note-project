@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import type { Context } from 'hono';
 import type { AppEnv } from '../app.ts';
 import { requireAuth, requireCsrf } from '../auth/middleware.ts';
-import { propertyInputSchema, propertyPatchSchema, rowInputSchema, rowsQuerySchema, viewConfigSchema, viewInputSchema } from '../../shared/database.ts';
+import { propertyInputSchema, propertyMoveSchema, propertyPatchSchema, rowInputSchema, rowsQuerySchema, viewConfigSchema, viewInputSchema } from '../../shared/database.ts';
 import { AppError } from '../../shared/errors.ts';
 import { parseBody, parseValue } from './validate.ts';
 import { expectedVersion } from './pages.ts';
@@ -27,6 +27,10 @@ export function databaseRoutes(): Hono<AppEnv> {
   app.patch('/:id/properties/:pid', async c => {
     const { db, userId, now } = context(c); const input = await parseBody(c, propertyPatchSchema);
     return c.json(databases.updateProperty(db, userId, c.req.param('id'), c.req.param('pid'), input, expectedVersion(c), now));
+  });
+  app.post('/:id/properties/:pid/move', async c => {
+    const { db, userId, now } = context(c); const { index } = await parseBody(c, propertyMoveSchema);
+    return c.json(databases.moveProperty(db, userId, c.req.param('id'), c.req.param('pid'), index, expectedVersion(c), now));
   });
   app.delete('/:id/properties/:pid', c => {
     const { db, userId, now } = context(c);

@@ -120,6 +120,7 @@ type SchemaChange =
   | { action: 'add'; input: PropertyInput }
   | { action: 'update'; id: string; input: PropertyInput }
   | { action: 'delete'; id: string }
+  | { action: 'move'; id: string; index: number }
   | { action: 'addView'; input: ViewInput }
   | { action: 'deleteView'; id: string }
   | { action: 'view'; id: string; input: ViewInput };
@@ -139,6 +140,7 @@ export function useDatabaseSchema(databaseId: string) {
       if (change.action === 'add') return (await submitSchema(databaseId, { type: 'property.add', ...base, propertyId: newId(), input: change.input })).database;
       if (change.action === 'update') return (await submitSchema(databaseId, { type: 'property.update', ...base, propertyId: change.id, input: change.input })).database;
       if (change.action === 'delete') return (await submitSchema(databaseId, { type: 'property.delete', ...base, propertyId: change.id })).database;
+      if (change.action === 'move') return (await submitSchema(databaseId, { type: 'property.move', ...base, propertyId: change.id, index: change.index })).database;
       if (change.action === 'deleteView') return (await submitSchema(databaseId, { type: 'view.delete', ...base, viewId: change.id })).database;
       if (change.action === 'view') return (await submitSchema(databaseId, { type: 'view.update', ...base, viewId: change.id, input: change.input })).database;
       // A board needs a single-select column to group by. It is picked (or created) here, with ids known in

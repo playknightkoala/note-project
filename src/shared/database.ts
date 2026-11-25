@@ -45,6 +45,28 @@ export type PropertyInput = z.infer<typeof propertyInputSchema>;
 export const propertyPatchSchema = propertyInputSchema.partial().extend({ choices: choicesSchema.optional() });
 export type PropertyPatch = z.infer<typeof propertyPatchSchema>;
 export interface DatabaseProperty extends PropertyInput { id: string; position: number }
+export const propertyMoveSchema = z.object({ index: z.number().int().min(0).max(50) });
+/**
+ * The columns with `propertyId` at `index` among the others (past the end: last), positions renumbered; null when
+ * there is no such column. The order belongs to the database, so every view and the row panel follow it.
+ */
+export function moveProperty(properties: DatabaseProperty[], propertyId: string, index: number): DatabaseProperty[] | null {
+  const moved = properties.find(property => property.id === propertyId);
+  if (!moved) return null;
+  const order = properties.filter(property => property.id !== propertyId);
+  order.splice(Math.max(0, Math.min(order.length, index)), 0, moved);
+  return order.map((property, at) => ({ ...property, position: (at + 1) * 1024 }));
+}
+/**
+ * The `index` for `moveProperty` that puts a column at `place` among the visible ones of a view (in their order).
+ * Hidden columns stay next to the visible column they follow.
+ */
+export function moveTargetIndex(properties: DatabaseProperty[], visibleIds: string[], propertyId: string, place: number): number {
+  const others = properties.filter(property => property.id !== propertyId).map(property => property.id);
+  const shown = visibleIds.filter(id => id !== propertyId && others.includes(id));
+  if (!shown.length) return Math.max(0, properties.findIndex(property => property.id === propertyId));
+  return place < shown.length ? others.indexOf(shown[Math.max(0, place)]!) : others.indexOf(shown.at(-1)!) + 1;
+}
 export type CellValue = string | number | boolean | string[] | null;
 export interface DatabaseRow { id: string; databaseId: string; title: string; icon: string | null; version: number; values: Record<string, CellValue>; updatedAt: number }
 export const cellValueSchema = z.union([z.string().max(2000), z.number().finite(), z.boolean(), z.array(z.string()).max(100), z.null()]);

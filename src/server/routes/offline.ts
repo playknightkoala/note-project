@@ -49,6 +49,7 @@ function runOp(db: Db, { ownerId, moderator }: Target, actorId: string, op: Offl
     case 'property.add': databases.addProperty(db, ownerId, op.databaseId, op.input, version, now, op.propertyId); return;
     case 'property.update': databases.updateProperty(db, ownerId, op.databaseId, op.propertyId, op.input, version, now); return;
     case 'property.delete': databases.deleteProperty(db, ownerId, op.databaseId, op.propertyId, version, now); return;
+    case 'property.move': databases.moveProperty(db, ownerId, op.databaseId, op.propertyId, op.index, version, now); return;
     case 'view.add': databases.addView(db, ownerId, op.databaseId, op.input, version, now, op.viewId); return;
     case 'view.update': databases.updateView(db, ownerId, op.databaseId, op.viewId, op.input, version, now); return;
     case 'view.delete': databases.deleteView(db, ownerId, op.databaseId, op.viewId, version, now); return;

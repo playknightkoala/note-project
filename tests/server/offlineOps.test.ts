@@ -101,6 +101,33 @@ it('checks structure changes against the version they were made on and repeats t
   expect((await send({ type: 'view.delete', databaseId, viewId: before.views[0]!.id, baseVersion: current + 4 })).status).toBe(409);
 });
 
+it('reorders columns through the queue and the direct route, for the owner only', async () => {
+  const ids: string[] = [uuid(), uuid(), uuid()];
+  let version = (await meta()).version;
+  for (const [at, propertyId] of ids.entries()) version = (await ok({ type: 'property.add', databaseId, propertyId, baseVersion: version, input: { name: `欄${at}`, type: 'text', choices: [] } })).database!.version;
+  const order = async () => (await meta()).properties.map(property => ids.indexOf(property.id));
+  const moved = await ok({ type: 'property.move', databaseId, propertyId: ids[2]!, baseVersion: version, index: 0 });
+  expect(moved.database).toMatchObject({ version: version + 1 });
+  expect(moved.database!.properties.map(property => property.position)).toEqual([1024, 2048, 3072]);
+  expect(await order()).toEqual([2, 0, 1]);
+  // Made on the structure as it was before: a conflict, unless the user applies it anyway.
+  expect((await send({ type: 'property.move', databaseId, propertyId: ids[0]!, baseVersion: version, index: 9 })).status).toBe(409);
+  expect((await ok({ type: 'property.move', databaseId, propertyId: ids[0]!, baseVersion: version, index: 9 }, { force: true })).database!.version).toBe(version + 2);
+  expect(await order()).toEqual([2, 1, 0]);
+  // Moving a column to where it already is changes nothing, not even the version.
+  expect((await ok({ type: 'property.move', databaseId, propertyId: ids[0]!, baseVersion: version + 2, index: 2 })).database!.version).toBe(version + 2);
+  expect((await send({ type: 'property.move', databaseId, propertyId: uuid(), baseVersion: version + 2, index: 0 })).status).toBe(404);
+  const path = `/api/databases/${databaseId}/properties/${ids[1]!}/move`;
+  expect((await client.request('POST', path, { json: { index: 0 } })).status).toBe(428);
+  expect((await client.request('POST', path, { headers: { 'if-match': `"${version + 2}"` }, json: { index: -1 } })).status).toBe(400);
+  expect((await client.request('POST', path, { headers: { 'if-match': `"${version + 2}"` }, json: { index: 0 } })).status).toBe(200);
+  expect(await order()).toEqual([1, 2, 0]);
+  const other = await stranger();
+  expect((await other.request('POST', path, { headers: { 'if-match': `"${version + 3}"` }, json: { index: 2 } })).status).toBe(404);
+  expect((await send({ type: 'property.move', databaseId, propertyId: ids[1]!, baseVersion: version + 3, index: 2 }, { who: other })).status).toBe(404);
+  expect(await order()).toEqual([1, 2, 0]);
+});
+
 it('keeps discussions written offline: repeatable, appended in order, without version conflicts', async () => {
   const pageId = (await (await client.request('POST', '/api/pages', { json: { title: '筆記' } })).json() as PageResponse).page.id;
   const annotationId = uuid(), messageId = uuid(), written = t.clock.now - 60_000;
