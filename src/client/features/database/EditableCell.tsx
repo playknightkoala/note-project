@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Alert, Button, Group, Popover, Stack } from '@mantine/core';
-import type { CellValue, DatabaseProperty } from '@shared/database';
+import type { CellValue, ConvertedAmount, DatabaseProperty } from '@shared/database';
 import { valueSchema } from '@shared/database';
 import { errorText, isApiError } from '../../api/client.ts';
 import { CurrencyValueInput } from './CurrencyValueInput.tsx';
@@ -13,19 +13,21 @@ export interface EditableCellProps {
   /** `base` is the value the cell showed when this edit began, so a change made elsewhere meanwhile is noticed for this cell only. */
   onSave: (value: CellValue, base: CellValue) => Promise<unknown>; onReload: () => void;
   tabIndex?: number; rowIndex?: number; columnIndex?: number; onFocus?: () => void; emptyLabel?: string;
+  /** Given for a calculated conversion column: what the row's amount converts to. Such a cell is shown, never edited. */
+  converted?: ConvertedAmount | null | undefined;
 }
 export function EditableCell(props: EditableCellProps) {
   const { canEditRows } = useDatabaseAccess();
-  if (!canEditRows) return <StaticCell {...props} />;
+  if (!canEditRows || props.converted !== undefined) return <StaticCell {...props} />;
   if (props.property?.currencyConversion) return <PopoverCell {...props} />;
   if (!props.property || ['text', 'number', 'url'].includes(props.property.type)) return <InlineCell {...props} />;
   if (props.property.type === 'checkbox') return <CheckboxCell {...props} />;
   return <PopoverCell {...props} />;
 }
 /** The value only: for a reader who may not change rows. Keeps its place in the grid's keyboard navigation. */
-function StaticCell({ property, value, label, tabIndex = 0, rowIndex, columnIndex, onFocus, emptyLabel }: EditableCellProps) {
+function StaticCell({ property, value, label, tabIndex = 0, rowIndex, columnIndex, onFocus, emptyLabel, converted }: EditableCellProps) {
   return <button type="button" role={rowIndex === undefined ? undefined : 'gridcell'} tabIndex={tabIndex} className="database-cell database-cell--static" aria-label={label} aria-readonly
-    data-row={rowIndex} data-col={columnIndex} onFocus={onFocus}>{emptyLabel !== undefined && (value === null || value === '') ? emptyLabel : <CellDisplay property={property} value={value} />}</button>;
+    data-row={rowIndex} data-col={columnIndex} onFocus={onFocus}>{emptyLabel !== undefined && (value === null || value === '') ? emptyLabel : <CellDisplay property={property} value={value} converted={converted} />}</button>;
 }
 function CheckboxCell({ value, label, onSave, onReload, tabIndex = 0, rowIndex, columnIndex, onFocus }: EditableCellProps) {
   const [pending, setPending] = useState(false);

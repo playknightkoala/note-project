@@ -46,6 +46,28 @@ describe('the local view of a database', () => {
     expect(apply([{ type: 'row.update', databaseId, rowId, values: { [statusId]: { base: doneId, value: null } } }], deleted).rows[0]!.values).toEqual({ [textId]: '原文' });
   });
 
+  it('leaves out column changes that would strand a currency conversion, and manual amounts hidden by a calculated one', () => {
+    const amountId = uuid(), currencyId = uuid(), convertedId = uuid(), twd = uuid();
+    const start = apply([
+      { type: 'property.add', databaseId, baseVersion: 3, propertyId: amountId, input: { name: '金額', type: 'number', choices: [] } },
+      { type: 'property.add', databaseId, baseVersion: 3, propertyId: currencyId, input: { name: '幣別', type: 'select', currencyChoices: true, choices: [{ id: twd, label: 'TWD', color: 'green' }] } },
+      { type: 'property.add', databaseId, baseVersion: 3, propertyId: convertedId, input: { name: '換算', type: 'number', choices: [], currencyConversion: { from: 'TWD', to: 'JPY', rate: 5, sourceId: amountId, currencyId } } },
+    ]);
+    expect(start.meta.properties.map(property => property.name)).toEqual(['狀態', '摘要', '金額', '幣別', '換算']);
+    // The amount and currency columns stay as they are while the conversion uses them.
+    expect(apply([{ type: 'property.delete', databaseId, baseVersion: 3, propertyId: amountId }], start)).toBe(start);
+    expect(apply([{ type: 'property.update', databaseId, baseVersion: 3, propertyId: currencyId, input: { name: '幣別', type: 'select', currencyChoices: false, choices: [{ id: twd, label: 'TWD', color: 'green' }] } }], start)).toBe(start);
+    expect(apply([{ type: 'property.add', databaseId, baseVersion: 3, propertyId: uuid(), input: { name: '壞', type: 'number', choices: [], currencyConversion: { from: 'TWD', to: 'JPY', rate: 5, sourceId: textId } } }], start)).toBe(start);
+    // Once the conversion no longer refers to them, they can go.
+    const manual = apply([{ type: 'property.update', databaseId, baseVersion: 3, propertyId: convertedId, input: { name: '換算', type: 'number', choices: [], currencyConversion: { from: 'TWD', to: 'JPY', rate: 5 } } }], start);
+    expect(apply([{ type: 'property.delete', databaseId, baseVersion: 3, propertyId: amountId }], manual).meta.properties.map(property => property.name)).toEqual(['狀態', '摘要', '幣別', '換算']);
+    // A column with amounts typed into it is not turned into a calculated one.
+    const typed = apply([{ type: 'row.update', databaseId, rowId, values: { [convertedId]: { base: null, value: 12 } } }], manual);
+    const again: DatabaseOp = { type: 'property.update', databaseId, baseVersion: 3, propertyId: convertedId, input: { name: '換算', type: 'number', choices: [], currencyConversion: { from: 'TWD', to: 'JPY', rate: 5, sourceId: amountId } } };
+    expect(apply([again], typed)).toBe(typed);
+    expect(apply([again], manual).meta.properties.at(-1)!.currencyConversion).toMatchObject({ sourceId: amountId });
+  });
+
   it('adds, changes and removes views and columns, keeping the last view', () => {
     const added = uuid(), column = uuid();
     const view = apply([

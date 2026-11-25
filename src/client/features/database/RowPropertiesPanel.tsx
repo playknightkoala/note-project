@@ -2,6 +2,7 @@ import { Alert, Anchor, Button, Loader, Stack, Text } from '@mantine/core';
 import { Link } from 'react-router';
 import { useDatabase, useDatabaseRow, useDatabaseSync, useUpdateRow } from '../../api/databases.ts';
 import { errorText } from '../../api/client.ts';
+import { convertedAmount } from '@shared/database';
 import { EditableCell } from './EditableCell.tsx';
 import { useDatabaseAccess } from './access.ts';
 
@@ -21,7 +22,7 @@ export function RowPropertiesPanel({ rowId, databaseId, peek = false }: { rowId:
       {meta.data.properties.length === 0 && <Text size="sm" c="dimmed">{access.canManage ? '尚未設定屬性，可回資料庫新增欄位。' : '這個資料庫尚未設定屬性。'}</Text>}
       {meta.data.properties.map(property => <div className="row-property" key={property.id}>
         <Text size="sm" c="dimmed" className="row-property__name">{property.name}</Text>
-        <EditableCell property={property} value={row.data.values[property.id] ?? null} label={`屬性：${property.name}`} onReload={reload}
+        <EditableCell property={property} value={row.data.values[property.id] ?? null} converted={convertedAmount(row.data.values, property, meta.data.properties)} label={`屬性：${property.name}`} onReload={reload}
           onSave={(value, base) => update.mutateAsync({ id: rowId, databaseId, values: { [property.id]: { base, value } } })} />
       </div>)}
     </>}

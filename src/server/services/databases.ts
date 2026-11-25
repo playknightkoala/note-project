@@ -1,6 +1,6 @@
 import type { Db } from '../db/driver.ts';
 import type { DatabaseDto, DatabaseProperty, DatabaseRow, PropertyInput, PropertyPatch, RowInput, CellValue, ViewConfig, ViewInput, RowsDto, ViewType } from '../../shared/database.ts';
-import { evaluateRows, propertyInputSchema, pruneViewConfig, sameValue, sumColumns, validateView, valueSchema, viewConfigSchema } from '../../shared/database.ts';
+import { conversionIssue, evaluateRows, isCalculated, propertyInputSchema, propertyIssue, pruneViewConfig, sameValue, sumColumns, validateView, valueSchema, viewConfigSchema } from '../../shared/database.ts';
 import { emptyParagraph } from '../../shared/blocks.ts';
 import { AppError } from '../../shared/errors.ts';
 import { loadPage } from './pages.ts';
@@ -33,12 +33,19 @@ function bumpSchema(db: Db, userId: string, id: string, now: number): DatabaseDt
   return getDatabase(db, userId, id);
 }
 function propertyOptions(input: PropertyInput): string {
-  return JSON.stringify({ choices: input.choices, ...(input.type === 'number' && input.groupThousands ? { groupThousands: true } : {}), ...(input.currencyConversion ? { currencyConversion: input.currencyConversion } : {}) });
+  return JSON.stringify({ choices: input.choices, ...(input.type === 'number' && input.groupThousands ? { groupThousands: true } : {}),
+    ...(input.currencyChoices ? { currencyChoices: true } : {}), ...(input.currencyConversion ? { currencyConversion: input.currencyConversion } : {}) });
 }
 function checkProperty(input: PropertyInput): void {
-  if (input.currencyConversion && input.type !== 'number') throw new AppError('bad_request', '幣值換算須使用數字欄位。');
-  if (!['select', 'multi_select'].includes(input.type) && input.choices.length) throw new AppError('bad_request', '只有單選與多選欄位能設定選項。');
-  if (new Set(input.choices.map(choice => choice.label.toLowerCase())).size !== input.choices.length) throw new AppError('bad_request', '選項名稱不可重複。');
+  const issue = propertyIssue(input);
+  if (issue) throw new AppError('bad_request', issue);
+}
+/** `changedId` is the column being added or changed; a problem with any other column means that one still depends on it. */
+function checkConversions(all: DatabaseProperty[], changedId: string | null): void {
+  const issue = conversionIssue(all);
+  if (!issue) return;
+  if (issue.property.id === changedId) throw new AppError('bad_request', issue.message);
+  throw new AppError('conflict', `「${issue.property.name}」的幣值換算正在使用這個欄位，請先調整該欄位的設定。`);
 }
 /** An id chosen by the client (`propertyId`, `viewId`, `rowId` below) makes the request repeatable: the second time nothing is added. */
 function alreadyThere(db: Db, table: 'db_properties' | 'db_views', id: string | undefined, databaseId: string): boolean {
@@ -55,8 +62,10 @@ export function addProperty(db: Db, userId: string, id: string, input: PropertyI
     checkProperty(input);
     const current = properties(db, userId, id);
     if (current.length >= 50) throw new AppError('conflict', '每個資料庫最多 50 個屬性。');
+    const added: DatabaseProperty = { ...input, id: propertyId ?? crypto.randomUUID(), position: (current.at(-1)?.position ?? 0) + 1024 };
+    checkConversions([...current, added], added.id);
     db.run('INSERT INTO db_properties (id, database_id, name, type, options, position, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      propertyId ?? crypto.randomUUID(), id, input.name, input.type, propertyOptions(input), (current.at(-1)?.position ?? 0) + 1024, now);
+      added.id, id, input.name, input.type, propertyOptions(input), added.position, now);
     return bumpSchema(db, userId, id, now);
   });
 }
@@ -68,14 +77,17 @@ function pruneViews(db: Db, userId: string, id: string, propertyId: string, opti
 export function updateProperty(db: Db, userId: string, id: string, propertyId: string, patch: PropertyPatch, version: number | null, now: number): DatabaseDto {
   return db.transaction(() => {
     assertVersion(database(db, userId, id).schema_version, version);
-    const current = properties(db, userId, id).find(property => property.id === propertyId);
+    const all = properties(db, userId, id);
+    const current = all.find(property => property.id === propertyId);
     if (!current) throw new AppError('not_found');
     const input = parseValue({ ...current, ...patch }, propertyInputSchema);
     checkProperty(input);
+    checkConversions(all.map(property => property.id === propertyId ? { ...current, ...input } : property), propertyId);
     const values = db.all<{ value_json: string }>(`SELECT v.value_json FROM row_values v JOIN pages p ON p.id = v.page_id WHERE v.property_id = ? AND p.database_id = ? AND p.user_id = ?`, propertyId, id, userId);
     if (input.type !== current.type && values.length) throw new AppError('conflict', '此欄位已有資料，請先清空後再變更型別。');
     if (current.currencyConversion && input.currencyConversion && current.currencyConversion.from !== input.currencyConversion.from && values.length)
       throw new AppError('conflict', '這個欄位已有金額，請先清空後再更換基準幣別。');
+    if (isCalculated({ ...current, ...input }) && values.length) throw new AppError('conflict', '這個欄位已有手動輸入的金額，請先清空後再改為自動換算。');
     const candidate: DatabaseProperty = { ...current, ...input };
     if (input.type === current.type && values.some(value => !valueSchema(candidate).safeParse(JSON.parse(value.value_json)).success)) throw new AppError('conflict', '選項仍有資料列使用，請先更新資料列後再移除。');
     if (input.type !== current.type) pruneViews(db, userId, id, propertyId, { remove: false, clearGrouping: input.type !== 'select' });
@@ -88,7 +100,9 @@ export function updateProperty(db: Db, userId: string, id: string, propertyId: s
 export function deleteProperty(db: Db, userId: string, id: string, propertyId: string, version: number | null, now: number): DatabaseDto {
   return db.transaction(() => {
     assertVersion(database(db, userId, id).schema_version, version);
-    if (!properties(db, userId, id).some(p => p.id === propertyId)) throw new AppError('not_found');
+    const all = properties(db, userId, id);
+    if (!all.some(p => p.id === propertyId)) throw new AppError('not_found');
+    checkConversions(all.filter(p => p.id !== propertyId), null);
     pruneViews(db, userId, id, propertyId, { remove: true, clearGrouping: true });
     db.run('DELETE FROM db_properties WHERE id = ? AND database_id = ?', propertyId, id);
     return bumpSchema(db, userId, id, now);
@@ -174,6 +188,7 @@ function writeValues(db: Db, userId: string, page: DatabasePage, values: Record<
     const property = available.find(property => property.id === id);
     if (!property) throw new AppError('not_found', '找不到屬性。');
     const value = parseValue(raw, valueSchema(property));
+    if (isCalculated(property) && value !== null) throw new AppError('bad_request', `「${property.name}」由其他欄位自動換算，無法直接輸入。`);
     if (value === null || value === '' || (Array.isArray(value) && value.length === 0)) {
       db.run('DELETE FROM row_values WHERE page_id = ? AND property_id = ?', page.id, id);
     } else {

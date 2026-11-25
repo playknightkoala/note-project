@@ -5,6 +5,13 @@ import type { VersionInfo } from './version.ts';
  * own part as the update log, which therefore also works without a connection.
  */
 export const releases: VersionInfo['releases'] = [
+  { version: '1.1.12', title: '幣別欄位與自動幣值換算', changes: [
+    '新增「幣別」欄位型別：從常見幣別中勾選會用到的幾種，資料格以單選方式填寫。既有的單選欄可直接改為幣別，資料列不需重填。',
+    '幣值換算可指定「要換算的金額欄位」與「依據的幣別欄位」，依每列的幣別自動換算成另一種幣別，不需逐格輸入。',
+    '幣值換算的幣別由新台幣與日圓擴充為 18 種常見幣別。',
+    '被幣值換算使用的金額欄位與幣別欄位，須先取消指定才能刪除或改為其他型別。',
+    '修正：透過 API 只修改欄位的部分設定（例如名稱）時，不再清空單選欄位的選項。',
+  ] },
   { version: '1.1.11', title: '幣值換算與欄位加總', changes: [
     '原本的費用試算改為「幣值換算」欄位與「欄位加總」功能。',
     '幣值換算支援新台幣與日圓。選定兩種幣別後，填寫任一方向的匯率即可帶出另一方向。資料格也可從任一幣別輸入金額。',

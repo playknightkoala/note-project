@@ -7,7 +7,7 @@ import { Anchor, Breadcrumbs, Button, Center, Group, Loader, Stack, Text, useCom
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Database, FileText, Kanban, List, Table2 } from 'lucide-react';
 import { Link, Navigate, useParams } from 'react-router';
-import { evaluateRows, sumColumns } from '@shared/database';
+import { convertedAmount, evaluateRows, sumColumns } from '@shared/database';
 import type { ViewConfig } from '@shared/database';
 import { publicLinkPath } from '@shared/shares';
 import type { AccountLinkDto, PublicNode, PublicPageDto, PublicShareDto } from '@shared/shares';
@@ -117,7 +117,7 @@ function PublicDocument({ data }: { data: PublicPageDto }) {
   return <>
     {data.row && <Stack gap="xs" className="row-properties">{data.row.properties.map(property => <div className="row-property" key={property.id}>
       <Text size="sm" c="dimmed" className="row-property__name">{property.name}</Text>
-      <div className="database-cell database-cell--static"><CellDisplay property={property} value={data.row!.values[property.id] ?? null} /></div>
+      <div className="database-cell database-cell--static"><CellDisplay property={property} value={data.row!.values[property.id] ?? null} converted={convertedAmount(data.row!.values, property, data.row!.properties)} /></div>
     </div>)}</Stack>}
     <ErrorBoundary key={`${shown.id}:${shown.updatedAt}`} fallback={<Text c="dimmed" role="alert">這個頁面的內容無法顯示。</Text>}>
       <PublicBlocks content={shown.content} fullWidth={shown.fullWidth} />

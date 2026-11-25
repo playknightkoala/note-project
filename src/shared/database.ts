@@ -8,13 +8,26 @@ export const propertyLabels: Record<PropertyType, string> = { text: '文字', nu
 export const choiceSchema = z.object({ id: z.string().uuid(), label: z.string().trim().min(1).max(80), color: z.enum(CHOICE_COLORS).default('gray') });
 export type PropertyChoice = z.infer<typeof choiceSchema>;
 const choicesSchema = z.array(choiceSchema).max(100).refine(choices => new Set(choices.map(c => c.id)).size === choices.length, '選項 ID 不可重複。');
-export const CURRENCIES = ['TWD', 'JPY'] as const;
+/** Common currencies, offered both as the options of a currency column and as the two sides of a conversion. */
+export const CURRENCIES = ['TWD', 'JPY', 'USD', 'EUR', 'CNY', 'HKD', 'KRW', 'GBP', 'AUD', 'CAD', 'SGD', 'THB', 'MYR', 'VND', 'PHP', 'IDR', 'CHF', 'NZD'] as const;
 export const currencySchema = z.enum(CURRENCIES);
-export const currencyLabels = { TWD: '新台幣（TWD）', JPY: '日圓（JPY）' } as const;
+export type Currency = z.infer<typeof currencySchema>;
+export const currencyLabels: Record<Currency, string> = {
+  TWD: '新台幣（TWD）', JPY: '日圓（JPY）', USD: '美元（USD）', EUR: '歐元（EUR）', CNY: '人民幣（CNY）', HKD: '港幣（HKD）',
+  KRW: '韓元（KRW）', GBP: '英鎊（GBP）', AUD: '澳幣（AUD）', CAD: '加幣（CAD）', SGD: '新加坡幣（SGD）', THB: '泰銖（THB）',
+  MYR: '馬來西亞令吉（MYR）', VND: '越南盾（VND）', PHP: '菲律賓披索（PHP）', IDR: '印尼盾（IDR）', CHF: '瑞士法郎（CHF）', NZD: '紐西蘭幣（NZD）',
+};
+/**
+ * `rate` is how much of `to` one unit of `from` buys. Without `sourceId` each cell holds its own amount in `from`.
+ * With it the column is calculated from that amount column instead, and `currencyId` names the currency column that
+ * says, row by row, which of the two currencies the amount is in; without one every amount counts as `from`.
+ */
 export const currencyConversionSchema = z.object({
   from: currencySchema, to: currencySchema,
   rate: z.number().positive().finite().refine(rate => Number.isFinite(1 / rate)),
-}).refine(({ from, to }) => from !== to, '請選擇兩種不同的幣別。');
+  sourceId: z.string().uuid().optional(), currencyId: z.string().uuid().optional(),
+}).refine(({ from, to }) => from !== to, '請選擇兩種不同的幣別。')
+  .refine(({ sourceId, currencyId }) => !currencyId || !!sourceId, '指定幣別欄位前請先選擇金額欄位。');
 export type CurrencyConversion = z.infer<typeof currencyConversionSchema>;
 
 export function convertCurrency(amount: number, rate: number): number | null {
@@ -22,9 +35,14 @@ export function convertCurrency(amount: number, rate: number): number | null {
   return Number.isFinite(converted) ? converted : null;
 }
 
-export const propertyInputSchema = z.object({ name: z.string().trim().min(1).max(80), type: propertyTypeSchema, groupThousands: z.boolean().optional(), currencyConversion: currencyConversionSchema.nullable().optional(), choices: choicesSchema.default([]) });
+export const propertyInputSchema = z.object({
+  name: z.string().trim().min(1).max(80), type: propertyTypeSchema, groupThousands: z.boolean().optional(),
+  /** A single-select column whose choices are currency codes. */
+  currencyChoices: z.boolean().optional(), currencyConversion: currencyConversionSchema.nullable().optional(), choices: choicesSchema.default([]),
+});
 export type PropertyInput = z.infer<typeof propertyInputSchema>;
-export const propertyPatchSchema = propertyInputSchema.partial();
+/** Only what a request names is changed: `choices` has no default here, or renaming a column would also empty its choices. */
+export const propertyPatchSchema = propertyInputSchema.partial().extend({ choices: choicesSchema.optional() });
 export type PropertyPatch = z.infer<typeof propertyPatchSchema>;
 export interface DatabaseProperty extends PropertyInput { id: string; position: number }
 export type CellValue = string | number | boolean | string[] | null;
@@ -127,7 +145,10 @@ const blank = (value: CellValue | undefined) => empty(value) || value === false;
 export const sameValue = (a: CellValue | undefined, b: CellValue | undefined): boolean => blank(a) ? blank(b) : !blank(b) && JSON.stringify(a) === JSON.stringify(b);
 function valueOf(row: DatabaseRow, id: string, properties: DatabaseProperty[]): CellValue {
   if (id === 'title') return row.title;
-  return row.values[id] ?? (properties.find(p => p.id === id)?.type === 'checkbox' ? false : null);
+  const property = properties.find(p => p.id === id);
+  const converted = convertedAmount(row.values, property, properties);
+  if (converted !== undefined) return converted?.amount ?? null;
+  return row.values[id] ?? (property?.type === 'checkbox' ? false : null);
 }
 function compare(a: CellValue, b: CellValue): number {
   if (typeof a === 'number' && typeof b === 'number') return a - b;
@@ -169,6 +190,58 @@ export function evaluateRows(rows: DatabaseRow[], properties: DatabaseProperty[]
     }
     return 0;
   });
+}
+
+/** A conversion column that follows an amount column: its cells are calculated and hold nothing of their own. */
+export const isCalculated = (property: DatabaseProperty | null | undefined): boolean => !!property?.currencyConversion?.sourceId;
+export interface ConvertedAmount { amount: number; currency: Currency; sourceAmount: number; sourceCurrency: Currency }
+/**
+ * What a calculated conversion column shows for a row: `undefined` when the column is not calculated (its cells hold
+ * their own amounts), `null` when there is nothing to show (no amount, or a currency that is neither side of the rate).
+ */
+export function convertedAmount(values: Record<string, CellValue>, property: DatabaseProperty | null | undefined, properties: DatabaseProperty[]): ConvertedAmount | null | undefined {
+  const conversion = property?.currencyConversion;
+  if (!conversion?.sourceId) return undefined;
+  const sourceAmount = values[conversion.sourceId];
+  if (typeof sourceAmount !== 'number') return null;
+  let reverse = false;
+  if (conversion.currencyId) {
+    const code = properties.find(p => p.id === conversion.currencyId)?.choices.find(choice => choice.id === values[conversion.currencyId!])?.label;
+    if (code === conversion.to) reverse = true;
+    else if (code !== conversion.from) return null;
+  }
+  const amount = convertCurrency(sourceAmount, reverse ? 1 / conversion.rate : conversion.rate);
+  if (amount === null) return null;
+  return reverse ? { amount, currency: conversion.from, sourceAmount, sourceCurrency: conversion.to }
+    : { amount, currency: conversion.to, sourceAmount, sourceCurrency: conversion.from };
+}
+
+/** What is wrong with a column's own settings, apart from the other columns it refers to. */
+export function propertyIssue(input: PropertyInput): string | null {
+  if (input.currencyConversion && input.type !== 'number') return '幣值換算須使用數字欄位。';
+  if (!['select', 'multi_select'].includes(input.type) && input.choices.length) return '只有單選與多選欄位能設定選項。';
+  if (new Set(input.choices.map(choice => choice.label.toLowerCase())).size !== input.choices.length) return '選項名稱不可重複。';
+  if (input.currencyChoices) {
+    if (input.type !== 'select') return '幣別須使用單選欄位。';
+    if (!input.choices.length) return '請至少選擇一種幣別。';
+    if (input.choices.some(choice => !currencySchema.safeParse(choice.label).success)) return '幣別欄位的選項必須是支援的幣別代碼。';
+  }
+  return null;
+}
+
+/**
+ * The first conversion column whose amount or currency column is missing or of the wrong kind. Checked for the whole
+ * database after every change to its columns, so a column in use by a conversion cannot be removed or repurposed.
+ */
+export function conversionIssue(properties: DatabaseProperty[]): { property: DatabaseProperty; message: string } | null {
+  for (const property of properties) {
+    const conversion = property.currencyConversion;
+    if (!conversion) continue;
+    const source = properties.find(p => p.id === conversion.sourceId);
+    if (conversion.sourceId && (source?.type !== 'number' || source.currencyConversion)) return { property, message: '換算的金額欄位必須是此資料庫的數字或金額欄位。' };
+    if (conversion.currencyId && !properties.find(p => p.id === conversion.currencyId)?.currencyChoices) return { property, message: '換算依據的幣別欄位必須是此資料庫的幣別欄位。' };
+  }
+  return null;
 }
 
 export function canSumColumn(property: DatabaseProperty | undefined): boolean {

@@ -3,7 +3,7 @@ import { DateInput } from '@mantine/dates';
 import 'dayjs/locale/zh-tw';
 import { convertCurrency } from '@shared/database';
 import { currencyAmountFormat } from './CurrencyValueInput.tsx';
-import type { CellValue, DatabaseProperty, PropertyChoice } from '@shared/database';
+import type { CellValue, ConvertedAmount, DatabaseProperty, PropertyChoice } from '@shared/database';
 
 const amountFormat = new Intl.NumberFormat('zh-TW', { useGrouping: true, maximumSignificantDigits: 21 });
 
@@ -24,7 +24,13 @@ export function CellValueInput({ property, value, onChange, label, autoFocus = f
   if (property.type === 'multi_select') return <MultiSelect {...common} data={options} value={Array.isArray(value) ? value : []} onChange={onChange} searchable clearable renderOption={renderOption} nothingFoundMessage="沒有選項，請先編輯欄位選項。" comboboxProps={{ withinPortal: false }} />;
   return <Select {...common} data={options} value={typeof value === 'string' ? value : null} onChange={onChange} searchable clearable renderOption={renderOption} nothingFoundMessage="沒有選項，請先編輯欄位選項。" comboboxProps={{ withinPortal: false }} />;
 }
-export function CellDisplay({ property, value }: { property: DatabaseProperty | null; value: CellValue }) {
+/** `converted` is given for a calculated conversion column (see `convertedAmount`); the cell's own value is then not shown. */
+export function CellDisplay({ property, value, converted }: { property: DatabaseProperty | null; value: CellValue; converted?: ConvertedAmount | null | undefined }) {
+  if (converted !== undefined) {
+    if (!converted) return <span className="cell-empty">—</span>;
+    const text = `${converted.currency} ${currencyAmountFormat.format(converted.amount)}`;
+    return <span title={`${converted.sourceCurrency} ${currencyAmountFormat.format(converted.sourceAmount)} → ${text}`}>{text}</span>;
+  }
   if (property?.type === 'checkbox') return <span aria-label={value === true ? '已勾選' : '未勾選'}>{value === true ? '☑' : '☐'}</span>;
   if (property?.type === 'select' || property?.type === 'multi_select') {
     const ids = Array.isArray(value) ? value : value ? [value] : [];

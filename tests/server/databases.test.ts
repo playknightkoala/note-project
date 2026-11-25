@@ -69,6 +69,94 @@ describe('database API', () => {
     expect((await rows()).rows).toEqual([original]);
   });
 
+  it('turns a populated single select into a currency column and calculates a conversion from an amount column', async () => {
+    const twd = { id: crypto.randomUUID(), label: 'TWD', color: 'green' }, jpy = { id: crypto.randomUUID(), label: 'jpy', color: 'yellow' };
+    const other = { id: crypto.randomUUID(), label: '現金', color: 'gray' };
+    const amount = await property('number');
+    const currency = await property('select', [twd, jpy, other]);
+    const ticket = await row('機票', { [amount.id]: 37180, [currency.id]: twd.id });
+    const gear = await row('雪具', { [amount.id]: 15900, [currency.id]: jpy.id });
+    const patch = async (id: string, json: unknown) => {
+      const res = await c.request('PATCH', `/api/databases/${meta.id}/properties/${id}`, { headers: match(meta.version), json });
+      if (res.status === 200) meta = await res.json() as DatabaseDto;
+      return res;
+    };
+    const add = async (json: unknown) => {
+      const res = await c.request('POST', `/api/databases/${meta.id}/properties`, { headers: match(meta.version), json });
+      if (res.status === 201) meta = await res.json() as DatabaseDto;
+      return res;
+    };
+    // Choices must be currency codes; the rows keep the choices they already point to.
+    expect((await patch(currency.id, { currencyChoices: true })).status).toBe(400);
+    expect((await patch(currency.id, { currencyChoices: true, choices: [] })).status).toBe(400);
+    expect((await patch(currency.id, { currencyChoices: true, choices: [twd] })).status).toBe(409);
+    expect((await patch(currency.id, { currencyChoices: true, choices: [twd, { ...jpy, label: 'JPY' }] })).status).toBe(200);
+    expect(meta.properties[1]).toMatchObject({ type: 'select', currencyChoices: true, choices: [{ id: twd.id, label: 'TWD' }, { id: jpy.id, label: 'JPY' }] });
+    expect((await rows()).rows.map(item => item.values[currency.id])).toEqual([twd.id, jpy.id]);
+    expect((await add({ name: '壞幣別', type: 'multi_select', currencyChoices: true, choices: [{ ...twd, id: crypto.randomUUID() }] })).status).toBe(400);
+
+    // The conversion must point at a numeric column and a currency column of this database.
+    const conversion = { from: 'JPY', to: 'TWD', rate: 0.2 };
+    expect((await add({ name: '換算', type: 'number', currencyConversion: { ...conversion, sourceId: currency.id } })).status).toBe(400);
+    expect((await add({ name: '換算', type: 'number', currencyConversion: { ...conversion, sourceId: crypto.randomUUID() } })).status).toBe(400);
+    expect((await add({ name: '換算', type: 'number', currencyConversion: { ...conversion, sourceId: amount.id, currencyId: amount.id } })).status).toBe(400);
+    expect((await add({ name: '換算', type: 'number', currencyConversion: { ...conversion, currencyId: currency.id } })).status).toBe(400);
+    expect((await add({ name: '換算', type: 'number', currencyConversion: { ...conversion, sourceId: amount.id, currencyId: currency.id } })).status).toBe(201);
+    const converted = meta.properties.at(-1)!;
+    expect(converted.currencyConversion).toEqual({ ...conversion, sourceId: amount.id, currencyId: currency.id });
+    expect((await add({ name: '連鎖', type: 'number', currencyConversion: { ...conversion, sourceId: converted.id } })).status).toBe(400);
+
+    // Rows hold nothing in the calculated column; it sorts and filters by the converted amount (3,180 TWD and 185,900 JPY).
+    expect((await c.request('PATCH', `/api/rows/${gear.id}/values`, { headers: match(gear.version), json: { values: { [converted.id]: 1 } } })).status).toBe(400);
+    expect((await c.request('PATCH', `/api/rows/${gear.id}/values`, { headers: match(gear.version), json: { values: { [converted.id]: null } } })).status).toBe(200);
+    expect((await rows([{ propertyId: converted.id, direction: 'asc' }])).rows.map(item => item.id)).toEqual([gear.id, ticket.id]);
+    expect((await rows([], [{ propertyId: converted.id, operator: 'gt', value: 5000 }])).rows.map(item => item.id)).toEqual([ticket.id]);
+
+    // While the conversion uses them, the amount and currency columns cannot be removed or repurposed.
+    expect((await c.request('DELETE', `/api/databases/${meta.id}/properties/${amount.id}`, { headers: match(meta.version) })).status).toBe(409);
+    expect((await c.request('DELETE', `/api/databases/${meta.id}/properties/${currency.id}`, { headers: match(meta.version) })).status).toBe(409);
+    const refused = await patch(currency.id, { currencyChoices: false });
+    expect(refused.status).toBe(409);
+    expect((await refused.json() as { error: { message: string } }).error.message).toContain('換算');
+    expect((await patch(amount.id, { groupThousands: true })).status).toBe(200);
+    expect((await patch(amount.id, { currencyConversion: conversion })).status).toBe(409);
+
+    // A column with typed amounts is not silently hidden behind a calculation.
+    expect((await add({ name: '手動', type: 'number', currencyConversion: conversion })).status).toBe(201);
+    const manual = meta.properties.at(-1)!;
+    const current = await (await c.request('GET', `/api/rows/${ticket.id}`)).json() as DatabaseRow;
+    expect((await c.request('PATCH', `/api/rows/${ticket.id}/values`, { headers: match(current.version), json: { values: { [manual.id]: 100 } } })).status).toBe(200);
+    expect((await patch(manual.id, { currencyConversion: { ...conversion, sourceId: amount.id } })).status).toBe(409);
+
+    // Detached from the conversion, the columns are free again.
+    expect((await patch(converted.id, { currencyConversion: conversion })).status).toBe(200);
+    expect((await c.request('DELETE', `/api/databases/${meta.id}/properties/${currency.id}`, { headers: match(meta.version) })).status).toBe(200);
+  });
+
+  it('changes only what a partial column update names, leaving choices and number settings alone', async () => {
+    const choices = [{ id: crypto.randomUUID(), label: '待辦', color: 'blue' }, { id: crypto.randomUUID(), label: '完成', color: 'green' }];
+    const status = await property('select', choices);
+    const task = await row('任務', { [status.id]: choices[0]!.id });
+    const patch = async (id: string, json: unknown) => {
+      const res = await c.request('PATCH', `/api/databases/${meta.id}/properties/${id}`, { headers: match(meta.version), json });
+      expect(res.status).toBe(200);
+      meta = await res.json() as DatabaseDto;
+      return meta.properties.find(item => item.id === id)!;
+    };
+    // Renaming used to send an empty list of choices along: refused while a row used one, and silently emptied otherwise.
+    expect(await patch(status.id, { name: '進度' })).toMatchObject({ name: '進度', type: 'select', choices });
+    expect((await rows()).rows[0]).toMatchObject({ id: task.id, values: { [status.id]: choices[0]!.id } });
+    const conversion = { from: 'TWD', to: 'JPY', rate: 4.95 };
+    const cost = await property('number');
+    expect(await patch(cost.id, { currencyConversion: conversion })).toMatchObject({ type: 'number', currencyConversion: conversion });
+    expect(await patch(cost.id, { name: '費用' })).toMatchObject({ name: '費用', currencyConversion: conversion });
+    expect(await patch(cost.id, { currencyConversion: null, groupThousands: true })).toEqual({ id: cost.id, position: cost.position, name: '費用', type: 'number', groupThousands: true, choices: [] });
+    expect(await patch(cost.id, { name: '金額' })).toMatchObject({ name: '金額', groupThousands: true });
+    // An explicit empty list still removes the choices nobody uses.
+    expect((await c.request('PATCH', `/api/databases/${meta.id}/properties/${status.id}`, { headers: match(meta.version), json: { choices: [] } })).status).toBe(409);
+    expect((await patch(status.id, { choices: [choices[0]] })).choices).toEqual([choices[0]]);
+  });
+
   it('requires If-Match for schema and row writes, rejects stale clients and rolls back complete writes', async () => {
     const prop = await property('number');
     const task = await row('原標題', { [prop.id]: 10 });

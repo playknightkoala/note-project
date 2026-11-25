@@ -4,6 +4,7 @@ import { ExternalLink, FileText, GripVertical, MoreHorizontal, Trash2 } from 'lu
 import { DndContext, DragOverlay, PointerSensor, useDraggable, useDroppable, useSensor, useSensors } from '@dnd-kit/core';
 import type { DragEndEvent } from '@dnd-kit/core';
 import { Link } from 'react-router';
+import { convertedAmount } from '@shared/database';
 import type { CellValue, DatabaseProperty, DatabaseRow, ViewConfig } from '@shared/database';
 import { EditableCell } from './EditableCell.tsx';
 import { ChoiceTag, CellDisplay } from './CellValueInput.tsx';
@@ -31,7 +32,7 @@ export function ListView(props: Props) {
   return <div className="database-list" aria-label="資料庫清單">
     {props.rows.map(row => <div className="database-list-row" key={row.id}>
       <FileText size={16} className="database-list-icon" /><div className="database-list-title"><EditableCell property={null} value={row.title} label={`${row.title || '無標題'}／名稱`} onReload={props.onReload} onSave={(value, base) => props.onSave(row, 'title', value, base)} /></div>
-      <div className="database-list-properties">{visible.map(property => <div className="database-list-property" key={property.id} title={property.name}><EditableCell property={property} value={row.values[property.id] ?? null} label={`${row.title || '無標題'}／${property.name}`} onReload={props.onReload} onSave={(value, base) => props.onSave(row, property.id, value, base)} /></div>)}</div>
+      <div className="database-list-properties">{visible.map(property => <div className="database-list-property" key={property.id} title={property.name}><EditableCell property={property} value={row.values[property.id] ?? null} converted={convertedAmount(row.values, property, props.properties)} label={`${row.title || '無標題'}／${property.name}`} onReload={props.onReload} onSave={(value, base) => props.onSave(row, property.id, value, base)} /></div>)}</div>
       <RowActions row={row} onTrash={props.onTrash} />
     </div>)}
     {props.rows.length === 0 && <Text size="sm" c="dimmed" p="sm">尚無符合條件的資料列。</Text>}
@@ -84,6 +85,6 @@ function BoardCard({ row, group, props }: { row: DatabaseRow; group: DatabasePro
           {access.canManage && <><Menu.Divider /><Menu.Item color="red" onClick={() => props.onTrash(row)}>移至垃圾桶</Menu.Item></>}</Menu.Dropdown>
       </Menu>
     </div>
-    {visible.map(property => <div className="database-board-property" key={property.id}><span>{property.name}</span><CellDisplay property={property} value={row.values[property.id] ?? null} /></div>)}
+    {visible.map(property => <div className="database-board-property" key={property.id}><span>{property.name}</span><CellDisplay property={property} value={row.values[property.id] ?? null} converted={convertedAmount(row.values, property, props.properties)} /></div>)}
   </div>;
 }

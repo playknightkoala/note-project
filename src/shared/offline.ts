@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { pageIdSchema } from './api.ts';
 import type { PageResponse, PageNode } from './api.ts';
-import { cellValueSchema, isEmptyValue, propertyInputSchema, pruneViewConfig, viewInputSchema } from './database.ts';
+import { cellValueSchema, conversionIssue, isCalculated, isEmptyValue, propertyInputSchema, pruneViewConfig, viewInputSchema } from './database.ts';
 import type { DatabaseDto, DatabaseProperty, DatabaseRow } from './database.ts';
 import { reactionSchema } from './annotations.ts';
 import { myReactions } from './annotations.ts';
@@ -134,6 +134,8 @@ export function applyDatabaseOp(snapshot: DatabaseSnapshot, op: DatabaseOp, now:
   const { meta, rows } = snapshot;
   const known = (propertyId: string) => meta.properties.some(property => property.id === propertyId);
   const prune = (propertyId: string, options: Parameters<typeof pruneViewConfig>[2]) => meta.views.map(view => ({ ...view, config: pruneViewConfig(view.config, propertyId, options) }));
+  /** A column change the server will refuse, because a conversion would be left without its amount or currency column, is not shown. */
+  const fits = (next: DatabaseSnapshot): DatabaseSnapshot => conversionIssue(next.meta.properties) ? snapshot : next;
   switch (op.type) {
     case 'row.create': {
       if (rows.some(row => row.id === op.rowId)) return snapshot;
@@ -151,24 +153,25 @@ export function applyDatabaseOp(snapshot: DatabaseSnapshot, op: DatabaseOp, now:
     }) };
     case 'property.add':
       if (known(op.propertyId) || meta.properties.length >= 50) return snapshot;
-      return { rows, meta: { ...meta, properties: [...meta.properties, { id: op.propertyId, position: (meta.properties.at(-1)?.position ?? 0) + 1024, ...op.input }] } };
+      return fits({ rows, meta: { ...meta, properties: [...meta.properties, { id: op.propertyId, position: (meta.properties.at(-1)?.position ?? 0) + 1024, ...op.input }] } });
     case 'property.update': {
       const current = meta.properties.find(property => property.id === op.propertyId);
       if (!current) return snapshot;
       const next: DatabaseProperty = { ...current, ...op.input };
       if (current.currencyConversion && next.currencyConversion && current.currencyConversion.from !== next.currencyConversion.from
         && rows.some(row => typeof row.values[current.id] === 'number')) return snapshot;
+      if (isCalculated(next) && rows.some(row => !isEmptyValue(row.values[current.id]))) return snapshot;
       const views = next.type !== current.type ? prune(current.id, { remove: false, clearGrouping: next.type !== 'select' })
         : !current.currencyConversion && next.currencyConversion ? prune(current.id, { remove: false, clearGrouping: false, sumOnly: true })
         : JSON.stringify(next.choices) !== JSON.stringify(current.choices) ? prune(current.id, { remove: false, clearGrouping: false, validChoices: new Set(next.choices.map(choice => choice.id)) }) : meta.views;
-      return { rows, meta: { ...meta, views, properties: meta.properties.map(property => property.id === current.id ? next : property) } };
+      return fits({ rows, meta: { ...meta, views, properties: meta.properties.map(property => property.id === current.id ? next : property) } });
     }
     case 'property.delete':
       if (!known(op.propertyId)) return snapshot;
-      return {
+      return fits({
         meta: { ...meta, properties: meta.properties.filter(property => property.id !== op.propertyId), views: prune(op.propertyId, { remove: true, clearGrouping: true }) },
         rows: rows.map(row => { if (!(op.propertyId in row.values)) return row; const values = { ...row.values }; delete values[op.propertyId]; return { ...row, values }; }),
-      };
+      });
     case 'view.add':
       if (meta.views.some(view => view.id === op.viewId) || meta.views.length >= 20) return snapshot;
       return { rows, meta: { ...meta, views: [...meta.views, { id: op.viewId, name: op.input.name, type: op.input.type ?? 'table', config: op.input.config }] } };
