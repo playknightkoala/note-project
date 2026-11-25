@@ -5,6 +5,10 @@ import type { VersionInfo } from './version.ts';
  * own part as the update log, which therefore also works without a connection.
  */
 export const releases: VersionInfo['releases'] = [
+  { version: '1.1.14', title: '開啟頁面時自動展開子頁面', changes: [
+    '開啟有子頁面的頁面時，側欄會自動展開它的下一層子頁面。從側欄、搜尋、麵包屑、頁面連結或網址開啟都一樣，「與我共用」的頁面也適用。',
+    '手動收合後，停留在同一頁不會再被展開；離開後再開啟，或再點一次該頁的列，才會重新展開。',
+  ] },
   { version: '1.1.13', title: '調整欄位順序', changes: [
     '資料庫的欄位順序可以調整：電腦上用滑鼠拖曳表頭的欄名，放到另一欄上即取代它的位置。',
     '手機上點欄名，在選單選「向左移動」或「向右移動」。電腦的欄位選單與右鍵選單也有這兩項。',

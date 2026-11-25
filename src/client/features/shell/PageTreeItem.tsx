@@ -28,6 +28,8 @@ export function PageTreeItem({ row, depth, active, dragging, dragEnabled, onMove
   const node = row.node;
   const open = expanded.has(node.id);
   const style = { transform: CSS.Translate.toString(sortable.transform), transition: sortable.transition, paddingLeft: 6 + depth * INDENT, opacity: dragging ? 0.4 : 1 };
+  // Also when the page is already open: a click on its row shows its sub-pages again.
+  const openPage = () => { if (node.hasChildren) setExpanded(node.id, true); navigate(`/p/${node.id}`); };
   const addChild = () => create.mutate({ parentId: node.id }, { onSuccess: result => { setExpanded(node.id, true); navigate(`/p/${result.page.id}`); } });
   const items = <>
     <Menu.Item component="a" href={`/p/${node.id}`} target="_blank" rel="noopener noreferrer" leftSection={<ExternalLink size={14} />}>在新分頁開啟</Menu.Item>
@@ -41,7 +43,7 @@ export function PageTreeItem({ row, depth, active, dragging, dragEnabled, onMove
     <Menu.Item color="red" leftSection={<Trash2 size={14} />} onClick={() => trash.mutate({ id: node.id }, { onSuccess: () => { if (active) navigate('/'); } })}>移至垃圾桶</Menu.Item>
   </>;
   return <ContextMenu label="側欄頁面右鍵選單" items={items}>{handlers => <div ref={sortable.setNodeRef} style={style} className={`tree-row${active ? ' tree-row--active' : ''}`} data-drop-parent={dropParent || undefined} data-id={node.id}
-    {...(dragEnabled ? sortable.attributes : {})} {...sortable.listeners} onClick={() => navigate(`/p/${node.id}`)} {...handlers} data-menu-open={menuOpened || undefined} role="treeitem" aria-expanded={node.hasChildren ? open : undefined} aria-level={depth + 1}>
+    {...(dragEnabled ? sortable.attributes : {})} {...sortable.listeners} onClick={openPage} {...handlers} data-menu-open={menuOpened || undefined} role="treeitem" aria-expanded={node.hasChildren ? open : undefined} aria-level={depth + 1}>
     <button type="button" className={`tree-row__chevron${node.hasChildren ? '' : ' tree-row__chevron--empty'}`} aria-label={open ? '收合' : '展開'} tabIndex={-1}
       onClick={event => { event.stopPropagation(); if (node.hasChildren) setExpanded(node.id, !open); }} onPointerDown={event => event.stopPropagation()}>
       <ChevronRight size={14} style={{ transform: open ? 'rotate(90deg)' : undefined, transition: 'transform 120ms' }} />

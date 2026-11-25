@@ -6,7 +6,7 @@ import { Alert, Text } from '@mantine/core';
 import { errorText } from '../../api/client.ts';
 import type { PageNode } from '@shared/api';
 import { useMovePage } from '../../api/pages.ts';
-import { useUiState } from '../../app/uiState.tsx';
+import { useExpandOnOpen, useUiState } from '../../app/uiState.tsx';
 import { PageTreeItem } from './PageTreeItem.tsx';
 import { flattenTree, projectDrop } from './treeDrag.ts';
 import type { DropProjection } from './treeDrag.ts';
@@ -16,6 +16,7 @@ export const INDENT = 14;
 
 export function PageTree({ index, currentId, dragEnabled, onMove }: { onMove: (node: PageNode) => void; index: TreeIndex; currentId: string | null; dragEnabled: boolean }) {
   const { expanded, setExpanded } = useUiState();
+  useExpandOnOpen(currentId, currentId ? index.byId.get(currentId)?.hasChildren : undefined);
   const move = useMovePage();
   const rows = useMemo(() => flattenTree(index, expanded), [index, expanded]);
   const [activeId, setActiveId] = useState<string | null>(null);

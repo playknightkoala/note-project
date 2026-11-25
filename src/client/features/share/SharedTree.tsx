@@ -5,7 +5,7 @@ import { useNavigate } from 'react-router';
 import type { IncomingShareDto } from '@shared/shares';
 import { roleLabels } from '@shared/shares';
 import { useLeaveShare } from '../../api/shares.ts';
-import { useUiState } from '../../app/uiState.tsx';
+import { useExpandOnOpen, useUiState } from '../../app/uiState.tsx';
 import { buildTreeIndex } from '../shell/treeIndex.ts';
 import { flattenTree } from '../shell/treeDrag.ts';
 import { INDENT } from '../shell/PageTree.tsx';
@@ -17,13 +17,14 @@ export function SharedTree({ shares, currentId }: { shares: IncomingShareDto[]; 
 
 function SharedBranch({ share, currentId }: { share: IncomingShareDto; currentId: string | null }) {
   const { expanded, setExpanded } = useUiState();
+  useExpandOnOpen(currentId, share.tree.find(node => node.id === currentId)?.hasChildren);
   const navigate = useNavigate();
   const leave = useLeaveShare();
   const rows = useMemo(() => flattenTree(buildTreeIndex(share.tree), expanded), [share.tree, expanded]);
   return <>{rows.map(({ node, depth }) => {
     const open = expanded.has(node.id), root = node.id === share.pageId;
     return <div key={node.id} className={`tree-row${node.id === currentId ? ' tree-row--active' : ''}`} style={{ paddingLeft: 6 + depth * INDENT }} role="treeitem" aria-expanded={node.hasChildren ? open : undefined} aria-level={depth + 1}
-      title={root ? `${share.owner.name} 與你共用 · ${roleLabels[share.role]}` : undefined} onClick={() => navigate(`/p/${node.id}`)}>
+      title={root ? `${share.owner.name} 與你共用 · ${roleLabels[share.role]}` : undefined} onClick={() => { if (node.hasChildren) setExpanded(node.id, true); navigate(`/p/${node.id}`); }}>
       <button type="button" className={`tree-row__chevron${node.hasChildren ? '' : ' tree-row__chevron--empty'}`} aria-label={open ? '收合' : '展開'} tabIndex={-1}
         onClick={event => { event.stopPropagation(); if (node.hasChildren) setExpanded(node.id, !open); }}>
         <ChevronRight size={14} style={{ transform: open ? 'rotate(90deg)' : undefined, transition: 'transform 120ms' }} />

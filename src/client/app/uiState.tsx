@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useMemo, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 
 interface UiState {
@@ -38,4 +38,19 @@ export function useUiState(): UiState {
   const value = useContext(UiContext);
   if (!value) throw new Error('UiStateProvider missing');
   return value;
+}
+
+/**
+ * Opening a page shows what is directly under it. The page is expanded once per visit, so collapsing it by hand holds until it is opened again.
+ * `hasChildren` is undefined while the page is not known to the tree that calls this (still loading, or the page belongs to another tree).
+ */
+export function useExpandOnOpen(pageId: string | null, hasChildren: boolean | undefined): void {
+  const { setExpanded } = useUiState();
+  const handled = useRef<string | null>(null);
+  useEffect(() => {
+    if (!pageId || hasChildren === undefined) { handled.current = null; return; }
+    if (handled.current === pageId) return;
+    handled.current = pageId;
+    if (hasChildren) setExpanded(pageId, true);
+  }, [pageId, hasChildren, setExpanded]);
 }
