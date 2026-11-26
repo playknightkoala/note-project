@@ -108,7 +108,13 @@ export const movePageSchema = z.object({ parentId: pageIdSchema.nullable(), inde
 export const favoriteSchema = z.object({ favorite: z.boolean() });
 export const contentSchema = z.object({ content: z.array(z.unknown()).max(20_000), overwrite: z.boolean().default(false) });
 
-export interface TrashItemDto { id: string; title: string; icon: string | null; kind: PageKind; trashedAt: number; descendantCount: number }
+export interface TrashItemDto {
+  id: string; title: string; icon: string | null; kind: PageKind; trashedAt: number;
+  /** Pages that went to the trash with it and come back with it. */
+  descendantCount: number;
+  /** Trash items listed on their own that deleting this one permanently removes too (with what is in them): rows of a database that goes. */
+  alsoDeletedCount: number;
+}
 export interface VersionDto { id: string; version: number; title: string; reason: string; createdAt: number; size: number }
 
 // ---- Search ----

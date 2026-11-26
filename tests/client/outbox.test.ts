@@ -7,11 +7,11 @@ import type { Annotation } from '../../src/shared/annotations.ts';
 import type { DatabaseDto, DatabaseRow } from '../../src/shared/database.ts';
 import { summarizePage } from '../../src/shared/offline.ts';
 import type { DatabaseSnapshotDto, OfflineManifest, OfflineOp } from '../../src/shared/offline.ts';
-import { cachePage, createLocalNote, createLocalRow, forgetOfflineData, loadNote, loadTree, offlineNote, rememberUser, renameLocalRow, saveLocalContent, syncNotes, syncStatus, unsyncedWork } from '../../src/client/offline/notes.ts';
+import { cachePage, createLocalNote, createLocalRow, forgetOfflineData, loadNote, loadTree, offlineNote, rememberUser, renameLocalRow, resolveLocalNote, saveLocalContent, syncNotes, syncStatus, unsyncedWork } from '../../src/client/offline/notes.ts';
 import { discardOp, localAnnotations, localDatabase, queuedOps, rememberAnnotations, retryOp, sendOps, storeDatabase, storedDatabase, submitOp } from '../../src/client/offline/outbox.ts';
-import { pendingUploads, queueUpload, sendUploads } from '../../src/client/offline/uploads.ts';
+import { pendingUploads, queueUpload, retryUpload, sendUploads } from '../../src/client/offline/uploads.ts';
 import { uploadFile } from '../../src/client/api/files.ts';
-import { clearLocal, readLocal } from '../../src/client/offline/storage.ts';
+import { OFFLINE_EVENT, clearLocal, readLocal, updateLocal } from '../../src/client/offline/storage.ts';
 
 const uuid = () => crypto.randomUUID();
 const account = (name: string): UserDto => ({ id: uuid(), displayName: name, email: `${name}@example.test`, username: null, role: 'user', createdAt: 0 });
@@ -456,6 +456,346 @@ describe('attachments added offline', () => {
     expect(await pendingUploads()).toHaveLength(1);
     Reflect.deleteProperty(navigator, 'serviceWorker');
     await expect(queueUpload(png(), uuid())).rejects.toThrow(/尚未啟用離線介面/);
+  });
+
+  it('creates a row added offline before uploading the file that was added to it in a shared database', async () => {
+    stubApi(worker);
+    const added = uuid();
+    await submitOp({ type: 'row.create', databaseId, rowId: added, title: '離線新增', values: {} });
+    await createLocalRow(databaseId, added, '離線新增');
+    // Somebody else's database: the file is sent with the row it belongs to, and the server checks that row.
+    const file = await uploadFile(png(), { offline: true, pageId: added });
+    await saveLocalContent(added, [{ id: 'image', props: { url: file.url } }], (await offlineNote(added))!.revision);
+    online(true);
+    let created = false;
+    const calls = stubApi(call => {
+      if (call.path === '/api/auth/me') return { json: { user: me, csrfToken: 'synthetic-token' } };
+      if (call.path === '/api/offline/manifest') return { json: { userId: me.id, tree: [], pages: [], maxUploadBytes: 90 * 1024 * 1024, databases: [{ id: databaseId, stamp: 's1' }], annotations: [] } satisfies OfflineManifest };
+      if (call.path === '/api/offline/ops') { created = true; return { json: { row: row({ id: added, title: '離線新增', values: {} }) } }; }
+      if (call.path === '/api/files') return created ? { status: 201, json: { id: file.id } } : { status: 404, json: { error: { code: 'not_found', message: '找不到頁面。' } } };
+      if (call.method === 'PUT') return { json: { ...pageOf('row', added, 2), page: { ...pageOf('row', added, 2).page, content: (call.body as { content: unknown[] }).content } } };
+      return undefined;
+    });
+    await syncNotes({ force: true });
+    const order = calls.filter(call => call.method !== 'GET').map(call => call.path);
+    expect(order).toEqual(['/api/offline/ops', '/api/files', `/api/offline/pages/${added}`]);
+    expect((calls.find(call => call.path === '/api/files')!.body as FormData).get('pageId')).toBe(added);
+    expect(await pendingUploads()).toEqual([]);
+    expect(await queuedOps()).toEqual([]);
+    expect(await offlineNote(added)).toMatchObject({ pending: false, local: { page: { content: [{ id: 'image', props: { url: file.url } }] } } });
+    expect(await unsyncedWork()).toMatchObject({ total: 0 });
+  });
+
+  it('lets a file wait for the row it was added to, and sends it by itself once the row exists on the server', async () => {
+    stubApi(worker);
+    const added = uuid();
+    await submitOp({ type: 'row.create', databaseId, rowId: added, title: '離線新增', values: {} });
+    await createLocalRow(databaseId, added, '離線新增');
+    const file = await uploadFile(png(), { offline: true, pageId: added });
+    online(true);
+    let accept = false;
+    const calls = stubApi(call => {
+      if (call.path === '/api/auth/me') return { json: { user: me, csrfToken: 'synthetic-token' } };
+      if (call.path === '/api/offline/manifest') return { json: { userId: me.id, tree: [], pages: [], maxUploadBytes: 90 * 1024 * 1024, databases: [{ id: databaseId, stamp: 's1' }], annotations: [] } satisfies OfflineManifest };
+      if (call.path === '/api/offline/ops') return accept ? { json: { row: row({ id: added, title: '離線新增', values: {} }) } } : { status: 409, json: { error: { code: 'conflict', message: '每個資料庫最多 5,000 列。' } } };
+      if (call.path === '/api/files') return { status: 201, json: { id: file.id } };
+      return undefined;
+    });
+    await syncNotes({ force: true });
+    // The row was refused. Its file is not sent to be refused as well, and is not marked as failed.
+    expect(calls.some(call => call.path === '/api/files')).toBe(false);
+    const waiting = await pendingUploads();
+    expect(waiting).toMatchObject([{ id: file.id, pageId: added }]);
+    expect(waiting[0]!.problem).toBeUndefined();
+    // Nothing can be sent while the row waits for the user: the next sync has no reason to run for the file.
+    const before = calls.length;
+    await syncNotes();
+    expect(calls.length).toBe(before);
+    accept = true;
+    await retryOp((await queuedOps())[0]!.key);
+    await syncNotes({ force: true });
+    expect(calls.filter(call => call.method !== 'GET').map(call => call.path).slice(-2)).toEqual(['/api/offline/ops', '/api/files']);
+    expect(await pendingUploads()).toEqual([]);
+    expect(await queuedOps()).toEqual([]);
+  });
+
+  it('keeps a file for a row the server does not have yet on this device, also while the server can be reached', async () => {
+    const added = uuid();
+    await submitOp({ type: 'row.create', databaseId, rowId: added, title: '離線新增', values: {} });
+    await createLocalRow(databaseId, added, '離線新增');
+    online(true);
+    // The row's "create" is still waiting (held back by an earlier refusal, say): the server would answer "not found".
+    const calls = stubApi(call => call.path.startsWith('/api/files/') ? worker(call) : call.path === '/api/files' ? { status: 404, json: { error: { code: 'not_found', message: '找不到頁面。' } } } : undefined);
+    const file = await uploadFile(png(), { offline: true, pageId: added });
+    expect(file).toMatchObject({ queued: true });
+    expect(calls.some(call => call.path === '/api/files')).toBe(false);
+    expect(await pendingUploads()).toMatchObject([{ id: file.id, pageId: added }]);
+  });
+
+  it('does not send a note ahead of a file that was added to it while the sync was under way', async () => {
+    stubApi(worker);
+    const first = await cachePage(pageOf('page')), second = await cachePage(pageOf('page'));
+    await saveLocalContent(first.page.id, [{ id: 'text' }], first.localRevision);
+    await saveLocalContent(second.page.id, [{ id: 'text' }], second.localRevision);
+    online(true);
+    const answer = (call: Call): Answer => {
+      if (call.path.startsWith('/api/files/')) return worker(call);
+      if (call.path === '/api/auth/me') return { json: { user: me, csrfToken: 'synthetic-token' } };
+      if (call.path === '/api/offline/manifest') return { json: { userId: me.id, tree: [], pages: [], maxUploadBytes: 90 * 1024 * 1024, databases: [{ id: databaseId, stamp: 's1' }], annotations: [] } satisfies OfflineManifest };
+      if (call.path === '/api/files') return { status: 201, json: {} };
+      if (call.method === 'PUT') { const id = call.path.split('/').pop() as ReturnType<typeof uuid>; return { json: { ...pageOf('page', id, 2), page: { ...pageOf('page', id, 2).page, content: (call.body as { content: unknown[] }).content } } }; }
+      return undefined;
+    };
+    const calls = stubApi(answer);
+    // While the first note is on its way, a picture is added to the other one (the files of this sync were sent already).
+    const fetcher = vi.mocked(fetch).getMockImplementation()!;
+    let other: string | undefined, picture = '';
+    vi.mocked(fetch).mockImplementation(async (path, init) => {
+      if (init?.method === 'PUT' && !other) {
+        other = String(path).endsWith(first.page.id) ? second.page.id : first.page.id;
+        picture = (await queueUpload(png(), uuid())).url;
+        await saveLocalContent(other, [{ id: 'image', props: { url: picture } }], (await offlineNote(other))!.revision);
+      }
+      return fetcher(path, init);
+    });
+    await syncNotes({ force: true });
+    const sent = () => calls.filter(call => call.method === 'PUT').map(call => call.path.split('/').pop());
+    expect(sent()).toHaveLength(1);
+    expect(sent()).not.toContain(other);
+    expect(await offlineNote(other!)).toMatchObject({ pending: true, local: { page: { content: [{ id: 'image', props: { url: picture } }] } } });
+    expect((await offlineNote(other!))!.sending).toBeUndefined();
+    // The next sync sends the file first, then the note that shows it.
+    await syncNotes({ force: true });
+    expect(calls.filter(call => call.method !== 'GET').map(call => call.path).slice(-2)).toEqual(['/api/files', `/api/offline/pages/${other}`]);
+    expect(await unsyncedWork()).toMatchObject({ total: 0 });
+  });
+
+  it('does not send an explicit overwrite ahead of a file it shows either, and sends that very operation once the file is there', async () => {
+    stubApi(worker);
+    const file = await uploadFile(png(), { offline: true });
+    const cached = await cachePage(pageOf('page'));
+    online(true);
+    let accept = false;
+    const calls = stubApi(call => {
+      if (call.path.startsWith('/api/files/')) return worker(call);
+      if (call.path === '/api/auth/me') return { json: { user: me, csrfToken: 'synthetic-token' } };
+      if (call.path === '/api/offline/manifest') return { json: { userId: me.id, tree: [], pages: [], maxUploadBytes: 90 * 1024 * 1024, databases: [{ id: databaseId, stamp: 's1' }], annotations: [] } satisfies OfflineManifest };
+      if (call.path === '/api/files') return accept ? { status: 201, json: {} } : { status: 413, json: { error: { code: 'payload_too_large', message: '檔案超過 90 MB。' } } };
+      if (call.method === 'GET' && call.path === `/api/pages/${cached.page.id}`) return { json: { ...cached, page: { ...cached.page, version: 2 } } };
+      if (call.method === 'PUT') return { json: { ...cached, page: { ...cached.page, version: 3, content: (call.body as { content: unknown[] }).content } } };
+      return undefined;
+    });
+    // "Overwrite with my text" fixes the operation on the spot, as every version of the interface does: whichever
+    // tab sends it, it is this id with this text, marked as an overwrite (the server keeps what it replaces).
+    const resolved = await resolveLocalNote(cached.page.id, 'overwrite', [{ id: 'image', props: { url: file.url } }]);
+    await syncNotes({ force: true });
+    await syncNotes({ force: true });
+    expect(calls.filter(call => call.method === 'PUT')).toEqual([]);
+    const waiting = (await offlineNote(cached.page.id))!;
+    expect(waiting).toMatchObject({ pending: true, sending: { input: { overwrite: true, baseVersion: 2, content: [{ id: 'image', props: { url: file.url } }] } } });
+    expect(waiting.problem).toBeUndefined();
+    // More is typed, the picture stays: there is still nothing that could be sent, and nothing to ask.
+    await saveLocalContent(cached.page.id, [{ id: 'image', props: { url: file.url } }, { id: 'more' }], resolved.localRevision);
+    await syncNotes({ force: true });
+    expect(calls.filter(call => call.method === 'PUT')).toEqual([]);
+    expect((await offlineNote(cached.page.id))!.problem).toBeUndefined();
+    // Once the file is on the server the same operation goes out, followed by what was typed since.
+    accept = true;
+    await retryUpload((await pendingUploads())[0]!);
+    await syncNotes({ force: true });
+    await syncNotes({ force: true });
+    const puts = calls.filter(call => call.method === 'PUT').map(call => call.body as { operationId: string; overwrite: boolean; content: unknown[] });
+    expect(puts).toHaveLength(2);
+    expect(puts[0]).toMatchObject({ operationId: waiting.sending!.input.operationId, overwrite: true, content: [{ id: 'image', props: { url: file.url } }] });
+    expect(puts[1]).toMatchObject({ overwrite: false, content: [{ id: 'image', props: { url: file.url } }, { id: 'more' }] });
+    expect(puts[1]!.operationId).not.toBe(puts[0]!.operationId);
+    expect(await unsyncedWork()).toMatchObject({ total: 0 });
+  });
+
+  it('never sends two texts under one operation id', async () => {
+    const cached = await cachePage(pageOf('page'));
+    online(true);
+    const sent: { operationId: string; content: unknown[] }[] = [];
+    let lose = true;
+    stubApi(call => {
+      if (call.path === '/api/auth/me') return { json: { user: me, csrfToken: 'synthetic-token' } };
+      if (call.path === '/api/offline/manifest') return { json: { userId: me.id, tree: [], pages: [], maxUploadBytes: 90 * 1024 * 1024, databases: [{ id: databaseId, stamp: 's1' }], annotations: [] } satisfies OfflineManifest };
+      if (call.method === 'GET' && call.path === `/api/pages/${cached.page.id}`) return { json: { ...cached, page: { ...cached.page, version: 2 } } };
+      if (call.method !== 'PUT') return undefined;
+      const body = call.body as { operationId: string; content: unknown[] };
+      sent.push({ operationId: body.operationId, content: body.content });
+      // The first request reaches nobody (the connection drops): what was fixed for it is sent again as it was.
+      if (lose) { lose = false; return 'offline'; }
+      return { json: { ...cached, page: { ...cached.page, version: 2 + sent.length, content: body.content } } };
+    });
+    const resolved = await resolveLocalNote(cached.page.id, 'overwrite', [{ id: 'first' }]);
+    await syncNotes({ force: true });
+    await saveLocalContent(cached.page.id, [{ id: 'second' }], resolved.localRevision);
+    await syncNotes({ force: true });
+    await syncNotes({ force: true });
+    const texts = new Map<string, Set<string>>();
+    for (const item of sent) texts.set(item.operationId, (texts.get(item.operationId) ?? new Set()).add(JSON.stringify(item.content)));
+    expect(sent.length).toBeGreaterThanOrEqual(3);
+    expect([...texts.values()].every(set => set.size === 1)).toBe(true);
+    // The repeat carried the first text; what was written since went out as an operation of its own.
+    expect(sent.map(item => JSON.stringify(item.content))).toEqual([JSON.stringify([{ id: 'first' }]), JSON.stringify([{ id: 'first' }]), JSON.stringify([{ id: 'second' }])]);
+    expect(await offlineNote(cached.page.id)).toMatchObject({ pending: false });
+    expect(await unsyncedWork()).toMatchObject({ total: 0 });
+  });
+
+  it('asks the user about a text that an earlier version fixed with a waiting file, once the draft has moved on', async () => {
+    stubApi(worker);
+    const file = await uploadFile(png(), { offline: true });
+    const cached = await cachePage(pageOf('page'));
+    const image = [{ id: 'image', props: { url: file.url } }];
+    const draft = await saveLocalContent(cached.page.id, image, cached.localRevision);
+    // As 1.1.15 left it after "overwrite with my text": fixed on the spot, never sent because the file was refused.
+    await updateLocal<Record<string, unknown>>(`page:${me.id}:${cached.page.id}`, current => ({ ...current!, sending: { revision: draft.localRevision, input: { operationId: uuid(), baseVersion: 1, baseTitle: '標題', parentId: null, title: '標題', content: image, overwrite: true, repeatAware: true } } }));
+    online(true);
+    const calls = stubApi(call => {
+      if (call.path.startsWith('/api/files/')) return worker(call);
+      if (call.path === '/api/auth/me') return { json: { user: me, csrfToken: 'synthetic-token' } };
+      if (call.path === '/api/offline/manifest') return { json: { userId: me.id, tree: [], pages: [], maxUploadBytes: 90 * 1024 * 1024, databases: [{ id: databaseId, stamp: 's1' }], annotations: [] } satisfies OfflineManifest };
+      if (call.path === '/api/files') return { status: 413, json: { error: { code: 'payload_too_large', message: '檔案超過 90 MB。' } } };
+      if (call.method === 'GET' && call.path === `/api/pages/${cached.page.id}`) return { json: { ...cached, page: { ...cached.page, version: 4 } } };
+      if (call.method === 'PUT') return { json: { ...cached, page: { ...cached.page, version: 5, content: (call.body as { content: unknown[] }).content } } };
+      return undefined;
+    });
+    // The same text still: it simply waits for its file, without a word.
+    await syncNotes({ force: true });
+    expect(await offlineNote(cached.page.id)).toMatchObject({ pending: true, sending: { input: { content: image } } });
+    expect((await offlineNote(cached.page.id))!.problem).toBeUndefined();
+    // The picture is taken out of the note. The old text is not sent, and is not silently dropped either.
+    await saveLocalContent(cached.page.id, [{ id: 'text' }], draft.localRevision);
+    await syncNotes({ force: true });
+    await syncNotes({ force: true });
+    expect(calls.filter(call => call.method === 'PUT')).toEqual([]);
+    expect(await offlineNote(cached.page.id)).toMatchObject({ pending: true, problem: expect.stringContaining('尚未上傳的附件'), conflict: { version: 1 }, local: { page: { content: [{ id: 'text' }] } } });
+    // The user chooses their text: it goes out over the page as it is on the server now.
+    await resolveLocalNote(cached.page.id, 'overwrite');
+    await syncNotes({ force: true });
+    const puts = calls.filter(call => call.method === 'PUT');
+    expect(puts).toHaveLength(1);
+    expect(puts[0]!.body).toMatchObject({ overwrite: true, baseVersion: 4, content: [{ id: 'text' }] });
+    expect(await offlineNote(cached.page.id)).toMatchObject({ pending: false, base: { page: { version: 5 } } });
+  });
+
+  it('asks the user again when the refused file was taken out of the text after an overwrite was fixed with it', async () => {
+    stubApi(worker);
+    const file = await uploadFile(png(), { offline: true });
+    const cached = await cachePage(pageOf('page'));
+    online(true);
+    let version = 2;
+    const calls = stubApi(call => {
+      if (call.path.startsWith('/api/files/')) return worker(call);
+      if (call.path === '/api/auth/me') return { json: { user: me, csrfToken: 'synthetic-token' } };
+      if (call.path === '/api/offline/manifest') return { json: { userId: me.id, tree: [], pages: [], maxUploadBytes: 90 * 1024 * 1024, databases: [{ id: databaseId, stamp: 's1' }], annotations: [] } satisfies OfflineManifest };
+      if (call.path === '/api/files') return { status: 413, json: { error: { code: 'payload_too_large', message: '檔案超過 90 MB。' } } };
+      if (call.method === 'GET' && call.path === `/api/pages/${cached.page.id}`) return { json: { ...cached, page: { ...cached.page, version } } };
+      if (call.method === 'PUT') return { json: { ...cached, page: { ...cached.page, version: version + 1, content: (call.body as { content: unknown[] }).content } } };
+      return undefined;
+    });
+    const resolved = await resolveLocalNote(cached.page.id, 'overwrite', [{ id: 'image', props: { url: file.url } }]);
+    await syncNotes({ force: true });
+    const fixed = (await offlineNote(cached.page.id))!.sending!;
+    // The file stays refused; the user takes the picture out of the note instead.
+    await saveLocalContent(cached.page.id, [{ id: 'text' }], resolved.localRevision);
+    await syncNotes({ force: true });
+    await syncNotes({ force: true });
+    // The text that was fixed is not sent, and it is not rewritten or dropped behind the user's back: they are asked.
+    expect(calls.filter(call => call.method === 'PUT')).toEqual([]);
+    const asked = (await offlineNote(cached.page.id))!;
+    expect(asked).toMatchObject({ pending: true, problem: expect.stringContaining('尚未上傳的附件'), conflict: { version: 2 }, local: { page: { content: [{ id: 'text' }] } } });
+    expect(asked.sending).toEqual(fixed);
+    // Somebody else has saved meanwhile; the user chooses their text again, over the page as it is by now.
+    version = 6;
+    await resolveLocalNote(cached.page.id, 'overwrite');
+    await syncNotes({ force: true });
+    const puts = calls.filter(call => call.method === 'PUT').map(call => call.body as { operationId: string });
+    expect(puts).toHaveLength(1);
+    expect(puts[0]).toMatchObject({ overwrite: true, baseVersion: 6, content: [{ id: 'text' }] });
+    expect(puts[0]!.operationId).not.toBe(fixed.input.operationId);
+    expect(await offlineNote(cached.page.id)).toMatchObject({ pending: false, base: { page: { version: 7 } } });
+    expect((await offlineNote(cached.page.id))!.sending).toBeUndefined();
+    // The refused file is still listed for the user to retry or discard; nothing shows it any more.
+    expect(await pendingUploads()).toMatchObject([{ id: file.id, problem: '檔案超過 90 MB。' }]);
+  });
+
+  it('fixes nothing to send for a note that has to wait for a file, so no other tab can pick it up', async () => {
+    stubApi(worker);
+    const file = await uploadFile(png(), { offline: true });
+    const cached = await cachePage(pageOf('page'));
+    await saveLocalContent(cached.page.id, [{ id: 'image', props: { url: file.url } }], cached.localRevision);
+    online(true);
+    stubApi(call => {
+      if (call.path.startsWith('/api/files/')) return worker(call);
+      if (call.path === '/api/auth/me') return { json: { user: me, csrfToken: 'synthetic-token' } };
+      if (call.path === '/api/offline/manifest') return { json: { userId: me.id, tree: [], pages: [], maxUploadBytes: 90 * 1024 * 1024, databases: [{ id: databaseId, stamp: 's1' }], annotations: [] } satisfies OfflineManifest };
+      if (call.path === '/api/files') return { status: 413, json: { error: { code: 'payload_too_large', message: '檔案超過 90 MB。' } } };
+      return undefined;
+    });
+    // Every state the note passes through while the sync runs, as another tab would read it.
+    const seen: unknown[] = [];
+    const watch = () => { void offlineNote(cached.page.id).then(note => seen.push(note?.sending)); };
+    window.addEventListener(OFFLINE_EVENT, watch);
+    await syncNotes({ force: true });
+    await new Promise(resolve => setTimeout(resolve, 20));
+    window.removeEventListener(OFFLINE_EVENT, watch);
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.every(sending => sending === undefined)).toBe(true);
+    expect(await offlineNote(cached.page.id)).toMatchObject({ pending: true });
+  });
+
+  it('holds a discussion on a row made here until the row exists on the server', async () => {
+    const added = uuid(), annotationId = uuid();
+    await submitOp({ type: 'row.create', databaseId, rowId: added, title: '離線新增', values: {} });
+    await createLocalRow(databaseId, added, '離線新增');
+    online(true);
+    const calls = stubApi(call => {
+      if (call.path === '/api/auth/me') return { json: { user: me, csrfToken: 'synthetic-token' } };
+      if (call.path === '/api/offline/manifest') return { json: { userId: me.id, tree: [], pages: [], maxUploadBytes: 90 * 1024 * 1024, databases: [{ id: databaseId, stamp: 's1' }], annotations: [] } satisfies OfflineManifest };
+      if (call.path !== '/api/offline/ops') return undefined;
+      return (call.body as { op: OfflineOp }).op.type === 'row.create' ? { json: { row: row({ id: added, title: '離線新增', values: {} }) } }
+        : { json: { annotation: { id: annotationId, quote: '字', blockIds: ['b'], messages: [], reactions: ['🎉'], resolved: false, version: 1, createdAt: 1, updatedAt: 1 } } };
+    });
+    // Even online it is not sent ahead of the row: the server does not know the page yet.
+    const result = await submitOp({ type: 'annotation.create', pageId: added, annotationId, messageId: uuid(), quote: '字', blockIds: ['b'], emoji: '🎉', at: 1 });
+    expect(result).toMatchObject({ queued: true });
+    expect(ops(calls)).toEqual([]);
+    await syncNotes({ force: true });
+    expect(ops(calls).map(item => item.op.type)).toEqual(['row.create', 'annotation.create']);
+    expect(await queuedOps()).toEqual([]);
+  });
+
+  it('does not keep an uploaded file that is larger than the attachment space allowed on this device', async () => {
+    const postMessage = vi.fn();
+    Object.defineProperty(navigator, 'serviceWorker', { configurable: true, value: { controller: { postMessage } } });
+    stubApi(worker);
+    const file = await uploadFile(png(), { offline: true });
+    // As if the file were larger than the default 500 MB of attachment space.
+    await updateLocal<{ size: number }>(`upload:${me.id}:${file.id}`, current => ({ ...current!, size: 600 * 1024 * 1024 }));
+    online(true);
+    stubApi(call => call.path === '/api/files' ? { status: 201, json: {} } : undefined);
+    await sendUploads(me.id);
+    // Uploaded and no longer waiting, but not put where it would push every other kept file out.
+    expect(await pendingUploads()).toEqual([]);
+    expect(stores.get(`notes-files-${me.id}`)?.size ?? 0).toBe(0);
+    expect(postMessage).not.toHaveBeenCalled();
+  });
+
+  it('asks the offline interface to keep the attachment space within its limit after uploads were moved into it', async () => {
+    const postMessage = vi.fn();
+    Object.defineProperty(navigator, 'serviceWorker', { configurable: true, value: { controller: { postMessage } } });
+    stubApi(worker);
+    await uploadFile(png(), { offline: true });
+    online(true);
+    stubApi(call => call.path === '/api/files' ? { status: 201, json: {} } : undefined);
+    await sendUploads(me.id);
+    expect(stores.get(`notes-files-${me.id}`)!.size).toBe(1);
+    expect(postMessage).toHaveBeenCalledExactlyOnceWith({ type: 'notes:trim-files' });
+    // Nothing was moved this time: nothing to trim.
+    await sendUploads(me.id);
+    expect(postMessage).toHaveBeenCalledTimes(1);
   });
 });
 

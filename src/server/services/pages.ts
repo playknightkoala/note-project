@@ -274,11 +274,29 @@ export function trashPage(db: Db, userId: string, id: string, now: number): numb
   });
 }
 
+/**
+ * What permanently deleting a trash item removes: the item, what went to the trash with it, and the rows of a
+ * database among those that were trashed on their own earlier (a row exists only inside its database, so it could
+ * never be restored afterwards). Anything else that was trashed on its own is not part of it.
+ */
+const DOOMED = `WITH RECURSIVE doomed(id) AS (
+    SELECT id FROM pages WHERE id = ? AND user_id = ?
+    UNION
+    SELECT p.id FROM pages p JOIN doomed d ON p.trash_root_id = d.id WHERE p.user_id = ? AND p.trashed_at IS NOT NULL
+    UNION
+    SELECT p.id FROM pages p JOIN doomed d ON p.database_id = d.id WHERE p.user_id = ? AND p.kind = 'row' AND p.trashed_at IS NOT NULL)`;
+const doomedParams = (userId: string, id: string): string[] => [id, userId, userId, userId];
+const doomedIds = (db: Db, userId: string, id: string): string[] =>
+  db.all<{ id: string }>(`${DOOMED} SELECT id FROM doomed`, ...doomedParams(userId, id)).map(row => row.id);
+
 export function listTrash(db: Db, userId: string): TrashItemDto[] {
   return db.all<PageRow & { descendants: number }>(
     `SELECT p.*, (SELECT COUNT(*) FROM pages d WHERE d.trash_root_id = p.id) - 1 AS descendants
      FROM pages p WHERE p.user_id = ? AND p.trashed_at IS NOT NULL AND p.trash_root_id = p.id ORDER BY p.trashed_at DESC`, userId)
-    .map(row => ({ id: row.id, title: row.title, icon: row.icon, kind: row.kind, trashedAt: row.trashed_at!, descendantCount: Number(row.descendants) }));
+    .map(row => ({ id: row.id, title: row.title, icon: row.icon, kind: row.kind, trashedAt: row.trashed_at!, descendantCount: Number(row.descendants),
+      // Only what the list shows as an item of its own; what went to the trash with such an item is part of it.
+      alsoDeletedCount: Number(db.get<{ n: number }>(`${DOOMED} SELECT COUNT(*) AS n FROM doomed d JOIN pages p ON p.id = d.id WHERE p.trash_root_id = p.id AND p.id <> ?`,
+        ...doomedParams(userId, row.id), row.id)?.n ?? 0) }));
 }
 
 export function restorePage(db: Db, userId: string, id: string, now: number): PageRow {
@@ -300,12 +318,22 @@ export function deleteTrashed(db: Db, userId: string, id: string): number {
   return db.transaction(() => {
     const row = loadPage(db, userId, id, { allowTrashed: true });
     if (row.trashed_at === null || row.trash_root_id !== id) throw new AppError('not_found', '垃圾桶裡沒有這個頁面。');
-    return db.run('DELETE FROM pages WHERE trash_root_id = ? AND user_id = ?', id, userId).changes;
+    const count = doomedIds(db, userId, id).length;
+    // A page below that was trashed on its own is a trash item of its own. It is taken out from under what goes
+    // (the foreign key would delete it along) and stays in the trash, to be restored to the top level.
+    db.run(`${DOOMED} UPDATE pages SET parent_id = NULL WHERE user_id = ? AND parent_id IN (SELECT id FROM doomed) AND id NOT IN (SELECT id FROM doomed)`, ...doomedParams(userId, id), userId);
+    db.run(`${DOOMED} DELETE FROM pages WHERE user_id = ? AND id IN (SELECT id FROM doomed)`, ...doomedParams(userId, id), userId);
+    return count;
   });
 }
 
 export function emptyTrash(db: Db, userId: string): number {
-  return db.run('DELETE FROM pages WHERE user_id = ? AND trashed_at IS NOT NULL', userId).changes;
+  return db.transaction(() => {
+    // Counted first: rows that go through the foreign key are not in the statement's own change count.
+    const count = Number(db.get<{ n: number }>('SELECT COUNT(*) AS n FROM pages WHERE user_id = ? AND trashed_at IS NOT NULL', userId)?.n ?? 0);
+    db.run('DELETE FROM pages WHERE user_id = ? AND trashed_at IS NOT NULL', userId);
+    return count;
+  });
 }
 
 /** Deep copy of a page and its subtree, placed right after the original. */
@@ -346,7 +374,10 @@ export function getVersion(db: Db, userId: string, id: string, versionId: string
 export function restoreVersion(db: Db, userId: string, id: string, versionId: string, expectedVersion: number, now: number): PageHeadDto {
   return db.transaction(() => {
     const snapshot = getVersion(db, userId, id, versionId);
+    const kind = loadPage(db, userId, id).kind;
     const head = updateContent(db, userId, id, snapshot.content, expectedVersion, now, 'restore');
+    // A row's name is a cell of its database, changed there under its own version: restoring the row's text leaves it alone.
+    if (kind === 'row') return head;
     db.run('UPDATE pages SET title = ? WHERE id = ?', snapshot.title, id);
     return { ...head, title: snapshot.title };
   });

@@ -190,7 +190,11 @@ export function outgoingShares(db: Db, ownerId: string): OutgoingShareDto[] {
     .map(row => ({ pageId: row.page_id, title: row.title, icon: row.icon, kind: row.kind, scope: row.scope, link: row.link_token !== null, members: Number(row.members), invitations: row.invitations, accountRole: row.account_role, updatedAt: row.updated_at }));
 }
 
-/** What other accounts share with the user. A share that lies inside another one from the same owner is shown there only. */
+/**
+ * What other accounts share with the user. A share whose page can already be walked to in another one from the same
+ * owner is shown there only, and whatever it reaches beyond that one (a database under a page shared without its
+ * databases, for instance) is added to that one's tree: everything the user may open stays reachable from the list.
+ */
 export function incomingShares(db: Db, userId: string): IncomingShareDto[] {
   const rows = db.all<{ page_id: string; scope: ShareScope; owner_id: string; member_role: MemberRole | null; account_role: MemberRole | null; owner_name: string }>(
     `SELECT s.page_id, s.scope, s.user_id AS owner_id, u.display_name AS owner_name,
@@ -207,8 +211,41 @@ export function incomingShares(db: Db, userId: string): IncomingShareDto[] {
       position: page.position, isFavorite: false, favoritePosition: null, hasChildren: parents.has(page.id), updatedAt: page.updated_at }));
     return { pageId: row.page_id, role: stronger(row.member_role, row.account_role), scope: row.scope, owner: { id: row.owner_id, name: row.owner_name }, tree };
   });
-  const inside = (share: IncomingShareDto) => shares.some(other => other !== share && other.owner.id === share.owner.id && other.tree.some(node => node.id === share.pageId && node.id !== other.pageId));
-  return shares.filter(share => !inside(share));
+  // What the sidebar can walk to from the shared page. A page below a row is listed too, but hangs under nothing
+  // that is shown (rows are not part of the tree): a share on such a page is not "shown" by the outer one.
+  // Worked out once per tree, and again only for a tree that something was merged into.
+  const walked = new Map<IncomingShareDto, Set<string>>();
+  const reachable = (share: IncomingShareDto): Set<string> => {
+    let found = walked.get(share);
+    if (found) return found;
+    const children = new Map<string | null, string[]>();
+    for (const node of share.tree) { const list = children.get(node.parentId); if (list) list.push(node.id); else children.set(node.parentId, [node.id]); }
+    found = new Set([share.pageId]);
+    for (const id of found) for (const child of children.get(id) ?? []) found.add(child);
+    walked.set(share, found);
+    return found;
+  };
+  const shows = (host: IncomingShareDto, share: IncomingShareDto) => host !== share && host.owner.id === share.owner.id && host.pageId !== share.pageId && reachable(host).has(share.pageId);
+  const kept = shares.filter(share => !shares.some(other => shows(other, share)));
+  let nested = shares.filter(share => !kept.includes(share));
+  // A nested share may hang under a page that only another nested share brings in, so repeat until nothing moves.
+  for (let moved = true; moved && nested.length;) {
+    moved = false;
+    for (const share of nested) {
+      const host = kept.find(other => shows(other, share));
+      if (!host) continue;
+      const known = new Set(host.tree.map(node => node.id));
+      const added = share.tree.filter(node => !known.has(node.id) && node.id !== share.pageId);
+      if (added.length) {
+        const parents = new Set(added.map(node => node.parentId));
+        host.tree = [...host.tree.map(node => parents.has(node.id) && !node.hasChildren ? { ...node, hasChildren: true } : node), ...added];
+        walked.delete(host);
+      }
+      nested = nested.filter(other => other !== share);
+      moved = true;
+    }
+  }
+  return [...kept, ...nested];
 }
 
 /**

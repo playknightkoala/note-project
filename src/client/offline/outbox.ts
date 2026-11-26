@@ -46,9 +46,14 @@ const waiting = (userId: string) => queuedOps(userId).catch((): QueuedOp[] => []
 const inScope = async (userId: string, scope: string) => (await waiting(userId)).filter(item => opScope(item.op) === scope);
 export const hasQueued = async (scope: string): Promise<boolean> => { const owner = offlineOwner(); return !!owner && (await inScope(owner, scope)).length > 0; };
 
-/** An operation on a page that exists only on this device has to wait until the page itself has been uploaded. */
+/** Whether a page exists only on this device so far: a note that was never uploaded, or a row whose "create" is still waiting. */
+export async function onlyHere(userId: string, pageId: string): Promise<boolean> {
+  const note = await readLocal<{ isNew?: boolean; localOnly?: boolean }>(pageKey(userId, pageId)).catch(() => undefined);
+  return note?.isNew === true || note?.localOnly === true;
+}
+/** An operation on a page that exists only on this device has to wait until the page itself is on the server. */
 async function pageNotUploaded(userId: string, op: OfflineOp): Promise<boolean> {
-  return !isDatabaseOp(op) && (await readLocal<{ isNew?: boolean }>(pageKey(userId, op.pageId)).catch(() => undefined))?.isNew === true;
+  return !isDatabaseOp(op) && await onlyHere(userId, op.pageId);
 }
 
 // ---- Downloaded copies ----

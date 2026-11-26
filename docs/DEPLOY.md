@@ -93,7 +93,13 @@ app 以每行一筆 JSON 寫到標準輸出（`docker compose logs app`）。除
 docker compose exec app node dist/server/cli.js backup
 ```
 
-這會在 `/data/backups/notes-<時間>.sqlite` 產生一致的快照並只保留最近 7 份。接著把整個 volume 的 `files/`（附件，content-addressed）與 `backups/` 打包帶走：
+這會在 `/data/backups/notes-<時間>.sqlite` 產生一致的快照並只保留最近 7 份。每份快照旁邊有同名的 `notes-<時間>.files/` 資料夾，保存該快照引用的全部附件：它們是指向 `files/` 內檔案的硬連結，不另外佔用空間；之後即使在筆記裡刪除了附件，只要引用它的快照還保留著，檔案就還在，快照過期時才一併移除。快照與它的附件先以 `.partial` 結尾的暫存名稱準備，完整後才換成正式名稱，所以中斷的備份不會留下看起來像備份的檔案（殘留的暫存檔在下一次備份時清除）。同一時間只會有一個備份在執行，第二個會直接結束並提示稍後再試。備份進行中若有附件剛好被上傳又刪除，指令會自動重拍快照（輸出的 `attempts` 是拍了幾次）。
+
+指令輸出的 `files` 是這份快照引用的附件數。`missingFiles` 不是 0 表示筆記仍引用、但 `files/` 裡已經找不到的附件：指令會印出警告並以結束碼 1 結束，這份快照改以 `notes-<時間>.incomplete.sqlite`（附件在 `notes-<時間>.incomplete.files/`）保存。它仍含完整的筆記文字，可以照下面的方式還原，只是缺了那些附件；它**不佔用完整備份的 7 份名額**，所以不會把可能還保有那些檔案的舊備份擠掉。不完整的快照另外最多保留 7 份，並在比它新的完整備份滿 7 份後移除。處理方式：從舊快照的 `.files/` 把檔案放回 `files/`，或在筆記中移除該附件，再重新備份。輸出的 `kept` 是完整備份的份數，`keptIncomplete` 是不完整的份數。
+
+1.1.15 及更早版本建立的快照沒有 `.files/` 資料夾，只能搭配打包當下的 `files/` 還原；升級後請重新執行一次備份。
+
+接著把整個 volume 的 `files/`（附件，content-addressed）與 `backups/` 打包帶走：
 
 ```powershell
 docker run --rm -v notes_notes-data:/data:ro -v ${PWD}:/out alpine tar czf /out/notes-backup.tgz -C /data files backups
@@ -103,11 +109,11 @@ docker run --rm -v notes_notes-data:/data:ro -v ${PWD}:/out alpine tar czf /out/
 
 ```powershell
 docker compose down
-docker run --rm -v notes_notes-data:/data -v ${PWD}:/in alpine sh -c "tar xzf /in/notes-backup.tgz -C /data && cp /data/backups/<要還原的檔>.sqlite /data/notes.sqlite && chown -R 101:101 /data"
+docker run --rm -v notes_notes-data:/data -v ${PWD}:/in alpine sh -c "set -o pipefail && tar xzf /in/notes-backup.tgz -C /data && cp /data/backups/<要還原的檔>.sqlite /data/notes.sqlite && mkdir -p /data/files && if [ -d /data/backups/<要還原的檔>.files ]; then tar cf - -C /data/backups/<要還原的檔>.files . | tar xf - -C /data/files; fi && chown -R 101:101 /data"
 docker compose up -d --wait
 ```
 
-啟動時 migration 會自動補齊；`backups/` 裡其他快照仍保留。
+中間那一步把該快照自己的附件放回 `files/`，所以還原較舊的快照時，之後才被刪除的附件也會回來。這一步用 `tar` 而不是 `cp`：仍存在的附件在 `files/` 與 `.files/` 是同一個檔案（硬連結），`cp` 遇到這種情況會報錯並中斷後面的步驟。開頭的 `set -o pipefail` 讓 `tar` 管線任一端失敗都會中斷整條指令，不會在附件沒放完整時繼續往下做。指令沒有任何錯誤訊息並正常結束才算還原完成。啟動時 migration 會自動補齊；`backups/` 裡其他快照仍保留。
 
 其他指令：`cli migrate`（手動套用 migration）、`cli rebuild-index`（重建全文索引）。
 

@@ -58,23 +58,25 @@ export function authRoutes(): Hono<AppEnv> {
     const input = await parseBody(c, registerSchema);
     // The invite (or setup token) is checked before anything else, so a caller without one learns nothing about
     // which emails exist and cannot make the server spend a password hash.
-    const admit = (): boolean => {
+    const admit = (at: number): boolean => {
       const first = countUsers(deps.db) === 0;
       if (first) {
         if (deps.config.setupToken && !secretEquals(input.inviteCode ?? '', deps.config.setupToken)) throw new AppError('invite_invalid', '需要設定碼才能建立管理者帳號。');
       } else {
         if (!input.inviteCode) throw new AppError('invite_invalid', '註冊需要邀請碼。');
-        if (!inviteUsable(deps.db, input.inviteCode, now)) throw new AppError('invite_invalid');
+        if (!inviteUsable(deps.db, input.inviteCode, at)) throw new AppError('invite_invalid');
       }
       return first;
     };
-    admit();
+    admit(now);
     const passwordHash = await hashPassword(input.password);
     const user = deps.db.transaction(() => {
-      const first = admit();
+      // Receiving the request and hashing took time: an invite that ran out meanwhile is no longer redeemed.
+      const at = deps.now();
+      const first = admit(at);
       const created = insertUser(deps.db, { email: input.email, username: input.username ?? null, displayName: input.displayName,
-        passwordHash, role: first ? 'admin' : 'user' }, now);
-      if (!first) redeemInvite(deps.db, input.inviteCode!, created.id, now);
+        passwordHash, role: first ? 'admin' : 'user' }, at);
+      if (!first) redeemInvite(deps.db, input.inviteCode!, created.id, at);
       return created;
     });
     deps.logger.info('user registered', { userId: user.id, role: user.role });

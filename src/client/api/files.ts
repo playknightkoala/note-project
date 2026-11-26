@@ -1,7 +1,7 @@
 import { newId } from '@shared/ids';
 import { api } from './client.ts';
 import { transient } from '../offline/outbox.ts';
-import { queueUpload } from '../offline/uploads.ts';
+import { mustWaitForPage, queueUpload } from '../offline/uploads.ts';
 import { syncStatus } from '../offline/notes.ts';
 import { canReachServer } from '../offline/connection.ts';
 
@@ -18,7 +18,9 @@ export async function uploadFile(file: File, { offline = false, pageId }: { offl
   const id = newId();
   pendingFileUploads++;
   try {
-    if (canReachServer() || !offline) {
+    // A row made on this device that the server does not have yet: the server would answer "not found" for it.
+    const waits = offline && await mustWaitForPage(pageId);
+    if (!waits && (canReachServer() || !offline)) {
       const form = new FormData();
       form.append('file', file, file.name);
       form.append('id', id);

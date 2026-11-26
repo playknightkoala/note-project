@@ -6,7 +6,8 @@ import type { PageKind, PageResponse, UserDto } from '../../src/shared/api.ts';
 import { safeNext } from '../../src/client/features/auth/safeNext.ts';
 import { PageTitle } from '../../src/client/features/page/PageTitle.tsx';
 import { useAutosave } from '../../src/client/features/page/useAutosave.ts';
-import { cachePage, forgetOfflineData, offlineNote, offlineNotes, rememberUser, revokeOfflineEntry, saveLocalContent, syncNotes } from '../../src/client/offline/notes.ts';
+import { versionToRestoreOn } from '../../src/client/features/page/restoreBase.ts';
+import { adoptServerVersion, cachePage, forgetOfflineData, offlineNote, offlineNotes, rememberUser, revokeOfflineEntry, saveLocalContent, syncNotes } from '../../src/client/offline/notes.ts';
 import type { OfflineNote } from '../../src/client/offline/notes.ts';
 import { clearLocal, readLocal, updateLocal } from '../../src/client/offline/storage.ts';
 
@@ -247,5 +248,89 @@ describe('small fixes', () => {
     expect(onChange).not.toHaveBeenCalled();
     unmount();
     expect(onChange).toHaveBeenCalledExactlyOnceWith('新標題');
+  });
+});
+
+describe('restoring a history version', () => {
+  it.each(['page', 'row'] as const)('is refused while the editor holds text of a %s that could not be stored on this device', async kind => {
+    const response = pageOf(kind), initial = await cachePage(response);
+    // A value the device store cannot keep stands for any failed write (no space left, for instance).
+    let content: unknown[] = [{ id: 'typed', unstorable: () => undefined }];
+    const { result } = renderHook(() => useAutosave({ pageId: response.page.id, initialVersion: 4, initialLocalRevision: initial.localRevision, getContent: () => content, onRemoteUpdate: vi.fn() }));
+    act(() => result.current.markDirty());
+    // The copy on this device still looks clean; the typed text exists only in the editor.
+    await expect(act(() => versionToRestoreOn(result.current, kind, response.page.id))).rejects.toThrow('尚未儲存的修改');
+    expect(await offlineNote(response.page.id)).toMatchObject({ pending: false, local: { page: { content: [] } } });
+    expect(result.current.hasUnsaved()).toBe(true);
+
+    // Once the text is stored it has to reach the server first.
+    content = [{ id: 'typed' }];
+    await expect(act(() => versionToRestoreOn(result.current, kind, response.page.id))).rejects.toThrow('尚未同步到伺服器');
+    expect(await offlineNote(response.page.id)).toMatchObject({ pending: true, local: { page: { content: [{ id: 'typed' }] } } });
+  });
+
+  it('is made on the version this device last received when nothing is waiting', async () => {
+    const response = pageOf('page', 7), initial = await cachePage(response);
+    const { result } = renderHook(() => useAutosave({ pageId: response.page.id, initialVersion: 7, initialLocalRevision: initial.localRevision, getContent: () => [], onRemoteUpdate: vi.fn() }));
+    await expect(act(() => versionToRestoreOn(result.current, 'page', response.page.id))).resolves.toBe(7);
+  });
+});
+
+describe('after a history version was restored', () => {
+  const restored = (response: PageResponse): PageResponse => ({ ...response, page: { ...response.page, version: response.page.version + 1, content: [{ id: 'restored' }] } });
+  const serve = (response: PageResponse) => stubApi((method, path) => method === 'GET' && path === `/api/pages/${response.page.id}` ? { json: restored(response) } : undefined);
+
+  it('takes the restored version as the copy on this device, and an idle editor loads it', async () => {
+    const response = pageOf('page'), initial = await cachePage(response);
+    serve(response);
+    const reload = vi.fn();
+    const { result } = renderHook(() => useAutosave({ pageId: response.page.id, initialVersion: 4, initialLocalRevision: initial.localRevision, getContent: () => [], onRemoteUpdate: reload }));
+    await tick();
+    await act(async () => { expect(await adoptServerVersion(response.page.id)).toBe('adopted'); });
+    expect(await offlineNote(response.page.id)).toMatchObject({ pending: false, base: { page: { version: 5 } }, local: { page: { content: [{ id: 'restored' }] } } });
+    await waitFor(() => expect(reload).toHaveBeenCalled());
+    expect(result.current.state.status).not.toBe('conflict');
+    // Asked again (a sync brought the version in meanwhile): nothing is replaced a second time.
+    const revision = (await offlineNote(response.page.id))!.revision;
+    expect(await adoptServerVersion(response.page.id)).toBe('adopted');
+    expect((await offlineNote(response.page.id))!.revision).toBe(revision);
+  });
+
+  it('reports a conflict instead of loading it over text typed while the restore was under way', async () => {
+    const response = pageOf('page'), initial = await cachePage(response);
+    serve(response);
+    const reload = vi.fn();
+    const { result } = renderHook(() => useAutosave({ pageId: response.page.id, initialVersion: 4, initialLocalRevision: initial.localRevision, getContent: () => [{ id: 'typed' }], onRemoteUpdate: reload }));
+    await tick();
+    // Typed after the last look at the editor, and not stored yet.
+    act(() => result.current.markDirty());
+    await act(async () => { expect(await adoptServerVersion(response.page.id)).toBe('adopted'); });
+    await waitFor(() => expect(result.current.state.status).toBe('conflict'));
+    expect(reload).not.toHaveBeenCalled();
+    expect(result.current.hasUnsaved()).toBe(true);
+  });
+
+  it('never puts an older version over a newer one that reached this device meanwhile', async () => {
+    const response = pageOf('page', 6);
+    await cachePage(response);
+    // The answer to the request made right after the restore arrives late: a sync has brought in version 6 since.
+    stubApi((method, path) => method === 'GET' && path === `/api/pages/${response.page.id}` ? { json: { ...response, page: { ...response.page, version: 5, content: [{ id: 'older' }] } } } : undefined);
+    const before = await offlineNote(response.page.id);
+    expect(await adoptServerVersion(response.page.id)).toBe('adopted');
+    expect(await offlineNote(response.page.id)).toMatchObject({ revision: before!.revision, base: { page: { version: 6 } }, local: { page: { version: 6, content: [] } } });
+  });
+
+  it('leaves a draft another tab stored on this device alone', async () => {
+    const response = pageOf('page'), initial = await cachePage(response);
+    await saveLocalContent(response.page.id, [{ id: 'other-tab' }], initial.localRevision);
+    serve(response);
+    expect(await adoptServerVersion(response.page.id)).toBe('kept');
+    expect(await offlineNote(response.page.id)).toMatchObject({ pending: true, base: { page: { version: 4 } }, local: { page: { content: [{ id: 'other-tab' }] } } });
+  });
+
+  it('says so when this device keeps no copy of the page', async () => {
+    const calls = serve(pageOf('page'));
+    expect(await adoptServerVersion(crypto.randomUUID())).toBe('absent');
+    expect(calls).toEqual([]);
   });
 });

@@ -1,14 +1,16 @@
 import type { PageHeadDto, PageNode, PageResponse, SessionDto, TreeDto, UserDto } from '@shared/api';
+import { newId } from '@shared/ids';
 import { movedSince, summarizePage } from '@shared/offline';
 import type { DatabaseSnapshotDto, OfflineManifest, SyncNoteInput, SyncNoteResult } from '@shared/offline';
 import type { IncomingShareDto, SharesDto } from '@shared/shares';
 import type { Annotation } from '@shared/annotations';
 import { AUTH_LOST_EVENT, ApiError, api, isApiError, setCsrfToken } from '../api/client.ts';
 import { canReachServer, connectionState } from './connection.ts';
-import { announceOfflineChange, listLocal, readLocal, removeLocal, updateLocal } from './storage.ts';
-import { fileCache, pageKey, setOfflineOwner, sharedKey, uploadCache } from './owner.ts';
+import { announceOfflineChange, listLocal, readLocal, removeLocal, updateLocal, updateLocalWith } from './storage.ts';
+import { fileCache, pageKey, setOfflineOwner, sharedKey, uploadCache, uploadPrefix } from './owner.ts';
 import { forgetAnnotations, forgetDatabase, mustStop, queuedOps, sendOps, storeAnnotations, storeDatabase, storedAnnotationStamp, storedAnnotations, storedDatabase, storedDatabases, transient } from './outbox.ts';
-import { pendingUploads, sendUploads } from './uploads.ts';
+import { pendingUploads, sendUploads, sendableUploads } from './uploads.ts';
+import type { PendingUpload } from './uploads.ts';
 
 export { transient };
 
@@ -22,6 +24,11 @@ export interface OfflineNote {
   writer: string;
   isNew: boolean;
   pending: boolean;
+  /**
+   * What is on its way to the server: an operation id together with the text it carries. Fixed once and never
+   * changed or taken back, so that every repeat (by this tab, another one, or one still running an earlier version
+   * of the interface) sends exactly the same operation, and the server's answer to it always means that text.
+   */
   sending?: { input: SyncNoteInput; revision: string };
   problem?: string;
   conflict?: PageHeadDto;
@@ -31,7 +38,8 @@ export interface OfflineNote {
 }
 /** Kinds whose text is written on this device first and synced afterwards. A database page has no text of its own. */
 export const hasDraft = (kind: PageResponse['page']['kind']): boolean => kind !== 'database';
-const writer = crypto.randomUUID();
+// `newId`, never `crypto.randomUUID`: on a plain-HTTP origin browsers do not have it, and this module is loaded before anything is shown.
+const writer = newId();
 let user: UserDto | null = null;
 function setUser(value: UserDto | null): void { user = value; setOfflineOwner(value?.id ?? null, value?.displayName); }
 let syncing: Promise<void> | undefined;
@@ -150,7 +158,7 @@ export async function cachePage(response: PageResponse, expectedUserId = user?.i
       // A row's name is one of its database cells, not part of the text that is drafted here.
       const sameText = !!current && !current.removed && current.base.page.version === response.page.version && (response.page.kind === 'row' || current.base.page.title === response.page.title)
         && JSON.stringify(current.base.page.content) === JSON.stringify(response.page.content);
-      return { userId: owner.id, base: response, local: response, revision: sameText ? current.revision : crypto.randomUUID(), writer: sameText ? current.writer : '', isNew: false, pending: false };
+      return { userId: owner.id, base: response, local: response, revision: sameText ? current.revision : newId(), writer: sameText ? current.writer : '', isNew: false, pending: false };
     });
     return localResponse(note!);
   } catch (error) { if (isApiError(error, 401)) throw error; storageError(error); return response; }
@@ -225,7 +233,7 @@ async function treeWithDrafts(nodes: PageNode[]): Promise<PageNode[]> {
 export async function createLocalNote(input: { title?: string; parentId?: string | null; kind?: 'page' | 'database'; icon?: string | null }): Promise<LocalPageResponse> {
   if (!user) throw new Error('請先登入後再使用離線筆記。');
   if (input.kind === 'database' || input.icon) throw new Error('新增資料庫或設定圖示需要連線。');
-  const id = crypto.randomUUID(), at = Date.now();
+  const id = newId(), at = Date.now();
   const parent = input.parentId ? await offlineNote(input.parentId) : undefined;
   if (input.parentId && (!parent || parent.local.page.kind !== 'page')) throw new Error('請先連線下載上層筆記。');
   // The server would refuse it, and the note would wait on this device for ever.
@@ -234,7 +242,7 @@ export async function createLocalNote(input: { title?: string; parentId?: string
     page: { id, parentId: input.parentId ?? null, kind: 'page', databaseId: null, title: input.title ?? '', icon: null, coverUrl: null, coverPosition: 50, fullWidth: false, content: [], version: 0, isFavorite: false, trashedAt: null, createdAt: at, updatedAt: at },
     breadcrumbs: [...(parent?.local.breadcrumbs ?? []), { id, title: input.title ?? '', icon: null, kind: 'page' }],
   };
-  const note: OfflineNote = { userId: user.id, base: response, local: response, revision: crypto.randomUUID(), writer, isNew: true, pending: true };
+  const note: OfflineNote = { userId: user.id, base: response, local: response, revision: newId(), writer, isNew: true, pending: true };
   await updateLocal<OfflineNote>(pageKey(user.id, id), () => note);
   setSyncStatus({ ...syncStatus, phase: 'pending' });
   void syncNotes();
@@ -256,7 +264,7 @@ export async function createLocalRow(databaseId: string, rowId: string, title: s
     // A row added to a shared database is reached the same way as the database itself.
     ...(database?.local.access ? { access: database.local.access } : {}),
   };
-  await updateLocal<OfflineNote>(pageKey(owner.id, rowId), current => current ?? { userId: owner.id, base: response, local: response, revision: crypto.randomUUID(), writer: '', isNew: false, pending: false, localOnly: true });
+  await updateLocal<OfflineNote>(pageKey(owner.id, rowId), current => current ?? { userId: owner.id, base: response, local: response, revision: newId(), writer: '', isNew: false, pending: false, localOnly: true });
 }
 
 /** The row was never created after all (the server refused it, or nothing could be stored): drop its untouched local page. */
@@ -282,7 +290,7 @@ async function editNote(id: string, change: { content?: unknown[]; title?: strin
     if (!current) throw new Error('此筆記尚未保存至本機，請先連線下載。');
     if (!hasDraft(current.local.page.kind) || (change.title !== undefined && current.local.page.kind !== 'page')) throw new Error('這個頁面的此項修改無法保存為本機草稿。');
     if (current.writer !== writer && current.revision !== expectedRevision) throw new ApiError(409, 'version_conflict', '另一個分頁已修改此裝置的草稿，請先重新載入。', { current: head(current), localConflict: true });
-    return { ...current, local: { ...current.local, page: { ...current.local.page, ...change, updatedAt: Date.now() } }, revision: crypto.randomUUID(), writer, pending: true };
+    return { ...current, local: { ...current.local, page: { ...current.local.page, ...change, updatedAt: Date.now() } }, revision: newId(), writer, pending: true };
   });
   setSyncStatus({ ...syncStatus, phase: 'pending' });
   void syncNotes();
@@ -295,29 +303,61 @@ export async function saveLocalTitle(id: string, title: string, revision?: strin
 
 export const isLocalWriter = (note: OfflineNote) => note.writer === writer;
 
-/** `waitingFiles`: addresses of attachments still on this device only. A note that refers to one is not sent before it. */
-async function sendNote(owner: UserDto, id: string, waitingFiles: string[] = []): Promise<void> {
+/** Whether the text shows one of these attachments, which are still on this device only (waiting, or refused by the server). */
+function showsFile(content: unknown, waiting: PendingUpload[]): boolean {
+  if (!waiting.length) return false;
+  const text = JSON.stringify(content);
+  return waiting.some(item => text.includes(item.url));
+}
+
+/**
+ * A note that shows an attachment the server does not have yet is not sent before it. Whether it does is decided
+ * in the same step of the device store that fixes what is sent: a file is listed there as waiting before its
+ * address is given to the editor, so a text that shows it always finds it listed, whichever tab added it and
+ * however far the sync had got. Nothing that was fixed is ever taken back, so another tab that reads it may send it
+ * as well (the server carries out an operation once).
+ */
+async function sendNote(owner: UserDto, id: string): Promise<void> {
   const key = pageKey(owner.id, id);
   let note = await readLocal<OfflineNote>(key);
   if (!note?.pending || note.problem || note.localOnly || user?.id !== owner.id) return;
-  if (waitingFiles.length) { const text = JSON.stringify(note.local.page.content); if (waitingFiles.some(url => text.includes(url))) return; }
+  // A first look, to leave a note that has to wait untouched; the decision is made below.
+  const waitingNow = await pendingUploads(owner.id);
+  if (showsFile(note.local.page.content, waitingNow) && (!note.sending || showsFile(note.sending.input.content, waitingNow))) return;
+  if (user?.id !== owner.id) return;
   if (note.isNew && note.local.page.parentId) {
     const parent = await readLocal<OfflineNote>(pageKey(owner.id, note.local.page.parentId));
     if (parent?.isNew) {
-      await sendNote(owner, parent.local.page.id, waitingFiles);
+      await sendNote(owner, parent.local.page.id);
       if ((await readLocal<OfflineNote>(pageKey(owner.id, parent.local.page.id)))?.isNew) return;
     }
   }
-  note = await updateLocal<OfflineNote>(key, current => {
-    if (!current?.pending || current.problem || current.localOnly || current.sending) return current;
+  const decided = { go: false };
+  note = await updateLocalWith<OfflineNote, PendingUpload>(key, uploadPrefix(owner.id), (current, waiting) => {
+    decided.go = false;
+    if (!current?.pending || current.problem || current.localOnly) return current;
+    if (current.sending) {
+      // Fixed before (a repeat, or the user's explicit overwrite): it goes exactly as it was.
+      if (!showsFile(current.sending.input.content, waiting)) { decided.go = true; return current; }
+      // It shows a file that still waits. While the draft shows one too, nothing could be sent anyway: it waits.
+      // Once the draft no longer does (the file was taken out of the text), sending the old text is wrong, and so
+      // is changing or dropping an operation that may have reached the server or may be sent by another tab. The
+      // user decides, as with any conflict; "overwrite" then fixes a new operation from the draft and the page as
+      // it is on the server by then.
+      if (showsFile(current.local.page.content, waiting)) return current;
+      return { ...current, problem: '先前準備送出的內容含有尚未上傳的附件，而這裡的內容已經不同。請選擇以這裡的內容覆蓋，或載入線上版本。',
+        conflict: { version: current.base.page.version, title: current.base.page.title, updatedAt: current.base.page.updatedAt } };
+    }
+    if (showsFile(current.local.page.content, waiting)) return current;
+    decided.go = true;
     return { ...current, sending: { revision: current.revision, input: {
-      operationId: crypto.randomUUID(), baseVersion: current.isNew ? null : current.base.page.version,
-      baseTitle: current.base.page.title, title: current.local.page.title, content: current.local.page.content,
-      parentId: current.local.page.parentId, overwrite: false, repeatAware: true,
+      operationId: newId(), baseVersion: current.isNew ? null : current.base.page.version, baseTitle: current.base.page.title,
+      title: current.local.page.title, content: current.local.page.content, parentId: current.local.page.parentId, overwrite: false, repeatAware: true,
     } } };
   });
   const sent = note?.sending;
-  if (!sent || user?.id !== owner.id) return;
+  // Never send one account's draft under another account's session.
+  if (!decided.go || !sent || user?.id !== owner.id) return;
   try {
     const { applied, ...response } = await api<PageResponse & { applied?: SyncNoteResult['applied'] }>('PUT', `/api/offline/pages/${id}`, { json: sent.input, headers: { 'if-match': `"${sent.input.baseVersion ?? 0}"` } });
     // The answer to a repeat (the first answer was lost) shows the page as it is now. When somebody else has saved
@@ -330,7 +370,7 @@ async function sendNote(owner: UserDto, id: string, waitingFiles: string[] = [])
       if (pending && moved) return { ...current, isNew: false, sending: undefined, problem: '此頁面已在其他地方更新。', conflict: { version: response.page.version, title: response.page.title, updatedAt: response.page.updatedAt } };
       // Nothing written since: the newer page replaces the copy here, and an open editor is told to load it
       // (a new revision that is not this tab's own), so it cannot go on typing over a text it no longer shows.
-      if (moved) return { ...current, base: response, local: response, revision: crypto.randomUUID(), writer: '', pending: false, isNew: false, sending: undefined, problem: undefined, conflict: undefined };
+      if (moved) return { ...current, base: response, local: response, revision: newId(), writer: '', pending: false, isNew: false, sending: undefined, problem: undefined, conflict: undefined };
       return { ...current, base: response, local: pending ? { ...response, page: { ...response.page, content: current.local.page.content, title: current.local.page.title } } : response, pending, isNew: false, sending: undefined, problem: undefined, conflict: undefined };
     });
   } catch (error) {
@@ -495,22 +535,24 @@ export function syncNotes({ force = false }: { force?: boolean } = {}): Promise<
     const owner = user;
     if (!owner || !canReachServer() || Date.now() < retryAt) return;
     const pending = (await offlineNotes()).some(note => note.pending && !note.problem && !note.localOnly)
-      || (await queuedOps(owner.id)).some(item => !item.problem) || (await pendingUploads(owner.id)).some(item => !item.problem);
+      || (await queuedOps(owner.id)).some(item => !item.problem) || (await sendableUploads(owner.id)).length > 0;
     if (!pending && Date.now() < nextDownloadAt) return;
     setSyncStatus({ ...syncStatus, phase: 'syncing', error: undefined });
     try {
       // Never replay one account's local queue under another account's cookies. CSRF is freshly fetched, not persisted.
       if (!await verifySyncSession() || user?.id !== owner.id || !canReachServer()) return;
-      // Files first, so no other device ever sees a note that refers to a file the server does not have. Then the
-      // changes to databases (a new row must exist before its page is synced), the notes, and once more the queue:
-      // a discussion on a page created offline can only be sent after that page.
-      await sendUploads(owner.id);
-      // Whatever is still waiting was refused by the server; the notes that show it stay here until that is settled.
-      const waitingFiles = (await pendingUploads(owner.id)).map(item => item.url);
+      // The changes to databases first: a row added here must exist on the server before its page is synced, and
+      // before a file added to it in somebody else's database is accepted (the server checks the row; while the row
+      // is still waiting, so is the file). Then the files, before any note, so no other device ever sees a note that
+      // refers to a file the server does not have. Then the notes, and once more the queue: a discussion on a page
+      // created offline can only be sent after it.
       await sendOps(owner.id);
+      await sendUploads(owner.id);
+      // Whatever is still waiting was refused by the server, waits for its row, or was added since: the notes
+      // that show it stay here until it has been uploaded.
       for (const note of await offlineNotes()) {
         if (user?.id !== owner.id) break;
-        await sendNote(owner, note.local.page.id, waitingFiles);
+        await sendNote(owner, note.local.page.id);
       }
       if (user?.id !== owner.id) return;
       await sendOps(owner.id);
@@ -550,14 +592,41 @@ export async function resolveLocalNote(id: string, choice: 'reload' | 'overwrite
     if (!current) throw new Error('找不到本機草稿。');
     if (current.revision !== original?.revision) throw new ApiError(409, 'version_conflict', '處理衝突期間，另一個分頁已更新草稿，請重新檢查。');
     if (fresh.page.trashedAt !== null) throw new ApiError(404, 'not_found', '此筆記已在線上刪除，請先匯出本機草稿。');
-    if (choice === 'reload') return { ...current, base: fresh, local: fresh, revision: crypto.randomUUID(), writer, pending: false, isNew: false, sending: undefined, problem: undefined, conflict: undefined, removed: undefined };
-    const revision = crypto.randomUUID();
+    if (choice === 'reload') return { ...current, base: fresh, local: fresh, revision: newId(), writer, pending: false, isNew: false, sending: undefined, problem: undefined, conflict: undefined, removed: undefined };
+    const revision = newId();
     const draft = content ?? current.local.page.content;
+    // The overwrite is fixed here and now, with the version it overwrites; the sync holds it back while it shows
+    // a file that is not on the server yet.
     return { ...current, base: fresh, local: { ...fresh, page: { ...fresh.page, title: current.local.page.title, content: draft } }, revision, writer, pending: true, isNew: false, problem: undefined, conflict: undefined, removed: undefined,
-      sending: { revision, input: { operationId: crypto.randomUUID(), baseVersion: fresh.page.version, baseTitle: fresh.page.title, parentId: fresh.page.parentId, title: current.local.page.title, content: draft, overwrite: true, repeatAware: true } } };
+      sending: { revision, input: { operationId: newId(), baseVersion: fresh.page.version, baseTitle: fresh.page.title, parentId: fresh.page.parentId, title: current.local.page.title, content: draft, overwrite: true, repeatAware: true } } };
   });
   void syncNotes();
   return localResponse(note!);
+}
+
+/**
+ * The server replaced the page's text at this device's own request (a history restore). Its version becomes the
+ * copy kept here, unless a draft is waiting on this device (written in another tab meanwhile): that one is never
+ * thrown away, and meets the newer version as a conflict when it is synced. The check and the replacement are one
+ * step in the device store. An open editor is told through the store, as for any text that arrives from elsewhere:
+ * it loads the new text, or reports a conflict when it holds changes of its own.
+ * 'absent': this device keeps no copy of the page.
+ */
+export async function adoptServerVersion(id: string): Promise<'adopted' | 'kept' | 'absent'> {
+  const owner = user;
+  if (!owner || !await offlineNote(id).catch(() => undefined)) return 'absent';
+  const fresh = await api<PageResponse>('GET', `/api/pages/${id}`);
+  let outcome: 'adopted' | 'kept' | 'absent' = 'absent';
+  await updateLocal<OfflineNote>(pageKey(owner.id, id), current => {
+    if (!current || user?.id !== owner.id) return current;
+    if (current.pending || fresh.page.trashedAt !== null) { outcome = 'kept'; return current; }
+    outcome = 'adopted';
+    // Already brought in by a sync that ran in between, or something newer than what was fetched here: nothing
+    // to replace, no reason to disturb the editor, and the copy on this device never goes back to an older version.
+    if (current.base.page.version >= fresh.page.version) return current;
+    return { ...current, base: fresh, local: fresh, revision: newId(), writer: '', pending: false, isNew: false, sending: undefined, problem: undefined, conflict: undefined, removed: undefined };
+  });
+  return outcome;
 }
 
 export async function downloadNotes(): Promise<void> {

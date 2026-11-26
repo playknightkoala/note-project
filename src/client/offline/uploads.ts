@@ -1,14 +1,28 @@
 import { extensionFor, fileHeaders, fileUrlFor, sanitizeName, SNIFF_BYTES, sniffMime } from '@shared/files';
 import { api } from '../api/client.ts';
 import type { UploadedFile } from '../api/files.ts';
-import { fileCache, offlineOwner, uploadCache, uploadKey } from './owner.ts';
-import { mustStop } from './outbox.ts';
+import { fileCache, offlineOwner, uploadCache, uploadKey, uploadPrefix } from './owner.ts';
+import { attachmentLimitBytes } from './attachments.ts';
+import { mustStop, onlyHere } from './outbox.ts';
 import { listLocal, updateLocal } from './storage.ts';
 
 /** A file added while the server could not be reached. Its bytes wait in the browser's cache storage. */
 export interface PendingUpload { id: string; userId: string; name: string; type: string; size: number; url: string; createdAt: number; problem?: string; /** The shared page it was added to, when that is somebody else's. */ pageId?: string }
 
-export const pendingUploads = async (userId = offlineOwner()): Promise<PendingUpload[]> => userId ? listLocal<PendingUpload>(`upload:${userId}:`) : [];
+export const pendingUploads = async (userId = offlineOwner()): Promise<PendingUpload[]> => userId ? listLocal<PendingUpload>(uploadPrefix(userId)) : [];
+/**
+ * A file added to a row that this device made in somebody else's database: the server checks the row, so the file
+ * waits until the row exists there. It is not a failure, and it goes out by itself once the row has been created.
+ */
+const waitsForRow = async (userId: string, item: Pick<PendingUpload, 'pageId'>): Promise<boolean> => !!item.pageId && await onlyHere(userId, item.pageId);
+/** Whether a file for this page has to be kept on the device for now, even with the server in reach. */
+export const mustWaitForPage = async (pageId: string | undefined): Promise<boolean> => { const owner = offlineOwner(); return !!owner && await waitsForRow(owner, { pageId }); };
+/** The waiting files a sync can send now. */
+export async function sendableUploads(userId: string): Promise<PendingUpload[]> {
+  const ready: PendingUpload[] = [];
+  for (const item of await pendingUploads(userId)) if (!item.problem && !await waitsForRow(userId, item)) ready.push(item);
+  return ready;
+}
 
 /**
  * Keeps a file on this device under the address it will have on the server, so the note can refer to it right away.
@@ -42,28 +56,39 @@ export async function queueUpload(file: File, id: string, maxBytes?: number, pag
  * harmless. Afterwards the bytes move to the ordinary attachment cache and stay readable offline.
  */
 export async function sendUploads(userId: string): Promise<void> {
-  for (const item of await pendingUploads(userId)) {
-    if (offlineOwner() !== userId) return;
-    if (item.problem) continue;
-    const key = uploadKey(userId, item.id);
-    const fail = (problem: string) => updateLocal<PendingUpload>(key, current => current && { ...current, problem });
-    if (!('caches' in window)) { await fail('此瀏覽器無法讀取待上傳的附件。'); continue; }
-    const cache = await caches.open(uploadCache(userId));
-    const stored = await cache.match(item.url);
-    if (!stored) { await fail('此裝置上的附件內容已遺失（可能已被瀏覽器清除），無法上傳。'); continue; }
-    const form = new FormData();
-    form.append('file', new File([await stored.clone().blob()], item.name, { type: item.type }));
-    form.append('id', item.id);
-    if (item.pageId) form.append('pageId', item.pageId);
-    try { await api<UploadedFile>('POST', '/api/files', { form }); }
-    catch (error) {
-      if (mustStop(error)) throw error;
-      await fail(error instanceof Error ? error.message : '上傳失敗');
-      continue;
+  let moved = false;
+  try {
+    for (const item of await sendableUploads(userId)) {
+      if (offlineOwner() !== userId) return;
+      const key = uploadKey(userId, item.id);
+      const fail = (problem: string) => updateLocal<PendingUpload>(key, current => current && { ...current, problem });
+      if (!('caches' in window)) { await fail('此瀏覽器無法讀取待上傳的附件。'); continue; }
+      const cache = await caches.open(uploadCache(userId));
+      const stored = await cache.match(item.url);
+      if (!stored) { await fail('此裝置上的附件內容已遺失（可能已被瀏覽器清除），無法上傳。'); continue; }
+      const form = new FormData();
+      form.append('file', new File([await stored.clone().blob()], item.name, { type: item.type }));
+      form.append('id', item.id);
+      if (item.pageId) form.append('pageId', item.pageId);
+      try { await api<UploadedFile>('POST', '/api/files', { form }); }
+      catch (error) {
+        if (mustStop(error)) throw error;
+        await fail(error instanceof Error ? error.message : '上傳失敗');
+        continue;
+      }
+      // A file larger than the whole attachment space allowed on this device is not kept, as with a download:
+      // keeping it would push out everything else before being dropped itself.
+      if (item.size <= await attachmentLimitBytes(userId)) {
+        await (await caches.open(fileCache(userId))).put(item.url, stored).catch(() => {});
+        moved = true;
+      }
+      await cache.delete(item.url).catch(() => {});
+      await updateLocal<PendingUpload>(key, () => undefined);
     }
-    await (await caches.open(fileCache(userId))).put(item.url, stored).catch(() => {});
-    await cache.delete(item.url).catch(() => {});
-    await updateLocal<PendingUpload>(key, () => undefined);
+  } finally {
+    // What was just moved counts towards the attachment space the user allows on this device, like any download:
+    // the offline interface drops the oldest kept files beyond it. Best effort: it must never fail the sync.
+    if (moved) try { navigator.serviceWorker?.controller?.postMessage({ type: 'notes:trim-files' }); } catch { /* trimmed at the next download */ }
   }
 }
 

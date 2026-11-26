@@ -5,7 +5,8 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useBlocker, useParams } from 'react-router';
 import { pageKeys, usePage, usePatchPage } from '../../api/pages.ts';
 import { errorText, isApiError } from '../../api/client.ts';
-import { hasDraft, loadNote, offlineNote, syncNotes } from '../../offline/notes.ts';
+import { adoptServerVersion, loadNote } from '../../offline/notes.ts';
+import { versionToRestoreOn } from './restoreBase.ts';
 import type { LocalPageResponse } from '../../offline/notes.ts';
 import { exportPageDraft } from '../../offline/exportDraft.ts';
 import { useUiState } from '../../app/uiState.tsx';
@@ -107,24 +108,26 @@ function PageView({ initial, peek = false }: { initial: LocalPageResponse; peek?
     } finally { replacingRef.current = false; stop(); }
   }, []);
 
+  const loadLatest = useRef<(revision?: number) => void>(() => {});
   const autosave = useAutosave({
     pageId, initialVersion: initial.page.version, initialLocalRevision: initial.localRevision,
     getContent: force => !editorRef.current || (composingRef.current() && !force) ? null : editorRef.current.document as unknown[],
-    onRemoteUpdate: () => {
-      const revision = localRevisionRef.current;
-      setRefreshError(null);
-      void queryClient.fetchQuery({ queryKey: pageKeys.page(pageId), staleTime: 0, networkMode: 'always', queryFn: () => loadNote(pageId) })
-        .then(fresh => {
-          // Typing while this GET was pending must keep the local draft and its old If-Match.
-          if (localRevisionRef.current !== revision) return;
-          replaceContent(fresh.page.content);
-          sentTitle.current = fresh.page.title;
-          setMeta({ title: fresh.page.title, icon: fresh.page.icon, fullWidth: fresh.page.fullWidth, coverUrl: fresh.page.coverUrl, coverPosition: fresh.page.coverPosition });
-          setEditedAt(fresh.page.updatedAt);
-          autosave.setVersion(fresh.page.version, fresh.localRevision);
-        }).catch(error => setRefreshError(errorText(error)));
-    },
+    onRemoteUpdate: () => loadLatest.current(),
   });
+  /** Loads the page again, unless the editor changed since `revision` (by default: since this was called). */
+  loadLatest.current = (revision = localRevisionRef.current) => {
+    setRefreshError(null);
+    void queryClient.fetchQuery({ queryKey: pageKeys.page(pageId), staleTime: 0, networkMode: 'always', queryFn: () => loadNote(pageId) })
+      .then(fresh => {
+        // Typing while this GET was pending must keep the local draft and its old If-Match.
+        if (localRevisionRef.current !== revision) return;
+        replaceContent(fresh.page.content);
+        sentTitle.current = fresh.page.title;
+        setMeta({ title: fresh.page.title, icon: fresh.page.icon, fullWidth: fresh.page.fullWidth, coverUrl: fresh.page.coverUrl, coverPosition: fresh.page.coverPosition });
+        setEditedAt(fresh.page.updatedAt);
+        autosave.setVersion(fresh.page.version, fresh.localRevision);
+      }).catch(error => setRefreshError(errorText(error)));
+  };
 
   const onReady = useCallback((editor: AppEditor, isComposing: () => boolean) => { editorRef.current = editor; composingRef.current = isComposing; }, []);
   const onChange = useCallback(() => {
@@ -140,18 +143,32 @@ function PageView({ initial, peek = false }: { initial: LocalPageResponse; peek?
   const onComposingChange = useCallback(() => { if (replacingRef.current) return; localRevisionRef.current++; autosave.markComposing(); }, [autosave]);
   const [actionError, setActionError] = useState<string | null>(null);
 
-  /** Everything typed here must be on the server before a history restore replaces the content. */
-  const prepareRestore = useCallback(async (): Promise<number> => {
-    await autosave.settle();
-    if (hasDraft(initial.page.kind)) {
-      await syncNotes({ force: true });
-      const note = await offlineNote(pageId).catch(() => undefined);
-      if (note?.pending) throw new Error('這裡還有尚未同步到伺服器的修改。請先完成同步或處理衝突，再還原歷史版本。');
-      if (note) return note.base.page.version;
-    }
-    if (autosave.hasUnsaved()) throw new Error('這裡還有尚未儲存的修改，請先完成儲存再還原歷史版本。');
-    return autosave.version();
+  const editsAtRestore = useRef(0);
+  const prepareRestore = useCallback(async () => {
+    const version = await versionToRestoreOn(autosave, initial.page.kind, pageId);
+    editsAtRestore.current = localRevisionRef.current;
+    return version;
   }, [autosave, initial.page.kind, pageId]);
+  /**
+   * The restored version replaces what is shown, unless something was written here while the restore was under way:
+   * text typed since it was prepared, or a draft another tab stored on this device. That is never loaded over; the
+   * next save meets the newer version on the server and the user chooses between the two, as with any conflict.
+   */
+  const afterRestore = useCallback(async () => {
+    if (!editorRef.current) { window.location.reload(); return; }
+    const edits = editsAtRestore.current;
+    const typed = () => localRevisionRef.current !== edits || autosave.hasUnsaved();
+    const keep = () => {
+      setActionError('已還原歷史版本，但還原期間這裡又有新的修改，所以沒有載入還原後的內容。這些修改仍在此裝置上；儲存時會提示版本衝突，請選擇載入還原後的版本，或以這裡的內容覆蓋。');
+      if (autosave.hasUnsaved()) void autosave.saveNow();
+    };
+    if (typed()) { keep(); return; }
+    // With a copy on this device the editor follows the device store, which tells it about the new text itself
+    // and reports a conflict if something was typed in between.
+    const outcome = await adoptServerVersion(pageId).catch(() => 'kept' as const);
+    if (outcome === 'kept' || typed()) { keep(); return; }
+    if (outcome === 'absent') loadLatest.current(edits);
+  }, [autosave, pageId]);
   const saveTitle = useCallback((title: string) => {
     const baseTitle = sentTitle.current; sentTitle.current = title;
     localRevisionRef.current++; touch(); setMeta(m => ({ ...m, title })); patch.mutate({ id: pageId, title, baseTitle, localRevision: autosave.localRevision() });
@@ -185,7 +202,7 @@ function PageView({ initial, peek = false }: { initial: LocalPageResponse; peek?
       smallText={smallText} onToggleSmallText={toggleSmallText} onOpenHistory={() => setHistoryOpen(true)} access={access} editedAt={hasText ? editedAt : undefined} {...(hasText ? { onFind: openFind } : {})} />}
     {hasText && <FindBar ref={findRef} editor={getEditor} canReplace={!readOnly} />}
     {!access && <HistoryDrawer pageId={pageId} opened={historyOpen} onClose={() => setHistoryOpen(false)} currentVersion={autosave.state.version}
-      prepare={prepareRestore} onRestored={() => { if (editorRef.current) void autosave.resolveConflict('reload'); else window.location.reload(); }} />}
+      prepare={prepareRestore} onRestored={() => { void afterRestore(); }} />}
     {access && <Text size="xs" c="dimmed" className="shared-banner" role="status">{access.owner.name} 與你共用這個頁面 · {roleLabels[access.role]}{readOnly ? '：可以閱讀、留言與加表情' : initial.page.kind === 'database' ? '：可以修改資料列，也可以留言' : '：可以修改內文與標題，也可以留言'}</Text>}
     {autosave.state.status === 'conflict' && <Alert color="red" variant="light" className="conflict-bar" title="此頁面已在其他地方更新">
       <Group gap="sm">

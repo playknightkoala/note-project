@@ -268,8 +268,16 @@ export function changeRow(db: Db, userId: string, id: string, change: { title?: 
     return getRow(db, userId, id);
   });
 }
+/**
+ * Every column of a row page except its text: a table or a device's copy of the database needs the rows, not what
+ * is written inside each of them, and a database of long notes must not be read into memory to show one screen.
+ */
+const ROW_COLUMNS = `rid, id, user_id, parent_id, kind, database_id, position, title, icon, cover_file_id, cover_preset, cover_position,
+  '[]' AS content, '' AS content_text, version, is_favorite, favorite_position, full_width, trashed_at, trash_root_id, import_key,
+  created_at, updated_at, content_by, schema_version, attributes_version`;
+/** The rows of a database in stored order, without their text (`content` is always empty here). */
 function allRows(db: Db, userId: string, id: string): DatabasePage[] {
-  const pages = db.all<DatabasePage>("SELECT * FROM pages WHERE database_id = ? AND user_id = ? AND kind = 'row' AND trashed_at IS NULL ORDER BY position, id LIMIT 5001", id, userId);
+  const pages = db.all<DatabasePage>(`SELECT ${ROW_COLUMNS} FROM pages WHERE database_id = ? AND user_id = ? AND kind = 'row' AND trashed_at IS NULL ORDER BY position, id LIMIT 5001`, id, userId);
   if (pages.length > MAX_ROWS) throw new AppError('conflict', '資料庫超過 5,000 列，請先整理資料。');
   return pages;
 }
@@ -299,6 +307,6 @@ export function snapshot(db: Db, userId: string, id: string): { stamp: string; m
     const meta = getDatabase(db, userId, id);
     const values = readValues(db, userId, id);
     const pages = allRows(db, userId, id);
-    return { stamp: databaseStamps(db, userId, id)[0]!.stamp, meta, rows: pages.map(page => rowDto(page, values.get(page.id) ?? {})), pages: pages.map(page => ({ ...page, content: '[]' })) };
+    return { stamp: databaseStamps(db, userId, id)[0]!.stamp, meta, rows: pages.map(page => rowDto(page, values.get(page.id) ?? {})), pages };
   });
 }

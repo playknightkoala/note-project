@@ -4,6 +4,12 @@ export const DEFAULT_CACHE_MB = 500;
 export const MAX_CACHE_MB = 10_000;
 interface CacheSettings { limitBytes: number }
 
+/** The attachment space the user allows on this device, read the way the offline interface reads it. */
+export async function attachmentLimitBytes(userId: string): Promise<number> {
+  const value = (await readLocal<CacheSettings>(`attachments:${userId}`).catch(() => undefined))?.limitBytes;
+  return Number.isSafeInteger(value) && value! >= 100 * 1024 * 1024 && value! <= MAX_CACHE_MB * 1024 * 1024 ? value! : DEFAULT_CACHE_MB * 1024 * 1024;
+}
+
 export async function attachmentCacheInfo() {
   const owner = await readLocal<{ id: string }>('user');
   if (!owner) throw new Error('請先登入。');

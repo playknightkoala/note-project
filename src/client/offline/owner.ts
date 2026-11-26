@@ -14,6 +14,7 @@ export const annotationsKey = (userId: string, pageId: string): string => `annot
 /** What other accounts share with this one, as last listed by the server. */
 export const sharedKey = (userId: string): string => `shared:${userId}`;
 export const opPrefix = (userId: string): string => `op:${userId}:`;
-export const uploadKey = (userId: string, id: string): string => `upload:${userId}:${id}`;
+export const uploadPrefix = (userId: string): string => `upload:${userId}:`;
+export const uploadKey = (userId: string, id: string): string => `${uploadPrefix(userId)}${id}`;
 export const uploadCache = (userId: string): string => `notes-uploads-${userId}`;
 export const fileCache = (userId: string): string => `notes-files-${userId}`;

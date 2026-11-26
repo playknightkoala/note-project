@@ -16,6 +16,11 @@ export default tseslint.config(
     languageOptions: { globals: { ...globals.browser } },
   },
   {
+    // Browsers have no `crypto.randomUUID` on a plain-HTTP origin (a LAN address); `newId()` works everywhere.
+    files: ['src/client/**/*.{ts,tsx}', 'src/shared/**/*.ts'],
+    rules: { 'no-restricted-properties': ['error', { object: 'crypto', property: 'randomUUID', message: 'Use newId() from @shared/ids: crypto.randomUUID does not exist on plain-HTTP origins.' }] },
+  },
+  {
     rules: {
       '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
       '@typescript-eslint/consistent-type-imports': 'error',

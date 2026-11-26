@@ -12,7 +12,7 @@ export function TrashPage() {
   const remove = useDeleteTrashed();
   const empty = useEmptyTrash();
   const navigate = useNavigate();
-  const [confirm, setConfirm] = useState<{ id: string | null; title: string } | null>(null);
+  const [confirm, setConfirm] = useState<{ id: string | null; title: string; descendants?: number; alsoDeleted?: number } | null>(null);
   const items = trash.data ?? [];
   return <Container size="md" py="xl">
     <Group justify="space-between" mb="lg">
@@ -27,14 +27,15 @@ export function TrashPage() {
         <Table.Td>
           <Group gap="xs" justify="flex-end" wrap="nowrap">
             <Button size="compact-xs" variant="light" leftSection={<RotateCcw size={12} />} onClick={() => restore.mutate(item.id, { onSuccess: () => navigate(`/p/${item.id}`) })}>還原</Button>
-            <Button size="compact-xs" variant="light" color="red" onClick={() => setConfirm({ id: item.id, title: item.title || '無標題' })}>永久刪除</Button>
+            <Button size="compact-xs" variant="light" color="red" onClick={() => setConfirm({ id: item.id, title: item.title || '無標題', descendants: item.descendantCount, alsoDeleted: item.alsoDeletedCount })}>永久刪除</Button>
           </Group>
         </Table.Td>
       </Table.Tr>)}</Table.Tbody>
     </Table>}
     <Modal opened={confirm !== null} onClose={() => setConfirm(null)} title="永久刪除" centered>
       <Stack gap="md">
-        <Text size="sm">確定要永久刪除「{confirm?.title}」嗎？這個動作無法復原，頁面內容與歷史都會消失。</Text>
+        <Text size="sm">確定要永久刪除「{confirm?.title}」{confirm?.descendants ? `與它的 ${confirm.descendants} 個子頁面` : ''}嗎？這個動作無法復原，頁面內容與歷史都會消失。</Text>
+        {!!confirm?.alsoDeleted && <Text size="sm" c="red">垃圾桶裡另外列出的 {confirm.alsoDeleted} 筆資料列屬於會被刪除的資料庫，也會連同它們的子頁面一併永久刪除。</Text>}
         <Group justify="flex-end">
           <Button variant="default" onClick={() => setConfirm(null)}>取消</Button>
           <Button color="red" loading={remove.isPending || empty.isPending} onClick={() => {

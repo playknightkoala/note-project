@@ -14,6 +14,10 @@ import type { PageRow } from './pages.ts';
 
 interface Step { id: string; user_id: string; parent_id: string | null; kind: PageKind; title: string; icon: string | null; trashed_at: number | null }
 const STEP = 'id, user_id, parent_id, kind, title, icon, trashed_at';
+/**
+ * How many levels below a shared page a share reaches. The rows of a database on the last level are reached as
+ * well: a database is never shown without its rows. Listing (`SUBTREE`) and checking (`ancestry`) use the same bound.
+ */
 const MAX_DEPTH = 64;
 
 export interface Access {
@@ -31,11 +35,11 @@ export type Need = 'view' | 'comment' | 'edit';
 const notFound = () => new AppError('not_found', '找不到頁面。');
 const rank = (role: MemberRole): number => role === 'editor' ? 2 : 1;
 
-/** The page and its ancestors, nearest first. */
+/** The page and its ancestors, nearest first: the page itself and up to `MAX_DEPTH` levels above it (one more for a row). */
 function ancestry(db: Db, pageId: string): Step[] {
   const steps: Step[] = [], seen = new Set<string>();
   let next: string | null = pageId;
-  while (next && !seen.has(next) && steps.length < MAX_DEPTH) {
+  while (next && !seen.has(next) && steps.length <= MAX_DEPTH + (steps[0]?.kind === 'row' ? 1 : 0)) {
     seen.add(next);
     const step: Step | undefined = db.get<Step>(`SELECT ${STEP} FROM pages WHERE id = ?`, next);
     if (!step) break;
@@ -125,7 +129,7 @@ const SUBTREE = `WITH RECURSIVE sub(id, depth, blocked) AS (
     SELECT id, 0, 0 FROM pages WHERE id = ? AND user_id = ? AND trashed_at IS NULL
     UNION ALL
     SELECT p.id, sub.depth + 1, sub.blocked OR p.kind = 'database' FROM pages p JOIN sub ON p.parent_id = sub.id
-    WHERE p.trashed_at IS NULL AND p.user_id = ? AND sub.depth < ${MAX_DEPTH})`;
+    WHERE p.trashed_at IS NULL AND p.user_id = ? AND (sub.depth < ${MAX_DEPTH} OR (sub.depth = ${MAX_DEPTH} AND p.kind = 'row')))`;
 
 export interface ScopedPage { id: string; parent_id: string | null; kind: PageKind; title: string; icon: string | null; position: number; updated_at: number }
 /** Every page a share reaches, the shared page first. Must agree with `scopeCovers`. */

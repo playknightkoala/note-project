@@ -39,20 +39,36 @@ export async function readLocal<T>(key: string): Promise<T | undefined> {
 }
 
 /** Read/modify/write in one transaction, including cross-tab compare-and-swap. */
-export async function updateLocal<T>(key: string, update: (value: T | undefined) => T | undefined): Promise<T | undefined> {
+export function updateLocal<T>(key: string, update: (value: T | undefined) => T | undefined): Promise<T | undefined> {
+  return change<T, never>(key, undefined, value => update(value));
+}
+
+/**
+ * The same, with every record under `prefix` read in the same transaction: what `update` decides from them holds
+ * at the moment it is written (nothing can be added to or taken from them in between, in this tab or another).
+ */
+export function updateLocalWith<T, R>(key: string, prefix: string, update: (value: T | undefined, related: R[]) => T | undefined): Promise<T | undefined> {
+  return change<T, R>(key, prefix, update);
+}
+
+async function change<T, R>(key: string, prefix: string | undefined, update: (value: T | undefined, related: R[]) => T | undefined): Promise<T | undefined> {
   const db = await open();
   return new Promise((resolve, reject) => {
     const tx = db.transaction('records', 'readwrite');
     const store = tx.objectStore('records');
     let result: T | undefined;
     let failure: unknown;
-    const request = store.get(key);
-    request.onsuccess = () => {
-      try {
-        result = update(request.result as T | undefined);
-        if (result === undefined) store.delete(key); else store.put(result, key);
-      } catch (error) { failure = error; tx.abort(); }
+    const apply = (related: R[]) => {
+      const request = store.get(key);
+      request.onsuccess = () => {
+        try {
+          result = update(request.result as T | undefined, related);
+          if (result === undefined) store.delete(key); else store.put(result, key);
+        } catch (error) { failure = error; tx.abort(); }
+      };
     };
+    if (prefix === undefined) apply([]);
+    else { const listed = store.getAll(IDBKeyRange.bound(prefix, `${prefix}\uffff`)); listed.onsuccess = () => apply(listed.result as R[]); }
     tx.oncomplete = () => { announceOfflineChange(); resolve(result); };
     tx.onabort = tx.onerror = () => reject(failure ?? new Error('無法保存至此裝置，可能儲存空間不足。請勿關閉尚未同步的筆記。'));
   });
