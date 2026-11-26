@@ -10,9 +10,10 @@ import { migration as offlineReceipts } from './migrations/0008_offline_receipts
 import { migration as shares } from './migrations/0009_shares.ts';
 import { migration as shareAccountLink } from './migrations/0010_share_account_link.ts';
 import { migration as shareSingleLink } from './migrations/0011_share_single_link.ts';
+import { migration as shareInvitations } from './migrations/0012_share_invitations.ts';
 
 export interface Migration { id: string; up: string }
-export const migrations: Migration[] = [init, coverPreset, searchContent, databaseVersions, annotations, databaseViews, offlineOperations, offlineReceipts, shares, shareAccountLink, shareSingleLink];
+export const migrations: Migration[] = [init, coverPreset, searchContent, databaseVersions, annotations, databaseViews, offlineOperations, offlineReceipts, shares, shareAccountLink, shareSingleLink, shareInvitations];
 
 /** Applies every migration whose id is not yet recorded, each in its own immediate transaction. Idempotent. */
 export function migrate(db: Db, list: Migration[] = migrations): string[] {

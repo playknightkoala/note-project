@@ -25,7 +25,7 @@ export function SharedPages() {
         {outgoing.map(share => <Table.Tr key={share.pageId}>
           <Table.Td><Anchor component={Link} to={`/p/${share.pageId}`} size="sm">{share.icon ? `${share.icon} ` : ''}{share.title || '無標題'}</Anchor></Table.Td>
           <Table.Td>{(share.kind === 'database' ? databaseScopeLabels : scopeLabels)[share.scope]}</Table.Td>
-          <Table.Td><Group gap={4}>{share.link && <Badge color="orange" variant="light">公開連結</Badge>}{share.accountRole && <Badge color="grape" variant="light">{accountLinkLabels[share.accountRole]}</Badge>}{share.members > 0 && <Badge color="blue" variant="light">{share.members} 位成員</Badge>}</Group></Table.Td>
+          <Table.Td><Group gap={4}>{share.link && <Badge color="orange" variant="light">公開連結</Badge>}{share.accountRole && <Badge color="grape" variant="light">{accountLinkLabels[share.accountRole]}</Badge>}{share.invitations > 0 && <Badge variant="light">{share.invitations} 份邀請待接受</Badge>}{share.members > 0 && <Badge color="blue" variant="light">{share.members} 位成員</Badge>}</Group></Table.Td>
           <Table.Td>{formatTime(share.updatedAt)}</Table.Td>
           <Table.Td><Group gap={2} wrap="nowrap" justify="flex-end">
             <Tooltip label="管理分享"><ActionIcon variant="subtle" color="gray" aria-label={`管理分享：${share.title || '無標題'}`} onClick={() => openShare({ id: share.pageId, kind: share.kind, title: share.title })}><Settings2 size={16} /></ActionIcon></Tooltip>

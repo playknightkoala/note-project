@@ -82,14 +82,21 @@ try {
     await dialog.getByLabel('Email').fill(who.email);
     await dialog.getByLabel('新成員的權限').click();
     await dialog.getByRole('option', { name: role, exact: true }).click();
-    await dialog.getByRole('button', { name: '加入' }).click();
+    await dialog.getByRole('button', { name: '送出邀請' }).click();
     await dialog.getByText(who.email).waitFor();
   }
   await dialog.getByLabel('Email').fill(`${randomUUID()}@example.test`);
-  await dialog.getByRole('button', { name: '加入' }).click();
+  await dialog.getByRole('button', { name: '送出邀請' }).click();
   await dialog.getByText(/找不到這個帳號/).waitFor();
   await dialog.getByRole('button', { name: '完成' }).click();
   await owner.page.getByRole('button', { name: '已分享' }).waitFor();
+  for (const who of [editor, viewer]) {
+    assert.equal(await who.status(`/api/pages/${note.id}`), 404);
+    await who.page.goto(origin);
+    await who.page.getByRole('button', { name: '共用邀請（1）' }).click();
+    await who.page.getByRole('dialog').getByRole('button', { name: '接受' }).click();
+    await who.page.getByText('目前沒有待處理的邀請。').waitFor();
+  }
   const state = await owner.get(`/api/pages/${note.id}/share`);
   assert.equal(state.share.scope, 'all');
   assert.deepEqual(state.share.members.map(member => [member.email, member.role]).sort(), [[editor.email, 'editor'], [viewer.email, 'viewer']].sort());

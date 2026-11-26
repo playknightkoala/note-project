@@ -6,7 +6,7 @@ import { useDatabaseSchema } from '../../api/databases.ts';
 import { errorText } from '../../api/client.ts';
 import { useUpdateGuard } from '../../updates/guards.ts';
 
-export function ColumnTotalsDialog({ meta, view, onClose, onSaved }: { meta: DatabaseDto; view: DatabaseView; onClose: () => void; onSaved: (from: number, to: number) => void }) {
+export function ColumnTotalsDialog({ meta, view, onClose }: { meta: DatabaseDto; view: DatabaseView; onClose: () => void }) {
   const [version] = useState(meta.version);
   const [selected, setSelected] = useState(view.config.sumColumns ?? []);
   const columns = meta.properties.filter(canSumColumn);
@@ -24,7 +24,7 @@ export function ColumnTotalsDialog({ meta, view, onClose, onSaved }: { meta: Dat
       <Group justify="flex-end">
         <Button variant="default" disabled={mutation.isPending} onClick={onClose}>取消</Button>
         <Button loading={mutation.isPending} disabled={!columns.length} onClick={() => {
-          mutation.mutate({ action: 'view', id: view.id, version, input: { name: view.name, config: { ...view.config, sumColumns: selected } } }, { onSuccess: result => { onSaved(version, result.version); onClose(); } });
+          mutation.mutate({ action: 'view', id: view.id, version, input: { name: view.name, config: { ...view.config, sumColumns: selected } } }, { onSuccess: onClose });
         }}>儲存</Button>
       </Group>
     </Stack>

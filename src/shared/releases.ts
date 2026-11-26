@@ -5,6 +5,10 @@ import type { VersionInfo } from './version.ts';
  * own part as the update log, which therefore also works without a connection.
  */
 export const releases: VersionInfo['releases'] = [
+  { version: '1.1.15', title: '站內共用邀請與資料庫視圖自動儲存', changes: [
+    '以 Email 共用筆記時，對方會在側欄收到站內邀請，可查看邀請人、頁面標題與權限，連線接受後才加入「與我共用」並開始離線同步。邀請可婉拒或撤回，既有成員可繼續使用原有權限。',
+    '資料庫擁有者套用排序、篩選或調整顯示欄位後，會自動儲存到目前視圖。離線修改可在重新開啟後繼續使用，恢復連線後會依序同步。共用者調整這些條件只影響自己的畫面。',
+  ] },
   { version: '1.1.14', title: '開啟頁面時自動展開子頁面', changes: [
     '開啟有子頁面的頁面時，側欄會自動展開它的下一層子頁面。從側欄、搜尋、麵包屑、頁面連結或網址開啟都一樣，「與我共用」的頁面也適用。',
     '手動收合後，停留在同一頁不會再被展開；離開後再開啟，或再點一次該頁的列，才會重新展開。',

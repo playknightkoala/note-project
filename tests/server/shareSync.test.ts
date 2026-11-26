@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { shareWith } from '../helpers/share.ts';
 import { createTestApp } from '../helpers/app.ts';
 import type { TestApp, TestClient } from '../helpers/app.ts';
 import type { PageResponse } from '../../src/shared/api.ts';
@@ -24,7 +25,7 @@ describe('a shared page between its owner and a member', () => {
 
   const create = async (input: Record<string, unknown>) => ((await (await owner.request('POST', '/api/pages', { json: input })).json()) as PageResponse).page;
   const read = async (client: TestClient, id: string) => (await (await client.request('GET', `/api/pages/${id}`)).json()) as PageResponse;
-  const share = (id: string, role: string) => owner.request('PUT', `/api/pages/${id}/share/members`, { json: { email: 'member@example.test', role } });
+  const share = (id: string, role: string) => shareWith(owner, member, id, 'member@example.test', role);
   /** As the current interface sends it; `repeatAware: false` is an interface from before `applied` existed. */
   const sync = (client: TestClient, id: string, input: { operationId: string; baseVersion: number; content: unknown[]; title?: string; baseTitle?: string; repeatAware?: boolean }) =>
     client.request('PUT', `/api/offline/pages/${id}`, { json: { baseTitle: '筆記', title: '筆記', parentId: null, overwrite: false, repeatAware: true, ...input }, headers: { 'if-match': `"${input.baseVersion}"` } });

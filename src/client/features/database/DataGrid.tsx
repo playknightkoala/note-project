@@ -16,14 +16,14 @@ import { useDatabaseAccess } from './access.ts';
 interface Props {
   databaseId: string; properties: DatabaseProperty[]; rows: DatabaseRow[]; total: number; config: ViewConfig; totals?: ColumnTotals;
   onSave: (row: DatabaseRow, propertyId: string, value: CellValue, base: CellValue) => Promise<unknown>;
-  onReload: () => void; onEditProperty: (property: DatabaseProperty) => void; onConfig: (config: ViewConfig) => void;
+  onReload: () => void; onEditProperty: (property: DatabaseProperty) => void; onConfig: (config: ViewConfig, field: 'sorts' | 'columns') => void;
   /** Left out where filters cannot be changed (a public link). */
   onFilter?: (property: DatabaseProperty | null) => void;
   onTrash: (row: DatabaseRow) => void; hasMore: boolean; loadingMore: boolean; onMore: () => void;
   onCreate: (title: string, values: Record<string, CellValue>) => Promise<unknown>; onAddProperty: () => void;
   adding: boolean; onCloseAdd: () => void;
   /** Puts a column at `index` among all the others, hidden ones included. Left out where columns cannot be reordered. */
-  onMoveProperty?: (propertyId: string, index: number) => void; movingProperty?: boolean;
+  onMoveProperty?: (propertyId: string, index: number) => void; schemaPending?: boolean;
 }
 /**
  * A column heading that a mouse can drag onto another to take its place. Touch scrolls the table instead: there, and
@@ -45,7 +45,7 @@ function readWidths(key: string): Record<string, number> {
     return Object.fromEntries(Object.entries(widths).filter(([, width]) => typeof width === 'number' && width >= 100 && width <= 600));
   } catch { return {}; }
 }
-export function DataGrid({ databaseId, properties, rows, total, config, totals, onSave, onReload, onEditProperty, onConfig, onFilter, onTrash, hasMore, loadingMore, onMore, onCreate, onAddProperty, adding, onCloseAdd, onMoveProperty, movingProperty = false }: Props) {
+export function DataGrid({ databaseId, properties, rows, total, config, totals, onSave, onReload, onEditProperty, onConfig, onFilter, onTrash, hasMore, loadingMore, onMore, onCreate, onAddProperty, adding, onCloseAdd, onMoveProperty, schemaPending = false }: Props) {
   const navigate = useNavigate();
   const peekHref = useRowPeekHref();
   const access = useDatabaseAccess();
@@ -106,15 +106,15 @@ export function DataGrid({ databaseId, properties, rows, total, config, totals, 
           const place = visibleIds.indexOf(column.id);
           // Dropped on a column, the dragged one takes its place: the mark is on the side it will end up on.
           const drop = dragging && dragging.over === column.id && dragging.id !== column.id ? (visibleIds.indexOf(dragging.id) < place ? 'after' as const : 'before' as const) : undefined;
-          const columnItems = <>{column.property && access.canManage && <Menu.Item onClick={() => onEditProperty(column.property)}>編輯欄位</Menu.Item>}
-              <Menu.Item disabled={config.sorts.length >= 10 && !config.sorts.some(sort => sort.propertyId === column.id)} onClick={() => onConfig({ ...config, sorts: [{ propertyId: column.id, direction: 'asc' }, ...config.sorts.filter(sort => sort.propertyId !== column.id)] })}>依此欄遞增</Menu.Item>
-              <Menu.Item disabled={config.sorts.length >= 10 && !config.sorts.some(sort => sort.propertyId === column.id)} onClick={() => onConfig({ ...config, sorts: [{ propertyId: column.id, direction: 'desc' }, ...config.sorts.filter(sort => sort.propertyId !== column.id)] })}>依此欄遞減</Menu.Item>
-              {onFilter && <Menu.Item disabled={config.filters.length >= 20 && !config.filters.some(filter => filter.propertyId === column.id)} onClick={() => onFilter(column.property)}>依此欄篩選</Menu.Item>}
-              {column.property && <Menu.Item onClick={() => onConfig({ ...config, columns: visible.filter(p => p.id !== column.id).map(p => p.id) })}>隱藏欄位</Menu.Item>}
-              {column.property && mayMove && <><Menu.Item disabled={movingProperty || place <= 0} onClick={() => moveTo(column.id, place - 1)}>向左移動</Menu.Item>
-                <Menu.Item disabled={movingProperty || place >= visible.length - 1} onClick={() => moveTo(column.id, place + 1)}>向右移動</Menu.Item></>}
+          const columnItems = <>{column.property && access.canManage && <Menu.Item disabled={schemaPending} onClick={() => onEditProperty(column.property)}>編輯欄位</Menu.Item>}
+              <Menu.Item disabled={schemaPending || (config.sorts.length >= 10 && !config.sorts.some(sort => sort.propertyId === column.id))} onClick={() => onConfig({ ...config, sorts: [{ propertyId: column.id, direction: 'asc' }, ...config.sorts.filter(sort => sort.propertyId !== column.id)] }, 'sorts')}>依此欄遞增</Menu.Item>
+              <Menu.Item disabled={schemaPending || (config.sorts.length >= 10 && !config.sorts.some(sort => sort.propertyId === column.id))} onClick={() => onConfig({ ...config, sorts: [{ propertyId: column.id, direction: 'desc' }, ...config.sorts.filter(sort => sort.propertyId !== column.id)] }, 'sorts')}>依此欄遞減</Menu.Item>
+              {onFilter && <Menu.Item disabled={schemaPending || (config.filters.length >= 20 && !config.filters.some(filter => filter.propertyId === column.id))} onClick={() => onFilter(column.property)}>依此欄篩選</Menu.Item>}
+              {column.property && <Menu.Item disabled={schemaPending} onClick={() => onConfig({ ...config, columns: visible.filter(p => p.id !== column.id).map(p => p.id) }, 'columns')}>隱藏欄位</Menu.Item>}
+              {column.property && mayMove && <><Menu.Item disabled={schemaPending || place <= 0} onClick={() => moveTo(column.id, place - 1)}>向左移動</Menu.Item>
+                <Menu.Item disabled={schemaPending || place >= visible.length - 1} onClick={() => moveTo(column.id, place + 1)}>向右移動</Menu.Item></>}
             </>;
-          return <ContextMenu key={column.id} label="欄位右鍵選單" items={columnItems}>{handlers => <HeaderCell id={column.id} movable={mayMove && !movingProperty && !!column.property} drop={drop} handlers={handlers}>
+          return <ContextMenu key={column.id} label="欄位右鍵選單" items={columnItems}>{handlers => <HeaderCell id={column.id} movable={mayMove && !schemaPending && !!column.property} drop={drop} handlers={handlers}>
           <Menu position="bottom-start" withinPortal shadow="md"><Menu.Target><Button variant="subtle" color="gray" className="database-column__button" size="compact-sm" aria-label={`欄位選單：${column.name}`}>{column.name}</Button></Menu.Target>
             <Menu.Dropdown>{columnItems}</Menu.Dropdown></Menu>
           <span className="database-column__resize" role="separator" tabIndex={0} aria-label={`調整${column.name}欄寬`} aria-orientation="vertical" aria-valuemin={100} aria-valuemax={600} aria-valuenow={widths[column.id] ?? (column.id === 'title' ? 280 : 180)}
@@ -124,7 +124,7 @@ export function DataGrid({ databaseId, properties, rows, total, config, totals, 
             onPointerUp={() => { resizing.current = null; }} onPointerCancel={() => { resizing.current = null; }}
             onKeyDown={event => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); saveWidth(column.id, (widths[column.id] ?? (column.id === 'title' ? 280 : 180)) + (event.key === 'ArrowRight' ? 10 : -10)); } }} />
         </HeaderCell>}</ContextMenu>;
-        })}<div role="columnheader">{access.canManage && <Button variant="subtle" color="gray" size="compact-sm" onClick={onAddProperty}>＋ 新增屬性</Button>}</div>
+        })}<div role="columnheader">{access.canManage && <Button variant="subtle" color="gray" size="compact-sm" disabled={schemaPending} onClick={onAddProperty}>＋ 新增屬性</Button>}</div>
       </div>
       <DragOverlay dropAnimation={null}>{dragging && <div className="database-column-overlay">{properties.find(property => property.id === dragging.id)?.name}</div>}</DragOverlay>
       </DndContext>

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { shareWith } from '../helpers/share.ts';
 import { createTestApp } from '../helpers/app.ts';
 import type { TestApp, TestClient } from '../helpers/app.ts';
 import { silentLogger } from '../../src/server/logger.ts';
@@ -152,9 +153,9 @@ describe('requests whose body arrives late', () => {
   it('judges a member\'s right to write when the body has arrived, not when the request began', async () => {
     const member = await account('member@example.test');
     const page = await createPage('共用');
-    const add = (role: string) => owner.request('PUT', `/api/pages/${page.id}/share/members`, { json: { email: 'member@example.test', role } });
+    const add = (role: string) => shareWith(owner, member, page.id, 'member@example.test', role);
     const remove = () => owner.request('DELETE', `/api/pages/${page.id}/share/members/${member.id}`);
-    expect((await add('editor')).status).toBe(200);
+    await add('editor');
 
     const write = held({ content: [paragraph('移除後才送達')] });
     const writing = member.request('PUT', `/api/pages/${page.id}/content`, { headers: { ...jsonHeaders, 'if-match': `"${page.version}"` }, body: write.body });
@@ -164,7 +165,7 @@ describe('requests whose body arrives late', () => {
     expect((await writing).status).toBe(404);
     expect(await contentOf(page.id)).not.toContain('移除後才送達');
 
-    expect((await add('editor')).status).toBe(200);
+    await add('editor');
     const rename = held({ title: '移除後改名' });
     const renaming = member.request('PATCH', `/api/pages/${page.id}`, { headers: jsonHeaders, body: rename.body });
     await tick();

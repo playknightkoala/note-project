@@ -61,8 +61,12 @@ export function pageShareRoutes(): Hono<AppEnv> {
     const limited = deps.rateLimiter.hit(`share-member:${userId}`, 30, 60 * 60_000, now);
     if (!limited.allowed) throw new AppError('rate_limited', undefined, { retryAfterSeconds: limited.retryAfterSeconds });
     const state = shares.setMember(db, userId, pageId, input.email, input.role, now);
-    record(c, 'share member set', { pageId, memberId: state.share?.members.find(member => member.email === input.email)?.userId, role: input.role });
+    record(c, 'share invitation or member updated', { pageId, role: input.role });
     return c.json<ShareStateDto>(state);
+  });
+  app.delete('/:id/share/invitations/:inviteId', c => {
+    const { db, userId, now } = context(c);
+    return c.json<ShareStateDto>(shares.withdrawInvitation(db, userId, uuid(c.req.param('id')), uuid(c.req.param('inviteId')), now));
   });
   app.patch('/:id/share/members/:userId', async c => {
     const { db, userId, now } = context(c);
@@ -85,6 +89,19 @@ export function shareRoutes(): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
   app.use('*', requireAuth, requireCsrf);
   app.get('/', c => { const { db, userId } = context(c); return c.json<SharesDto>({ outgoing: shares.outgoingShares(db, userId), incoming: shares.incomingShares(db, userId) }); });
+  app.get('/invitations', c => {
+    const { db, userId } = context(c);
+    return c.json({ invitations: shares.listInvitations(db, userId) });
+  });
+  for (const answer of ['accept', 'decline'] as const) {
+    app.post(`/invitations/:id/${answer}`, c => {
+      const { db, userId, now } = context(c);
+      const id = uuid(c.req.param('id'));
+      shares.answerInvitation(db, userId, id, answer === 'accept', now);
+      record(c, `share invitation ${answer}`, { invitationId: id });
+      return c.body(null, 204);
+    });
+  }
   // A signed-in account opens a public link: where the link gives accounts a role, this is what grants it.
   app.post('/open', async c => {
     const { db, userId, now } = context(c);

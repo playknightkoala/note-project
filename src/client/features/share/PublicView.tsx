@@ -175,7 +175,7 @@ function PublicDatabase({ data }: { data: NonNullable<PublicPageDto['database']>
         onClick={() => { setViewId(item.id); setOverride(null); }}>{item.name}</Button>; })}
     </Group>
     {view?.type === 'list' ? <ListView {...common} /> : view?.type === 'board' ? <BoardView {...common} moving={false} onMove={nothing} />
-      : <DataGrid databaseId={data.meta.id} properties={data.meta.properties} rows={rows} total={rows.length} totals={sumColumns(rows, config.sumColumns ?? [])} config={config} onSave={resolved} onReload={nothing} onEditProperty={nothing} onConfig={setOverride}
+      : <DataGrid databaseId={data.meta.id} properties={data.meta.properties} rows={rows} total={rows.length} totals={sumColumns(rows, config.sumColumns ?? [])} config={config} onSave={resolved} onReload={nothing} onEditProperty={nothing} onConfig={config => setOverride(config)}
         onTrash={nothing} onCreate={resolved} onAddProperty={nothing} adding={false} onCloseAdd={nothing} hasMore={false} loadingMore={false} onMore={nothing} />}
     <Text size="xs" c="dimmed" mt="xs">{rows.length} 列</Text>
   </div>;

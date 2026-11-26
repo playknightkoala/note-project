@@ -17,6 +17,7 @@ import { useShares } from '../../api/shares.ts';
 import { ShareDialogHost } from '../share/ShareDialog.tsx';
 import type { PageNode } from '@shared/api';
 import { MovePageDialog } from './MovePageDialog.tsx';
+import { ShareInvitations } from '../share/ShareInvitations.tsx';
 import { SharedTree } from '../share/SharedTree.tsx';
 
 export const SIDEBAR_BREAKPOINT = 768;
@@ -103,6 +104,7 @@ export function AppShell() {
           </>}
           <div className="sidebar-section">頁面</div>
           {tree.isPending ? <Text size="xs" c="dimmed" px="sm">載入中…</Text> : <PageTree onMove={setMovingPage} index={index} currentId={pageId ?? null} dragEnabled={!isMobile} />}
+          {user && <ShareInvitations key={user.id} userId={user.id} />}
           {incoming.length > 0 && <>
             <div className="sidebar-section">與我共用</div>
             <SharedTree shares={incoming} currentId={pageId ?? null} />

@@ -110,7 +110,7 @@
 - `POST /api/databases/:id/rows` 以 schema_version 驗證當前結構，新增列不會增版結構。`GET /api/rows/:id` 回資料列及屬性版本；`PATCH /api/rows/:id/values` 以該列 `attributes_version` 做 If-Match，可更新名稱與部分屬性值，null 清除值。
 - 區塊內文仍使用原本 `pages.version` 與 page_versions，與屬性版本獨立。migration `0004_database_versions` 新增 schema_version、attributes_version；row_title_version trigger 確保透過頁面標題 API 改名也會讓舊屬性寫入衝突。更新在單一交易內完成。
 - `GET /api/databases/:id/rows?sort=<JSON>&filter=<JSON>&offset&limit` 回 `{ rows, total, offset, limit }`。排序最多 10 層、篩選最多 20 個且採 AND；型別與欄位歸屬均驗證，空值固定排最後，選項依標籤文字排序。回傳當前使用者的活動列；資料庫刪除與還原沿用頁面子樹機制。
-- 每個資料庫上限 5,000 列包含垃圾桶內的列，防止還原後突破上限。客戶端以 100 列分批載入，CSS grid＋react-virtual 呈現 34px 列。欄寬依資料庫存於 localStorage；排序／篩選／顯示欄位可放在網址，也可保存到預設視圖。
+- 每個資料庫上限 5,000 列包含垃圾桶內的列，防止還原後突破上限。客戶端以 100 列分批載入，CSS grid＋react-virtual 呈現 34px 列。欄寬依資料庫存於 localStorage；擁有者調整排序、篩選或顯示欄位時，以 view.update 自動保存到目前視圖。共用者的調整記在網址，只影響自己的畫面。開啟帶條件的舊網址時，只有擁有者主動調整的項目會寫回。
 - 儲存格開啟時固定草稿與基準版本；背景刷新不會偷偷採用新版本號。409 保留草稿並讓使用者明確選擇捨棄、重新載入。列頁面上方顯示 RowPropertiesPanel，內文仍使用完整 BlockNote。
 - M5 原先僅提供單一預設表格；2026-11-08 依使用者追加授權擴充為表格／清單／看板，細節如下。OR 群組、公式／關聯欄位與已刪屬性的回收站仍未實作。
 
@@ -127,6 +127,8 @@
 - 清單可原位編輯名稱與屬性並開啟列頁面。看板依選項與未設定分組，可從群組底部新增，拖曳把手或卡片選單移組；以拖曳開始時的列版本提交，不做成功前的樂觀搬移。僅支援跨群組變更值，沒有卡片手動排序。清單／看板沿用每批 100 列並手動載入更多，畫面明示未載入完整資料時的總數／群組計數範圍；表格仍自動分批載入。
 
 ## M10 分享協定（1.1.0）
+
+- 以 Email 新增共用時，migration `0012_share_invitations` 的 `share_invitations` 記錄待接受邀請。收件人連線接受時，伺服器在同一交易確認邀請、頁面與擁有者有效，建立 `share_members` 並刪除邀請。待接受邀請只提供邀請摘要；頁面、附件與離線 manifest 的授權仍查已成立的共用關係。
 
 使用說明與各角色權限表見 [SHARING.md](SHARING.md)。
 

@@ -24,7 +24,7 @@ it('upgrades existing table views without losing identity/configuration and rema
 it('makes what accounts get a setting of the public link: kept where the link is on, dropped where it is not', () => {
   const db = openDatabase(':memory:');
   try {
-    migrate(db, migrations.filter(migration => migration.id !== '0011_share_single_link'));
+    migrate(db, migrations.filter(migration => migration.id < '0011_share_single_link'));
     const owner = crypto.randomUUID(), guest = crypto.randomUUID();
     for (const id of [owner, guest]) db.run("INSERT INTO users (id,email,display_name,password_hash,role,created_at,updated_at) VALUES (?,?,'合成帳號',?,'user',1,1)", id, `${id}@example.test`, crypto.randomUUID());
     const share = (token: string | null, role: string | null, member = false) => {
@@ -36,7 +36,7 @@ it('makes what accounts get a setting of the public link: kept where the link is
       return id;
     };
     const open = share('p'.repeat(43), null), both = share('b'.repeat(43), 'viewer'), accounts = share(null, 'editor'), listed = share(null, 'editor', true);
-    expect(migrate(db)).toEqual(['0011_share_single_link']);
+    expect(migrate(db)).toEqual(['0011_share_single_link', '0012_share_invitations']);
     expect(migrate(db)).toEqual([]);
     const row = (id: string) => db.get<{ link_token: string | null; link_created_at: number | null; account_role: string | null }>('SELECT link_token, link_created_at, account_role FROM page_shares WHERE page_id = ?', id)!;
     const seen = (id: string) => db.get<{ n: number }>('SELECT COUNT(*) AS n FROM share_visitors WHERE page_id = ?', id)?.n;

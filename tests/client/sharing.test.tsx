@@ -54,7 +54,7 @@ describe('the share dialog', () => {
     const accountLink = () => screen.queryAllByLabelText('知道連結的本站帳號').find(node => node.tagName === 'INPUT');
     let state: ShareStateDto = { share: null, inherited: [{ pageId: uuid(), title: '上層', scope: 'all', link: true, members: 2, accountRole: null }] };
     serve((method, path, body) => {
-      const share: NonNullable<ShareStateDto['share']> = state.share ?? { pageId, scope: 'page', link: null, members: [], accountRole: null, visitors: [] };
+      const share: NonNullable<ShareStateDto['share']> = state.share ?? { pageId, scope: 'page', link: null, members: [], invitations: [], accountRole: null, visitors: [] };
       if (path === `/api/pages/${pageId}/share` && method === 'PUT') state = { ...state, share: { ...share, scope: (body as { scope: 'subpages' }).scope } };
       // Like the server: what the link gives accounts ends with the link.
       else if (path === `/api/pages/${pageId}/share/link`) state = { ...state, share: method === 'POST' ? { ...share, link: { token, createdAt: 1 } } : { ...share, link: null, accountRole: null, visitors: [] } };
@@ -65,8 +65,8 @@ describe('the share dialog', () => {
       else if (path === `/api/pages/${pageId}/share/members` && method === 'PUT') {
         const input = body as { email: string; role: 'viewer' | 'editor' };
         if (input.email !== 'member@example.test') return reply(404, { error: { code: 'not_found', message: '找不到這個帳號，請確認對方註冊時使用的 email。' } });
-        state = { ...state, share: { ...share, members: [{ userId: memberId, email: input.email, displayName: '成員', role: input.role }] } };
-      } else if (path === `/api/pages/${pageId}/share/members/${memberId}` && method === 'DELETE') state = { ...state, share: { ...share, members: [] } };
+        state = { ...state, share: { ...share, invitations: [{ id: memberId, email: input.email, displayName: '成員', role: input.role }] } };
+      } else if (path === `/api/pages/${pageId}/share/invitations/${memberId}` && method === 'DELETE') state = { ...state, share: { ...share, invitations: [] } };
       else if (path === `/api/pages/${pageId}/share` && method === 'DELETE') { state = { ...state, share: null }; return reply(204, null); }
       else if (!(path === `/api/pages/${pageId}/share` && method === 'GET') && path !== '/api/shares' && path !== '/api/pages/tree') return undefined;
       return reply(200, path === '/api/shares' ? { outgoing: [], incoming: [] } : path === '/api/pages/tree' ? { pages: [] } : state);
@@ -107,13 +107,13 @@ describe('the share dialog', () => {
     expect((accountLink() as HTMLInputElement).value).toBe('與未登入相同（只能閱讀）');
     // An unknown address is reported and nothing is added.
     fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'nobody@example.test' } });
-    fireEvent.click(screen.getByRole('button', { name: '加入' }));
+    fireEvent.click(screen.getByRole('button', { name: '送出邀請' }));
     expect(await screen.findByText(/找不到這個帳號/)).toBeTruthy();
     fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'member@example.test' } });
-    fireEvent.click(screen.getByRole('button', { name: '加入' }));
+    fireEvent.click(screen.getByRole('button', { name: '送出邀請' }));
     expect(await screen.findByText('member@example.test')).toBeTruthy();
     expect(requests.at(-1)).toMatchObject({ method: 'PUT', body: { email: 'member@example.test', role: 'viewer' } });
-    fireEvent.click(screen.getByRole('button', { name: '移除 成員' }));
+    fireEvent.click(screen.getByRole('button', { name: '撤回給 成員 的邀請' }));
     await waitFor(() => expect(screen.queryByText('member@example.test')).toBeNull());
     // Stopping needs a confirmation.
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);

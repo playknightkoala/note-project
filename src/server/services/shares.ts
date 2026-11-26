@@ -1,7 +1,7 @@
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import type { Db } from '../db/driver.ts';
 import type { PageKind, PageNode } from '../../shared/api.ts';
-import type { IncomingShareDto, InheritedShareDto, MemberRole, OutgoingShareDto, ShareDto, ShareScope, ShareStateDto } from '../../shared/shares.ts';
+import type { IncomingShareDto, InheritedShareDto, MemberRole, OutgoingShareDto, ShareDto, ShareInvitationDto, ShareScope, ShareStateDto } from '../../shared/shares.ts';
 import { scopeCovers } from '../../shared/shares.ts';
 import { AppError } from '../../shared/errors.ts';
 import { loadPage } from './pages.ts';
@@ -32,9 +32,13 @@ const touch = (db: Db, pageId: string, now: number) => db.run('UPDATE page_share
 function shareDto(db: Db, row: ShareRow): ShareDto {
   const members = db.all<{ user_id: string; email: string; display_name: string; role: MemberRole }>(
     'SELECT m.user_id, u.email, u.display_name, m.role FROM share_members m JOIN users u ON u.id = m.user_id WHERE m.page_id = ? ORDER BY m.created_at, m.user_id', row.page_id);
+  const invitations = db.all<ShareDto['invitations'][number]>(
+    `SELECT i.id, u.display_name AS displayName, u.email, i.role FROM share_invitations i
+     JOIN users u ON u.id = i.user_id JOIN page_shares s ON s.page_id = i.page_id
+     WHERE i.page_id = ? AND s.user_id = ? ORDER BY u.display_name, i.id`, row.page_id, row.user_id);
   const visitors = row.account_role ? db.all<{ user_id: string; display_name: string }>(
     'SELECT v.user_id, u.display_name FROM share_visitors v JOIN users u ON u.id = v.user_id WHERE v.page_id = ? ORDER BY v.created_at, v.user_id', row.page_id) : [];
-  return { pageId: row.page_id, scope: row.scope, link: row.link_token ? { token: row.link_token, createdAt: row.link_created_at ?? row.updated_at } : null,
+  return { invitations, pageId: row.page_id, scope: row.scope, link: row.link_token ? { token: row.link_token, createdAt: row.link_created_at ?? row.updated_at } : null,
     members: members.map(member => ({ userId: member.user_id, email: member.email, displayName: member.display_name, role: member.role })),
     accountRole: row.account_role, visitors: visitors.map(visitor => ({ userId: visitor.user_id, displayName: visitor.display_name })) };
 }
@@ -112,7 +116,7 @@ export function setAccountRole(db: Db, ownerId: string, pageId: string, role: Me
   });
 }
 
-/** Adds an account by its exact e-mail address, or changes the role it already has. */
+/** Invite a registered account, or update its existing direct membership. */
 export function setMember(db: Db, ownerId: string, pageId: string, email: string, role: MemberRole, now: number): ShareStateDto {
   return db.transaction(() => {
     ownPage(db, ownerId, pageId);
@@ -121,7 +125,13 @@ export function setMember(db: Db, ownerId: string, pageId: string, email: string
     if (!user) throw new AppError('not_found', '找不到這個帳號，請確認對方註冊時使用的 email。');
     if (user.id === ownerId) throw new AppError('bad_request', '這是你自己的帳號。');
     ensure(db, ownerId, pageId, now);
-    db.run('INSERT INTO share_members (page_id, user_id, role, created_at) VALUES (?, ?, ?, ?) ON CONFLICT(page_id, user_id) DO UPDATE SET role = excluded.role', pageId, user.id, role, now);
+    const member = db.run('UPDATE share_members SET role = ? WHERE page_id = ? AND user_id = ?', role, pageId, user.id);
+    if (!member.changes) {
+      // Repeating an invitation keeps its id. A changed role requires consent to a new invitation.
+      db.run(`INSERT INTO share_invitations (id, page_id, user_id, role) VALUES (?, ?, ?, ?)
+        ON CONFLICT(page_id, user_id) DO UPDATE SET id = excluded.id, role = excluded.role
+        WHERE share_invitations.role <> excluded.role`, randomUUID(), pageId, user.id, role);
+    }
     touch(db, pageId, now);
     return shareState(db, ownerId, pageId);
   });
@@ -140,24 +150,56 @@ export function changeMember(db: Db, ownerId: string, pageId: string, userId: st
   });
 }
 
-/** Everything the user shares that somebody can actually reach. */
+const availableInvitations = `FROM share_invitations i JOIN page_shares s ON s.page_id = i.page_id
+  JOIN pages p ON p.id = s.page_id AND p.user_id = s.user_id AND p.trashed_at IS NULL
+  JOIN users u ON u.id = s.user_id AND u.disabled_at IS NULL WHERE i.user_id = ?`;
+
+export function listInvitations(db: Db, userId: string): ShareInvitationDto[] {
+  return db.all<ShareInvitationDto>(`SELECT i.id, p.title, u.display_name AS ownerName, i.role
+    ${availableInvitations} ORDER BY u.display_name, p.title, i.id`, userId);
+}
+
+export function withdrawInvitation(db: Db, ownerId: string, pageId: string, id: string, now: number): ShareStateDto {
+  return db.transaction(() => {
+    const result = db.run(`DELETE FROM share_invitations WHERE id = ? AND page_id = ?
+      AND page_id IN (SELECT page_id FROM page_shares WHERE user_id = ?)`, id, pageId, ownerId);
+    if (!result.changes) throw new AppError('not_found');
+    touch(db, pageId, now);
+    return shareState(db, ownerId, pageId);
+  });
+}
+
+export function answerInvitation(db: Db, userId: string, id: string, accept: boolean, now: number): void {
+  db.transaction(() => {
+    const invite = db.get<{ page_id: string; role: MemberRole }>(
+      `SELECT i.page_id, i.role ${availableInvitations} AND i.id = ?`, userId, id);
+    if (!invite) throw new AppError('not_found', '這份邀請已失效或已處理。');
+    if (accept) db.run('INSERT INTO share_members (page_id, user_id, role, created_at) VALUES (?, ?, ?, ?)', invite.page_id, userId, invite.role, now);
+    db.run('DELETE FROM share_invitations WHERE id = ? AND user_id = ?', id, userId);
+    touch(db, invite.page_id, now);
+  });
+}
+
+/** Shares with an active access method or an outstanding invitation for the owner to manage. */
 export function outgoingShares(db: Db, ownerId: string): OutgoingShareDto[] {
-  return db.all<ShareRow & { title: string; icon: string | null; kind: PageKind; members: number }>(
-    `SELECT s.*, p.title, p.icon, p.kind, (SELECT COUNT(*) FROM share_members m WHERE m.page_id = s.page_id) AS members
+  return db.all<ShareRow & { title: string; icon: string | null; kind: PageKind; members: number; invitations: number }>(
+    `SELECT s.*, p.title, p.icon, p.kind, (SELECT COUNT(*) FROM share_members m WHERE m.page_id = s.page_id) AS members,
+     (SELECT COUNT(*) FROM share_invitations i WHERE i.page_id = s.page_id) AS invitations
      FROM page_shares s JOIN pages p ON p.id = s.page_id AND p.user_id = s.user_id AND p.trashed_at IS NULL WHERE s.user_id = ? ORDER BY s.updated_at DESC, s.page_id`, ownerId)
-    .filter(row => row.link_token !== null || Number(row.members) > 0)
-    .map(row => ({ pageId: row.page_id, title: row.title, icon: row.icon, kind: row.kind, scope: row.scope, link: row.link_token !== null, members: Number(row.members), accountRole: row.account_role, updatedAt: row.updated_at }));
+    .filter(row => row.link_token !== null || Number(row.members) > 0 || row.invitations > 0)
+    .map(row => ({ pageId: row.page_id, title: row.title, icon: row.icon, kind: row.kind, scope: row.scope, link: row.link_token !== null, members: Number(row.members), invitations: row.invitations, accountRole: row.account_role, updatedAt: row.updated_at }));
 }
 
 /** What other accounts share with the user. A share that lies inside another one from the same owner is shown there only. */
 export function incomingShares(db: Db, userId: string): IncomingShareDto[] {
   const rows = db.all<{ page_id: string; scope: ShareScope; owner_id: string; member_role: MemberRole | null; account_role: MemberRole | null; owner_name: string }>(
-    `SELECT s.page_id, s.scope, s.user_id AS owner_id, s.account_role, u.display_name AS owner_name,
+    `SELECT s.page_id, s.scope, s.user_id AS owner_id, u.display_name AS owner_name,
+       CASE WHEN EXISTS(SELECT 1 FROM share_visitors v WHERE v.page_id = s.page_id AND v.user_id = ?) THEN s.account_role END AS account_role,
        (SELECT m.role FROM share_members m WHERE m.page_id = s.page_id AND m.user_id = ?) AS member_role
      FROM page_shares s
      JOIN pages p ON p.id = s.page_id AND p.user_id = s.user_id AND p.trashed_at IS NULL
      JOIN users u ON u.id = s.user_id AND u.disabled_at IS NULL
-     WHERE s.user_id <> ? AND ${REACHES} ORDER BY u.display_name, p.title, s.page_id`, userId, userId, userId, userId);
+     WHERE s.user_id <> ? AND ${REACHES} ORDER BY u.display_name, p.title, s.page_id`, userId, userId, userId, userId, userId);
   const shares = rows.map(row => {
     const pages = scopePages(db, row.owner_id, row.page_id, row.scope).filter(page => page.kind !== 'row');
     const parents = new Set(pages.map(page => page.parent_id));

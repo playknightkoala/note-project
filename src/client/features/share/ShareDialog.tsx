@@ -74,24 +74,29 @@ export function ShareDialog({ page, onClose }: { page: ShareTarget; onClose: () 
       <Divider />
       <Stack gap="xs">
         <Text fw={500} size="sm">與本站帳號共用</Text>
-        <Text size="xs" c="dimmed">輸入對方註冊時使用的 email，個別指定權限；對方不需要連結，登入後就在「與我共用」看到。唯讀與可編輯的帳號都能留言與加表情；可編輯的帳號還能修改內文、標題與資料列。同一個帳號也透過公開連結進來時，取權限較高者。</Text>
+        <Text size="xs" c="dimmed">輸入對方註冊時使用的 Email 送出站內邀請。對方接受後即可在「與我共用」開啟頁面。唯讀與可編輯的帳號都能留言與加表情；可編輯的帳號還能修改內文、標題與資料列。同一個帳號也透過公開連結進來時，取權限較高者。</Text>
         <Group gap="xs" align="flex-end" wrap="nowrap">
           <TextInput label="Email" type="email" placeholder="name@example.com" value={email} onChange={event => setEmail(event.currentTarget.value)} style={{ flex: 1 }}
             onKeyDown={event => { if (event.key === 'Enter' && !event.nativeEvent.isComposing) { event.preventDefault(); add(); } }} />
           <Select label="權限" aria-label="新成員的權限" data={roles} value={role} onChange={value => setRole((value as MemberRole | null) ?? 'viewer')} allowDeselect={false} w={120} comboboxProps={{ withinPortal: false }} />
-          <Button onClick={add} loading={change.isPending && change.variables?.type === 'member'} disabled={!email.trim()}>加入</Button>
+          <Button onClick={add} loading={change.isPending && change.variables?.type === 'member'} disabled={!email.trim()}>送出邀請</Button>
         </Group>
+        {share?.invitations?.map(invite => <Group key={invite.id} gap="xs" wrap="nowrap">
+          <div style={{ flex: 1, minWidth: 0 }}><Text size="sm" truncate>{invite.displayName}</Text><Text size="xs" c="dimmed" truncate>{invite.email}</Text></div>
+          <Text size="xs">等待接受 · {roleLabels[invite.role]}</Text>
+          <Button size="compact-xs" variant="subtle" disabled={busy} aria-label={`撤回給 ${invite.displayName} 的邀請`} onClick={() => change.mutate({ type: 'withdraw', id: invite.id })}>撤回</Button>
+        </Group>)}
         {share?.members.map(member => <Group key={member.userId} gap="xs" wrap="nowrap" className="share-member">
           <div style={{ flex: 1, minWidth: 0 }}><Text size="sm" truncate>{member.displayName}</Text><Text size="xs" c="dimmed" truncate>{member.email}</Text></div>
           <Select aria-label={`${member.displayName} 的權限`} data={roles} value={member.role} disabled={busy} allowDeselect={false} w={120} size="xs" comboboxProps={{ withinPortal: false }}
             onChange={value => { if (value && value !== member.role) change.mutate({ type: 'role', userId: member.userId, role: value as MemberRole }); }} />
           <Tooltip label="移除"><ActionIcon variant="subtle" color="red" disabled={busy} aria-label={`移除 ${member.displayName}`} onClick={() => change.mutate({ type: 'remove', userId: member.userId })}><X size={16} /></ActionIcon></Tooltip>
         </Group>)}
-        {share && share.members.length === 0 && <Text size="sm" c="dimmed">尚未與任何帳號共用。</Text>}
+        {share && share.members.length === 0 && !share.invitations?.length && <Text size="sm" c="dimmed">尚未與任何帳號共用。</Text>}
       </Stack>
       {(change.error || stop.error) && <Alert color="red" role="alert">{errorText(change.error ?? stop.error)}</Alert>}
       <Group justify="space-between">
-        {share && (share.link || share.members.length > 0)
+        {share && (share.link || share.members.length > 0 || !!share.invitations?.length)
           ? <Button variant="subtle" color="red" disabled={busy} onClick={() => { if (window.confirm('停止分享這個頁面？公開連結會失效，所有成員與透過連結進來的帳號都無法再存取。')) stop.mutate(page.id); }}>停止分享</Button> : <span />}
         <Button variant="default" onClick={onClose}>完成</Button>
       </Group>

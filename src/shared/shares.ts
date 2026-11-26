@@ -37,7 +37,9 @@ export const openLinkSchema = z.object({ token: z.string().min(1).max(100), page
 export interface OpenedLinkDto { pageId: string }
 
 export interface ShareMemberDto { userId: string; email: string; displayName: string; role: MemberRole }
+export interface ShareInvitationDto { id: string; title: string; ownerName: string; role: MemberRole }
 export interface ShareDto {
+  invitations: { id: string; displayName: string; email: string; role: MemberRole }[];
   pageId: string; scope: ShareScope; members: ShareMemberDto[];
   /** The share's one link, the public one: read-only without an account. */
   link: { token: string; createdAt: number } | null;
@@ -49,7 +51,7 @@ export interface ShareDto {
 /** A share on a page above this one that also reaches it. */
 export interface InheritedShareDto { pageId: string; title: string; scope: ShareScope; link: boolean; members: number; accountRole: MemberRole | null }
 export interface ShareStateDto { share: ShareDto | null; inherited: InheritedShareDto[] }
-export interface OutgoingShareDto { pageId: string; title: string; icon: string | null; kind: PageKind; scope: ShareScope; link: boolean; members: number; accountRole: MemberRole | null; updatedAt: number }
+export interface OutgoingShareDto { invitations: number; pageId: string; title: string; icon: string | null; kind: PageKind; scope: ShareScope; link: boolean; members: number; accountRole: MemberRole | null; updatedAt: number }
 /** Something shared with the reader: the shared page and what the scope reaches below it (rows excluded). */
 export interface IncomingShareDto { pageId: string; role: MemberRole; scope: ShareScope; owner: { id: string; name: string }; tree: PageNode[] }
 export interface SharesDto { outgoing: OutgoingShareDto[]; incoming: IncomingShareDto[] }

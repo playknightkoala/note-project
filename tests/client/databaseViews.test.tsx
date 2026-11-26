@@ -5,11 +5,12 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { MantineProvider } from '@mantine/core';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router';
+import { DatabaseAccessContext } from '../../src/client/features/database/access.ts';
 import { DatabaseView } from '../../src/client/features/database/DatabaseView.tsx';
 import type { DatabaseDto, DatabaseRow } from '../../src/shared/database.ts';
 import type { OfflineOp } from '../../src/shared/offline.ts';
 import { forgetOfflineData, offlineNote, rememberUser, syncNotes } from '../../src/client/offline/notes.ts';
-import { queuedOps, storeDatabase } from '../../src/client/offline/outbox.ts';
+import { queuedOps, sendOps, storeDatabase } from '../../src/client/offline/outbox.ts';
 
 beforeEach(() => {
   vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })));
@@ -60,10 +61,17 @@ it('switches shared data between views and persists creating, renaming, independ
   fireEvent.click(screen.getByRole('button', { name: '顯示欄位' }));
   fireEvent.click(await screen.findByRole('checkbox', { name: '狀態' }));
   fireEvent.click(screen.getByRole('button', { name: '顯示欄位' }));
-  await act(async () => { fireEvent.click(screen.getByRole('button', { name: '儲存視圖' })); });
+  expect(screen.queryByRole('button', { name: '儲存視圖' })).toBeNull();
   await waitFor(() => expect(meta.views[2]!.config.columns).toEqual([]));
   expect(meta.views[2]!.config.groupBy).toBe(groupId);
   expect(meta.views[1]!.config.columns).toBeUndefined();
+  await waitFor(() => expect(screen.getByRole<HTMLButtonElement>('button', { name: '篩選' }).disabled).toBe(false));
+  fireEvent.click(screen.getByRole('button', { name: '篩選' }));
+  fireEvent.click(await screen.findByRole('button', { name: '新增條件' }));
+  fireEvent.change(screen.getByLabelText('條件 1 值'), { target: { value: '任務' } });
+  fireEvent.click(screen.getByRole('button', { name: '套用' }));
+  await waitFor(() => expect(meta.views[2]!.config).toMatchObject({ columns: [], groupBy: groupId, filters: [{ propertyId: 'title', operator: 'contains', value: '任務' }] }));
+  await waitFor(() => expect(screen.getByRole<HTMLButtonElement>('button', { name: '編輯視圖' }).disabled).toBe(false));
   fireEvent.click(screen.getByRole('button', { name: '編輯視圖' }));
   const dialog = await screen.findByRole('dialog');
   fireEvent.change(within(dialog).getByRole('textbox', { name: /視圖名稱/ }), { target: { value: '工作進度' } });
@@ -129,4 +137,70 @@ it('opens a database from the copy on this device when offline, and keeps edits,
   expect(await offlineNote(created.rowId)).toMatchObject({ localOnly: true, local: { page: { kind: 'row', databaseId: id, title: 'C列', version: 1 } } });
   client.clear();
   await forgetOfflineData().catch(() => {});
+});
+
+it('keeps member settings personal and reopens and syncs consecutive owner view changes made offline', async () => {
+  const account = { id: crypto.randomUUID(), email: 'owner@example.test', username: null, displayName: '擁有者', role: 'user' as const, createdAt: 0 };
+  const id = crypto.randomUUID(), viewId = crypto.randomUUID(), columnId = crypto.randomUUID();
+  let server: DatabaseDto = { id, version: 5, properties: [{ id: columnId, name: '摘要', type: 'text', choices: [], position: 1 }],
+    views: [{ id: viewId, name: '任務', type: 'list', config: { sorts: [], filters: [] } }] };
+  vi.stubGlobal('BroadcastChannel', undefined);
+  Object.defineProperty(navigator, 'onLine', { configurable: true, value: false });
+  await syncNotes(); await forgetOfflineData(); await rememberUser(account);
+  await storeDatabase(account.id, { stamp: 'test', meta: server, rows: [] });
+  const writes: OfflineOp[] = [];
+  vi.stubGlobal('fetch', vi.fn(async (path: string, init: RequestInit) => {
+    if (!navigator.onLine) throw new TypeError('offline');
+    if (path !== '/api/offline/ops') throw new Error('Unexpected request');
+    const { op } = JSON.parse(String(init.body)) as { op: OfflineOp };
+    writes.push(op);
+    if (op.type !== 'view.update' || op.baseVersion !== server.version) return Response.json({}, { status: 409 });
+    server = { ...server, version: server.version + 1, views: [{ ...server.views[0]!, config: op.input.config }] };
+    return Response.json({ database: server });
+  }));
+  const open = (canManage: boolean, query = '') => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const page = render(<MantineProvider env="test"><QueryClientProvider client={client}><MemoryRouter initialEntries={[`/p/${id}${query}`]}>
+      <DatabaseAccessContext.Provider value={{ canManage, canEditRows: true, rowHref: id => `/p/${id}` }}><DatabaseView databaseId={id} /></DatabaseAccessContext.Provider>
+    </MemoryRouter></QueryClientProvider></MantineProvider>);
+    return () => { page.unmount(); client.clear(); };
+  };
+  const column = async () => {
+    fireEvent.click(await screen.findByRole('button', { name: '顯示欄位' }));
+    return screen.findByRole<HTMLInputElement>('checkbox', { name: '摘要' });
+  };
+  const closeMember = open(false);
+  fireEvent.click(await column());
+  await screen.findByText('網址中的顯示條件只套用在你的畫面。');
+  expect(await queuedOps()).toEqual([]);
+  closeMember();
+
+  const legacyFilters = [{ propertyId: 'title', operator: 'contains', value: '舊連結' }];
+  const closeOwner = open(true, '?' + new URLSearchParams({ filter: JSON.stringify(legacyFilters) }));
+  const checkbox = await column();
+  expect(checkbox.checked).toBe(true);
+  expect(await queuedOps()).toEqual([]);
+  fireEvent.click(checkbox);
+  fireEvent.click(screen.getByRole('button', { name: '顯示欄位' }));
+  await waitFor(async () => expect(await queuedOps()).toHaveLength(1));
+  await waitFor(() => expect(screen.getByRole<HTMLButtonElement>('button', { name: '排序' }).disabled).toBe(false));
+  fireEvent.click(screen.getByRole('button', { name: '排序' }));
+  fireEvent.click(await screen.findByRole('button', { name: '新增排序' }));
+  fireEvent.click(screen.getByRole('button', { name: '套用' }));
+  await waitFor(async () => expect(await queuedOps()).toHaveLength(2));
+  closeOwner();
+
+  const closeReopened = open(true);
+  expect((await column()).checked).toBe(false);
+  fireEvent.click(screen.getByRole('button', { name: '顯示欄位' }));
+  fireEvent.click(screen.getByRole('button', { name: '排序' }));
+  expect((await screen.findByRole<HTMLInputElement>('combobox', { name: '排序 1 欄位' })).value).toBe('名稱');
+  closeReopened();
+  expect(writes).toEqual([]);
+  Object.defineProperty(navigator, 'onLine', { configurable: true, value: true });
+  await sendOps(account.id);
+  expect(writes).toMatchObject([{ type: 'view.update', baseVersion: 5 }, { type: 'view.update', baseVersion: 6 }]);
+  expect(server.views[0]!.config).toEqual({ columns: [], filters: [], sorts: [{ propertyId: 'title', direction: 'asc' }] });
+  expect(await queuedOps()).toEqual([]);
+  await forgetOfflineData();
 });

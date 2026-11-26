@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { shareWith } from '../helpers/share.ts';
 import { createTestApp } from '../helpers/app.ts';
 import type { TestApp, TestClient } from '../helpers/app.ts';
 import { syntheticPng } from '../helpers/png.ts';
@@ -42,7 +43,7 @@ const save = async (who: Person, id: string, content: unknown[]) => {
 };
 const share = async (id: string, scope: ShareScope, members: [Person, MemberRole][] = []) => {
   expect(await status(owner.client.request('PUT', `/api/pages/${id}/share`, { json: { scope } }))).toBe(200);
-  for (const [who, role] of members) expect(await status(owner.client.request('PUT', `/api/pages/${id}/share/members`, { json: { email: who.email, role } }))).toBe(200);
+  for (const [who, role] of members) await shareWith(owner.client, who.client, id, who.email, role);
 };
 const link = async (id: string) => (await json<ShareStateDto>(owner.client.request('POST', `/api/pages/${id}/share/link`))).share!.link!.token;
 const op = (who: Person, input: OfflineOp, operationId = uuid()) => who.client.request('POST', '/api/offline/ops', { json: { operationId, force: false, op: input } });
@@ -69,6 +70,48 @@ beforeEach(async () => {
 afterEach(() => t.close());
 
 describe('managing a share', () => {
+  it('grants access and offline downloads only after the intended recipient accepts the current invitation', async () => {
+    await share(A, 'all');
+    const file = await json<{ url: string }>(upload(owner));
+    await save(owner, B, [{ id: 'i', type: 'image', props: { url: file.url }, children: [] }]);
+    const invite = async (role: MemberRole) => {
+      const state = await json<ShareStateDto>(owner.client.request('PUT', `/api/pages/${A}/share/members`, { json: { email: viewer.email, role } }));
+      expect(state.share!.members).toEqual([]);
+      return state.share!.invitations[0]!.id;
+    };
+    const answer = (who: Person, id: string, action = 'accept') => who.client.request('POST', `/api/shares/invitations/${id}/${action}`);
+    const list = (who: Person) => json(who.client.request('GET', '/api/shares/invitations'));
+    const first = await invite('viewer');
+    expect(await invite('viewer')).toBe(first);
+    expect(await list(viewer)).toEqual({ invitations: [{ id: first, title: '甲', ownerName: '擁有者', role: 'viewer' }] });
+    expect(await list(stranger)).toEqual({ invitations: [] });
+    expect(await status(answer(stranger, first))).toBe(404);
+    expect(await status(viewer.client.request('POST', `/api/shares/invitations/${first}/accept`, { csrf: false }))).toBe(403);
+    expect((await json<SharesDto>(viewer.client.request('GET', '/api/shares'))).incoming).toEqual([]);
+    expect(await json<OfflineManifest>(viewer.client.request('GET', '/api/offline/manifest'))).toMatchObject({ pages: [], databases: [], shared: [] });
+    for (const path of [`/api/pages/${A}`, `/api/pages/${B}`, `/api/offline/databases/${D}`, file.url]) {
+      expect(await status(viewer.client.request('GET', path))).toBe(404);
+    }
+    const replacement = await invite('editor');
+    expect(await status(answer(viewer, first))).toBe(404);
+    expect(await status(owner.client.request('DELETE', `/api/pages/${A}/share/invitations/${replacement}`))).toBe(200);
+    const declined = await invite('viewer');
+    expect(await status(answer(viewer, replacement))).toBe(404);
+    expect(await status(answer(viewer, declined, 'decline'))).toBe(204);
+    expect(await status(answer(viewer, declined))).toBe(404);
+    expect(await status(get(viewer, A))).toBe(404);
+    // A different role offered by a link the recipient never opened is not part of their invitation.
+    await link(A);
+    await owner.client.request('PUT', `/api/pages/${A}/share/account-link`, { json: { role: 'editor' } });
+    const accepted = await invite('viewer');
+    expect(await status(answer(viewer, accepted))).toBe(204);
+    expect(await list(viewer)).toEqual({ invitations: [] });
+    expect(await status(owner.client.request('DELETE', `/api/pages/${A}/share/invitations/${accepted}`))).toBe(404);
+    expect((await page(viewer, A)).access?.role).toBe('viewer');
+    expect(await status(viewer.client.request('GET', file.url))).toBe(200);
+    expect(await json<OfflineManifest>(viewer.client.request('GET', '/api/offline/manifest'))).toMatchObject({ databases: [{ id: D }], shared: [{ pageId: A, role: 'viewer' }] });
+  });
+
   it('lets only the owner set the scope, the link and the members', async () => {
     expect(await json<ShareStateDto>(owner.client.request('GET', `/api/pages/${A}/share`))).toEqual({ share: null, inherited: [] });
     await share(A, 'subpages', [[viewer, 'viewer']]);

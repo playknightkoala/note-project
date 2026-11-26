@@ -12,12 +12,12 @@ export function useShares() {
 }
 
 export function useShareState(pageId: string, enabled = true) {
-  return useQuery({ queryKey: shareKeys.state(pageId), queryFn: () => api<ShareStateDto>('GET', `/api/pages/${pageId}/share`), enabled, retry: false });
+  return useQuery({ queryKey: shareKeys.state(pageId), queryFn: () => api<ShareStateDto>('GET', `/api/pages/${pageId}/share`), enabled, refetchInterval: 30_000, retry: false });
 }
 
 export type ShareChange =
   | { type: 'scope'; scope: ShareScope } | { type: 'link'; on: boolean } | { type: 'account'; role: MemberRole | null }
-  | { type: 'member'; email: string; role: MemberRole } | { type: 'role'; userId: string; role: MemberRole } | { type: 'remove'; userId: string };
+  | { type: 'withdraw'; id: string } | { type: 'member'; email: string; role: MemberRole } | { type: 'role'; userId: string; role: MemberRole } | { type: 'remove'; userId: string };
 
 /** Every change answers with the share as it is afterwards. */
 export function useChangeShare(pageId: string) {
@@ -30,10 +30,12 @@ export function useChangeShare(pageId: string) {
         case 'link': return api<ShareStateDto>(change.on ? 'POST' : 'DELETE', `${base}/link`);
         case 'account': return api<ShareStateDto>('PUT', `${base}/account-link`, { json: { role: change.role } });
         case 'member': return api<ShareStateDto>('PUT', `${base}/members`, { json: { email: change.email, role: change.role } });
+        case 'withdraw': return api<ShareStateDto>('DELETE', `${base}/invitations/${change.id}`);
         case 'role': return api<ShareStateDto>('PATCH', `${base}/members/${change.userId}`, { json: { role: change.role } });
         case 'remove': return api<ShareStateDto>('DELETE', `${base}/members/${change.userId}`);
       }
     },
+    onError: () => { void client.invalidateQueries({ queryKey: shareKeys.state(pageId) }); },
     onSuccess: state => {
       client.setQueryData(shareKeys.state(pageId), state);
       void client.invalidateQueries({ queryKey: shareKeys.all });
