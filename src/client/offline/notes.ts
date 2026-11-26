@@ -9,6 +9,7 @@ import { canReachServer, connectionState } from './connection.ts';
 import { announceOfflineChange, listLocal, readLocal, removeLocal, updateLocal, updateLocalWith } from './storage.ts';
 import { fileCache, pageKey, setOfflineOwner, sharedKey, uploadCache, uploadPrefix } from './owner.ts';
 import { forgetAnnotations, forgetDatabase, mustStop, queuedOps, sendOps, storeAnnotations, storeDatabase, storedAnnotationStamp, storedAnnotations, storedDatabase, storedDatabases, transient } from './outbox.ts';
+import { askAboutFixedText } from './fixedText.ts';
 import { pendingUploads, sendUploads, sendableUploads } from './uploads.ts';
 import type { PendingUpload } from './uploads.ts';
 
@@ -345,8 +346,7 @@ async function sendNote(owner: UserDto, id: string): Promise<void> {
       // user decides, as with any conflict; "overwrite" then fixes a new operation from the draft and the page as
       // it is on the server by then.
       if (showsFile(current.local.page.content, waiting)) return current;
-      return { ...current, problem: '先前準備送出的內容含有尚未上傳的附件，而這裡的內容已經不同。請選擇以這裡的內容覆蓋，或載入線上版本。',
-        conflict: { version: current.base.page.version, title: current.base.page.title, updatedAt: current.base.page.updatedAt } };
+      return askAboutFixedText(current);
     }
     if (showsFile(current.local.page.content, waiting)) return current;
     decided.go = true;
@@ -581,16 +581,38 @@ export function syncNotes({ force = false }: { force?: boolean } = {}): Promise<
   return syncing;
 }
 
-export async function resolveLocalNote(id: string, choice: 'reload' | 'overwrite', content?: unknown[]): Promise<LocalPageResponse> {
+/**
+ * The user settles a conflict: `reload` gives up the draft for the page as it is on the server, `overwrite` puts
+ * their text over it. `shown` is the revision of the draft the choosing editor shows. A tab whose editor shows an
+ * earlier text (another tab has written or settled the draft since) is refused: its choice would replace, or throw
+ * away, a text the user never saw there.
+ */
+export async function resolveLocalNote(id: string, choice: 'reload' | 'overwrite', content?: unknown[], shown?: string): Promise<LocalPageResponse> {
   const owner = user;
   if (!owner) throw new Error('請先登入。');
   const original = await offlineNote(id);
-  const fresh = await api<PageResponse>('GET', `/api/pages/${id}`);
+  const expected = shown ?? original?.revision;
+  const moved = () => new ApiError(409, 'version_conflict', '這份草稿在處理衝突期間又有變動（可能來自另一個分頁），這裡顯示的不是最新內容。請確認內容後再選擇一次。');
+  if (original && original.revision !== expected) throw moved();
+  let fresh: PageResponse | undefined;
+  try { fresh = await api<PageResponse>('GET', `/api/pages/${id}`); }
+  catch (error) {
+    // A note made on this device that never reached the server has no version there to compare with.
+    if (!isApiError(error, 404) || !original?.isNew) throw error;
+  }
   if (user?.id !== owner.id) throw new Error('帳號已切換，請重新開啟筆記。');
   const note = await updateLocal<OfflineNote>(pageKey(owner.id, id), current => {
     if (user?.id !== owner.id) throw new Error('帳號已切換，請重新開啟筆記。');
     if (!current) throw new Error('找不到本機草稿。');
-    if (current.revision !== original?.revision) throw new ApiError(409, 'version_conflict', '處理衝突期間，另一個分頁已更新草稿，請重新檢查。');
+    if (current.revision !== expected) throw moved();
+    if (!fresh) {
+      if (!current.isNew) throw moved();
+      if (choice === 'reload') throw new Error('這份筆記還沒有送到伺服器，沒有線上版本可以載入。要保留這裡的內容，請選擇「以我的內容覆蓋」。');
+      // The server does not have the page, so whatever was fixed for creating it never took effect: the note is
+      // created from the draft as it is now.
+      return { ...current, local: { ...current.local, page: { ...current.local.page, content: content ?? current.local.page.content } }, revision: newId(), writer, pending: true,
+        sending: undefined, problem: undefined, conflict: undefined, removed: undefined };
+    }
     if (fresh.page.trashedAt !== null) throw new ApiError(404, 'not_found', '此筆記已在線上刪除，請先匯出本機草稿。');
     if (choice === 'reload') return { ...current, base: fresh, local: fresh, revision: newId(), writer, pending: false, isNew: false, sending: undefined, problem: undefined, conflict: undefined, removed: undefined };
     const revision = newId();

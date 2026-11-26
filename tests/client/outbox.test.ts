@@ -9,7 +9,7 @@ import { summarizePage } from '../../src/shared/offline.ts';
 import type { DatabaseSnapshotDto, OfflineManifest, OfflineOp } from '../../src/shared/offline.ts';
 import { cachePage, createLocalNote, createLocalRow, forgetOfflineData, loadNote, loadTree, offlineNote, rememberUser, renameLocalRow, resolveLocalNote, saveLocalContent, syncNotes, syncStatus, unsyncedWork } from '../../src/client/offline/notes.ts';
 import { discardOp, localAnnotations, localDatabase, queuedOps, rememberAnnotations, retryOp, sendOps, storeDatabase, storedDatabase, submitOp } from '../../src/client/offline/outbox.ts';
-import { pendingUploads, queueUpload, retryUpload, sendUploads } from '../../src/client/offline/uploads.ts';
+import { discardUpload, pendingUploads, queueUpload, retryUpload, sendUploads } from '../../src/client/offline/uploads.ts';
 import { uploadFile } from '../../src/client/api/files.ts';
 import { OFFLINE_EVENT, clearLocal, readLocal, updateLocal } from '../../src/client/offline/storage.ts';
 
@@ -744,6 +744,76 @@ describe('attachments added offline', () => {
     expect(seen.length).toBeGreaterThan(0);
     expect(seen.every(sending => sending === undefined)).toBe(true);
     expect(await offlineNote(cached.page.id)).toMatchObject({ pending: true });
+  });
+
+  it('creates a page that was made offline from its draft when what an earlier version fixed for it cannot be sent', async () => {
+    stubApi(worker);
+    const file = await uploadFile(png(), { offline: true });
+    const created = await createLocalNote({ title: '離線新頁' });
+    const id = created.page.id, image = [{ id: 'image', props: { url: file.url } }];
+    const draft = await saveLocalContent(id, image, created.localRevision);
+    // As 1.1.15 could leave it: the operation that creates the page was fixed with the picture and never arrived.
+    const old = uuid();
+    await updateLocal<Record<string, unknown>>(`page:${me.id}:${id}`, current => ({ ...current!, sending: { revision: draft.localRevision, input: { operationId: old, baseVersion: null, baseTitle: '', parentId: null, title: '離線新頁', content: image, overwrite: false, repeatAware: true } } }));
+    const text = await saveLocalContent(id, [{ id: 'text' }], draft.localRevision);
+    online(true);
+    const calls = stubApi(call => {
+      if (call.path.startsWith('/api/files/')) return worker(call);
+      if (call.path === '/api/auth/me') return { json: { user: me, csrfToken: 'synthetic-token' } };
+      if (call.path === '/api/offline/manifest') return { json: { userId: me.id, tree: [], pages: [], maxUploadBytes: 90 * 1024 * 1024, databases: [{ id: databaseId, stamp: 's1' }], annotations: [] } satisfies OfflineManifest };
+      if (call.path === '/api/files') return { status: 413, json: { error: { code: 'payload_too_large', message: '檔案超過 90 MB。' } } };
+      // The page is not on the server: GET answers "not found" (the default of this double).
+      if (call.method === 'PUT') return { json: { ...pageOf('page', id as ReturnType<typeof uuid>, 1), page: { ...pageOf('page', id as ReturnType<typeof uuid>, 1).page, content: (call.body as { content: unknown[] }).content } } };
+      return undefined;
+    });
+    await syncNotes({ force: true });
+    expect(calls.filter(call => call.method === 'PUT')).toEqual([]);
+    expect(await offlineNote(id)).toMatchObject({ isNew: true, pending: true, problem: expect.stringContaining('尚未上傳的附件') });
+    // There is no version on the server to load, and saying so must not cost the draft.
+    await expect(resolveLocalNote(id, 'reload', undefined, text.localRevision)).rejects.toThrow('還沒有送到伺服器');
+    expect(await offlineNote(id)).toMatchObject({ isNew: true, pending: true, local: { page: { content: [{ id: 'text' }] } } });
+    // "Overwrite with my text": the page is created from the draft, under an operation of its own.
+    await resolveLocalNote(id, 'overwrite', undefined, text.localRevision);
+    await syncNotes({ force: true });
+    const puts = calls.filter(call => call.method === 'PUT').map(call => call.body as { operationId: string });
+    expect(puts).toHaveLength(1);
+    expect(puts[0]).toMatchObject({ baseVersion: null, title: '離線新頁', content: [{ id: 'text' }] });
+    expect(puts[0]!.operationId).not.toBe(old);
+    expect(await offlineNote(id)).toMatchObject({ isNew: false, pending: false });
+  });
+
+  it('asks before a fixed text goes out with the address of a file that was just discarded', async () => {
+    stubApi(worker);
+    const file = await uploadFile(png(), { offline: true });
+    const cached = await cachePage(pageOf('page')), kept = await cachePage(pageOf('page'));
+    const image = [{ id: 'image', props: { url: file.url } }];
+    online(true);
+    const calls = stubApi(call => {
+      if (call.path.startsWith('/api/files/')) return worker(call);
+      if (call.path === '/api/auth/me') return { json: { user: me, csrfToken: 'synthetic-token' } };
+      if (call.path === '/api/offline/manifest') return { json: { userId: me.id, tree: [], pages: [], maxUploadBytes: 90 * 1024 * 1024, databases: [{ id: databaseId, stamp: 's1' }], annotations: [] } satisfies OfflineManifest };
+      if (call.path === '/api/files') return { status: 413, json: { error: { code: 'payload_too_large', message: '檔案超過 90 MB。' } } };
+      if (call.method === 'GET' && call.path.startsWith('/api/pages/')) { const page = call.path.endsWith(cached.page.id) ? cached : kept; return { json: { ...page, page: { ...page.page, version: 2 } } }; }
+      if (call.method === 'PUT') { const page = call.path.endsWith(cached.page.id) ? cached : kept; return { json: { ...page, page: { ...page.page, version: 3, content: (call.body as { content: unknown[] }).content } } }; }
+      return undefined;
+    });
+    const first = await resolveLocalNote(cached.page.id, 'overwrite', image);
+    await resolveLocalNote(kept.page.id, 'overwrite', image);
+    await syncNotes({ force: true });
+    expect(calls.filter(call => call.method === 'PUT')).toEqual([]);
+    // No connection for a moment: the picture is taken out of one note, and then the refused file is discarded
+    // before any sync has looked at the note again.
+    online(false);
+    await saveLocalContent(cached.page.id, [{ id: 'text' }], first.localRevision);
+    await discardUpload((await pendingUploads())[0]!);
+    expect(await pendingUploads()).toEqual([]);
+    expect(await offlineNote(cached.page.id)).toMatchObject({ pending: true, problem: expect.stringContaining('尚未上傳的附件'), sending: { input: { content: image } } });
+    // The other note still shows the picture in its draft: discarding the file was the user's call for that one.
+    expect((await offlineNote(kept.page.id))!.problem).toBeUndefined();
+    online(true);
+    await syncNotes({ force: true });
+    const puts = calls.filter(call => call.method === 'PUT').map(call => call.path.split('/').pop());
+    expect(puts).toEqual([kept.page.id]);
   });
 
   it('holds a discussion on a row made here until the row exists on the server', async () => {

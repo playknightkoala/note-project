@@ -57,6 +57,12 @@ export function useAutosave({ pageId, initialVersion, initialLocalRevision, getC
   const getContentRef = useRef(getContent); getContentRef.current = getContent;
   const localRevision = useRef(initialLocalRevision);
   const localConflict = useRef(false);
+  /**
+   * The revision of the draft that the conflict on screen is about, where that is not the one the editor is built
+   * on (another tab wrote it, or the sync reported a conflict for it). Settling a conflict names the revision the
+   * user is looking at, so a tab that still shows an earlier state cannot replace or discard a newer draft.
+   */
+  const conflictAbout = useRef<string | undefined>(undefined);
   const remoteRef = useRef(onRemoteUpdate); remoteRef.current = onRemoteUpdate;
   ref.current.status = state.status;
 
@@ -79,7 +85,7 @@ export function useAutosave({ pageId, initialVersion, initialLocalRevision, getC
       if (!kind || !hasDraft(kind)) return false;
       r.dirty = false;
       const head = await saveLocalContent(pageId, content, localRevision.current);
-      localRevision.current = head.localRevision;
+      localRevision.current = head.localRevision; conflictAbout.current = undefined;
       return !r.dirty;
     } catch { r.dirty = true; return false; }
     finally { r.inFlight = false; }
@@ -106,7 +112,11 @@ export function useAutosave({ pageId, initialVersion, initialLocalRevision, getC
       if (r.dirty) schedule(0);
     } catch (error) {
       r.inFlight = false; r.dirty = true;
-      if (isApiError(error, 409)) { localConflict.current = error.details?.localConflict === true; dispatch({ type: 'conflict', head: (error.details?.current as PageHeadDto) ?? { version: r.version, updatedAt: 0, title: '' } }); return; }
+      if (isApiError(error, 409)) {
+        localConflict.current = error.details?.localConflict === true;
+        conflictAbout.current = localConflict.current ? (error.details?.current as LocalHead | undefined)?.localRevision : undefined;
+        dispatch({ type: 'conflict', head: (error.details?.current as PageHeadDto) ?? { version: r.version, updatedAt: 0, title: '' } }); return;
+      }
       if (isApiError(error, 401) || isApiError(error, 404)) { dispatch({ type: 'error', message: error.message, offline: false }); return; }
       const offline = isApiError(error, 0) || (isApiError(error) && error.status >= 500);
       dispatch({ type: 'error', message: error instanceof Error ? error.message : '儲存失敗', offline });
@@ -155,12 +165,29 @@ export function useAutosave({ pageId, initialVersion, initialLocalRevision, getC
           localConflict.current = false; r.dirty = false; r.status = 'clean';
           dispatch({ type: 'reset', version: r.version }); remoteRef.current(); return;
         }
+        const shown = conflictAbout.current ?? localRevision.current;
         // Preserve the latest visible edits before an explicit overwrite, including edits made after a conflict.
         if (choice === 'overwrite') {
           const content = getContentRef.current();
           if (!content) return;
-          await resolveLocalNote(pageId, choice, content);
-        } else await resolveLocalNote(pageId, choice);
+          // What was just read is what the overwrite carries. Anything typed from here on, while the server is
+          // being asked, is not part of it: it marks the editor dirty again and is saved afterwards.
+          r.dirty = false;
+          let resolved;
+          try { resolved = await resolveLocalNote(pageId, choice, content, shown); }
+          catch (error) { r.dirty = true; throw error; }
+          localRevision.current = resolved.localRevision; conflictAbout.current = undefined; localConflict.current = false;
+          if (r.dirty) {
+            // Typed meanwhile: the editor is not replaced by what was read at the click.
+            r.status = 'dirty';
+            dispatch({ type: 'reset', version: r.version }); dispatch({ type: 'dirty' });
+            schedule(0);
+            return;
+          }
+        } else {
+          await resolveLocalNote(pageId, choice, undefined, shown);
+          conflictAbout.current = undefined; localConflict.current = false;
+        }
         r.dirty = false; r.status = 'clean';
         dispatch({ type: 'reset', version: r.version });
         remoteRef.current();
@@ -178,7 +205,7 @@ export function useAutosave({ pageId, initialVersion, initialLocalRevision, getC
       r.dirty = false; r.status = 'clean';
       remoteRef.current();
     }
-  }, [save, state.conflictHead]);
+  }, [save, schedule, state.conflictHead]);
 
   useEffect(() => {
     let active = true;
@@ -189,13 +216,19 @@ export function useAutosave({ pageId, initialVersion, initialLocalRevision, getC
       if (!hasDraft(note.local.page.kind)) return;
       if (note.removed && !note.pending) { dispatch({ type: 'error', message: '此筆記已在線上刪除；若有本機修改，請先保存或匯出草稿。', offline: false }); return; }
       if (note.problem) {
-        if (note.conflict) { localConflict.current = false; dispatch({ type: 'conflict', head: note.conflict }); }
+        if (note.conflict) { localConflict.current = false; conflictAbout.current = note.revision; dispatch({ type: 'conflict', head: note.conflict }); }
         else dispatch({ type: 'error', message: note.problem, offline: false });
         return;
       }
       if (note.revision !== localRevision.current && !isLocalWriter(note)) {
-        if (r.dirty) { localConflict.current = note.pending; dispatch({ type: 'conflict', head: { version: note.base.page.version, title: note.local.page.title, updatedAt: note.local.page.updatedAt } }); }
-        else remoteRef.current();
+        if (r.dirty) { localConflict.current = note.pending; conflictAbout.current = note.revision; dispatch({ type: 'conflict', head: { version: note.base.page.version, title: note.local.page.title, updatedAt: note.local.page.updatedAt } }); }
+        else {
+          // Nothing of this editor's own is at stake: it follows the draft. A conflict it still showed was about
+          // an earlier state and has been settled elsewhere (another tab chose); it must not stay on screen to
+          // be answered a second time with this editor's older text.
+          if (r.status === 'conflict') { localConflict.current = false; conflictAbout.current = undefined; r.status = 'clean'; dispatch({ type: 'reset', version: r.version }); }
+          remoteRef.current();
+        }
         return;
       }
       localRevision.current = note.revision;

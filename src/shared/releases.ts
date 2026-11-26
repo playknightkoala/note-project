@@ -5,6 +5,12 @@ import type { VersionInfo } from './version.ts';
  * own part as the update log, which therefore also works without a connection.
  */
 export const releases: VersionInfo['releases'] = [
+  { version: '1.1.17', title: '衝突處理與離線同步的修正', changes: [
+    '兩個分頁都顯示同一個版本衝突時，只有畫面上是最新草稿的分頁可以處理；顯示較舊內容的分頁不會再覆蓋或丟掉另一個分頁的草稿。',
+    '按下「以我的內容覆蓋」後、等伺服器回應的期間繼續輸入的文字會保留。',
+    '離線新建、還沒送到伺服器的頁面遇到衝突提示時，可以用目前的草稿建立頁面，不再卡住無法同步。',
+    '把被拒絕的附件從內文移除後再捨棄該附件，不會先送出一次仍引用該附件的舊內文。',
+  ] },
   { version: '1.1.16', title: '備份、垃圾桶與離線同步的修正', changes: [
     '備份快照會連同它引用的附件一起保存，之後在筆記裡刪掉的附件，還原舊快照時也救得回來。還原指令有調整，請見部署文件。',
     '永久刪除頁面時，另外列在垃圾桶裡的子頁面不再被一起刪掉。資料列還原歷史版本時保留目前的列名。',

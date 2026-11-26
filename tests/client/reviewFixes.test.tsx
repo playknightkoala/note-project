@@ -7,7 +7,7 @@ import { safeNext } from '../../src/client/features/auth/safeNext.ts';
 import { PageTitle } from '../../src/client/features/page/PageTitle.tsx';
 import { useAutosave } from '../../src/client/features/page/useAutosave.ts';
 import { versionToRestoreOn } from '../../src/client/features/page/restoreBase.ts';
-import { adoptServerVersion, cachePage, forgetOfflineData, offlineNote, offlineNotes, rememberUser, revokeOfflineEntry, saveLocalContent, syncNotes } from '../../src/client/offline/notes.ts';
+import { adoptServerVersion, cachePage, forgetOfflineData, offlineNote, offlineNotes, rememberUser, resolveLocalNote, revokeOfflineEntry, saveLocalContent, syncNotes } from '../../src/client/offline/notes.ts';
 import type { OfflineNote } from '../../src/client/offline/notes.ts';
 import { clearLocal, readLocal, updateLocal } from '../../src/client/offline/storage.ts';
 
@@ -332,5 +332,64 @@ describe('after a history version was restored', () => {
     const calls = serve(pageOf('page'));
     expect(await adoptServerVersion(crypto.randomUUID())).toBe('absent');
     expect(calls).toEqual([]);
+  });
+});
+
+describe('settling a conflict', () => {
+  const conflict = { problem: '此頁面已在其他地方更新。', conflict: { version: 9, updatedAt: 3, title: '標題' } };
+  const serve = (response: PageResponse, version = 9) => stubApi((method, path) => method === 'GET' && path === `/api/pages/${response.page.id}` ? { json: { ...response, page: { ...response.page, version, content: [{ id: 'theirs' }] } } } : undefined);
+
+  it('is refused from a tab that shows an earlier draft than the one on this device', async () => {
+    const response = pageOf('page'), initial = await cachePage(response);
+    // Another tab has written the draft since this one was opened.
+    const newer = await saveLocalContent(response.page.id, [{ id: 'newer' }], initial.localRevision);
+    const calls = serve(response);
+    await expect(resolveLocalNote(response.page.id, 'overwrite', [{ id: 'older' }], initial.localRevision)).rejects.toMatchObject({ status: 409 });
+    await expect(resolveLocalNote(response.page.id, 'reload', undefined, initial.localRevision)).rejects.toMatchObject({ status: 409 });
+    // Neither replaced nor thrown away, and the server was not even asked.
+    expect(await offlineNote(response.page.id)).toMatchObject({ pending: true, revision: newer.localRevision, local: { page: { content: [{ id: 'newer' }] } } });
+    expect(calls).toEqual([]);
+    // The tab that shows the draft as it is may settle it.
+    await resolveLocalNote(response.page.id, 'overwrite', [{ id: 'newer' }, { id: 'more' }], newer.localRevision);
+    expect(await offlineNote(response.page.id)).toMatchObject({ pending: true, sending: { input: { overwrite: true, baseVersion: 9, content: [{ id: 'newer' }, { id: 'more' }] } } });
+  });
+
+  it('leaves the screen of a tab whose conflict another tab has settled, instead of waiting to be answered again', async () => {
+    const response = pageOf('page'), initial = await cachePage(response);
+    const reload = vi.fn();
+    const { result } = renderHook(() => useAutosave({ pageId: response.page.id, initialVersion: 4, initialLocalRevision: initial.localRevision, getContent: () => [{ id: 'older' }], onRemoteUpdate: reload }));
+    await act(async () => { await updateLocal<OfflineNote>(key(me.id, response.page.id), current => ({ ...current!, pending: true, ...conflict })); });
+    await waitFor(() => expect(result.current.state.status).toBe('conflict'));
+    // The other tab chose "overwrite": a new draft, written by somebody else, and no conflict any more.
+    await act(async () => { await updateLocal<OfflineNote>(key(me.id, response.page.id), current => ({ ...current!, problem: undefined, conflict: undefined, revision: crypto.randomUUID(), writer: 'another-tab', local: { ...current!.local, page: { ...current!.local.page, content: [{ id: 'chosen-there' }] } } })); });
+    await waitFor(() => expect(result.current.state.status).toBe('clean'));
+    expect(reload).toHaveBeenCalled();
+    expect(await offlineNote(response.page.id)).toMatchObject({ local: { page: { content: [{ id: 'chosen-there' }] } } });
+  });
+
+  it('keeps what is typed while an overwrite waits for the server', async () => {
+    const response = pageOf('page'), initial = await cachePage(response);
+    let content: unknown[] = [{ id: 'at-the-click' }];
+    const reload = vi.fn();
+    const { result } = renderHook(() => useAutosave({ pageId: response.page.id, initialVersion: 4, initialLocalRevision: initial.localRevision, getContent: () => content, onRemoteUpdate: reload }));
+    await act(async () => { await updateLocal<OfflineNote>(key(me.id, response.page.id), current => ({ ...current!, pending: true, ...conflict })); });
+    await waitFor(() => expect(result.current.state.status).toBe('conflict'));
+    // The server takes its time to say what is there now.
+    let answer = () => {};
+    const asked = new Promise<void>(resolve => { answer = resolve; });
+    vi.stubGlobal('fetch', vi.fn(async () => { await asked; return new Response(JSON.stringify({ ...response, page: { ...response.page, version: 9, content: [{ id: 'theirs' }] } })); }));
+    await act(async () => {
+      const settled = result.current.resolveConflict('overwrite');
+      await new Promise(resolve => setTimeout(resolve, 20));
+      content = [{ id: 'at-the-click' }, { id: 'typed-while-waiting' }];
+      result.current.markDirty();
+      answer();
+      await settled;
+    });
+    // The overwrite carries what was there at the click; what was typed since is still in the editor and is saved.
+    await waitFor(async () => expect((await offlineNote(response.page.id))?.local.page.content).toEqual([{ id: 'at-the-click' }, { id: 'typed-while-waiting' }]));
+    expect(await offlineNote(response.page.id)).toMatchObject({ pending: true, sending: { input: { overwrite: true, content: [{ id: 'at-the-click' }] } } });
+    expect(reload).not.toHaveBeenCalled();
+    expect(result.current.state.status).not.toBe('conflict');
   });
 });

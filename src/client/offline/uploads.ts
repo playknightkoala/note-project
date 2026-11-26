@@ -1,7 +1,9 @@
 import { extensionFor, fileHeaders, fileUrlFor, sanitizeName, SNIFF_BYTES, sniffMime } from '@shared/files';
 import { api } from '../api/client.ts';
 import type { UploadedFile } from '../api/files.ts';
-import { fileCache, offlineOwner, uploadCache, uploadKey, uploadPrefix } from './owner.ts';
+import { askAboutFixedText, fixedTextIsStale } from './fixedText.ts';
+import type { FixedTextNote } from './fixedText.ts';
+import { fileCache, offlineOwner, pageKey, uploadCache, uploadKey, uploadPrefix } from './owner.ts';
 import { attachmentLimitBytes } from './attachments.ts';
 import { mustStop, onlyHere } from './outbox.ts';
 import { listLocal, updateLocal } from './storage.ts';
@@ -95,8 +97,17 @@ export async function sendUploads(userId: string): Promise<void> {
 export async function retryUpload(item: PendingUpload): Promise<void> {
   await updateLocal<PendingUpload>(uploadKey(item.userId, item.id), current => current && { ...current, problem: undefined });
 }
-/** Removes the waiting file from this device. A note that refers to it will show a missing attachment. */
+/**
+ * Removes the waiting file from this device. A note that refers to it will show a missing attachment. Where the
+ * file was already taken out of a note's draft but a text fixed earlier for sending still shows it, that text is
+ * not sent with the dead address: the user is asked first (see `fixedText.ts`). Done before the file's record goes,
+ * so a sync in between finds either the record or the question.
+ */
 export async function discardUpload(item: PendingUpload): Promise<void> {
+  for (const note of await listLocal<FixedTextNote & { local: { page: { id: string } } }>(`page:${item.userId}:`).catch(() => [])) {
+    if (!fixedTextIsStale(note, [item.url])) continue;
+    await updateLocal<FixedTextNote>(pageKey(item.userId, note.local.page.id), current => current && !current.problem && fixedTextIsStale(current, [item.url]) ? askAboutFixedText(current) : current);
+  }
   if ('caches' in window) await (await caches.open(uploadCache(item.userId))).delete(item.url).catch(() => {});
   await updateLocal<PendingUpload>(uploadKey(item.userId, item.id), () => undefined);
 }
